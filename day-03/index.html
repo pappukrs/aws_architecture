@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 3 — Public Subnet with Internet Access</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-02/index.html">← Day 2</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 3 of 30 · Week 1 — Networking Foundations</div>
+    <h1>Public Subnet with Internet Access</h1>
+    <p class="lead">Yesterday's VPC was sealed off. Today you open one door: an Internet Gateway, a route that points to it, and a public IP on the web server. Those three things are what turn a subnet into a public subnet.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 640" role="img" aria-label="A VPC with an Internet Gateway. The public subnet's route table sends 0.0.0.0/0 to the gateway, and the web server has a public IP. The private subnet has only the local route.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: yesterday's VPC -->
+        <g data-step="1">
+          <rect x="280" y="14" width="160" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="360" y="45" font-size="15" font-weight="700" text-anchor="middle">Internet</text>
+
+          <rect x="20" y="90" width="960" height="535" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+
+          <rect x="40" y="128" width="920" height="485" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+
+          <rect x="60" y="190" width="880" height="410" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+
+          <rect x="80" y="232" width="500" height="355" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+
+          <rect x="100" y="268" width="460" height="140" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="291" font-size="14" font-weight="700" style="fill:var(--pub)">Public subnet — 10.0.1.0/24</text>
+          <use href="#ec2" x="332" y="316" width="56" height="56"/>
+          <text x="400" y="336" font-size="14" font-weight="600">Web server (EC2)</text>
+          <text x="400" y="355" font-size="13" style="fill:var(--muted)">Private IP 10.0.1.10</text>
+
+          <rect x="100" y="430" width="460" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="453" font-size="14" font-weight="700" style="fill:var(--priv)">Private subnet — 10.0.2.0/24</text>
+          <use href="#ec2" x="332" y="478" width="56" height="56"/>
+          <text x="400" y="498" font-size="14" font-weight="600">Database (EC2)</text>
+          <text x="400" y="517" font-size="13" style="fill:var(--muted)">Private IP 10.0.2.10</text>
+        </g>
+
+        <!-- Step 2: Internet Gateway -->
+        <g data-step="2">
+          <circle cx="360" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="360" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <text x="396" y="178" font-size="13.5" font-weight="700" style="fill:var(--vpc)">Internet Gateway · igw-0a1b</text>
+        </g>
+
+        <!-- Step 3: public route table -->
+        <g data-step="3">
+          <line x1="560" y1="330" x2="600" y2="330" stroke="var(--pub)" stroke-width="2" stroke-dasharray="5 4"/>
+          <rect x="600" y="262" width="320" height="136" rx="6" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="614" y="286" font-size="14" font-weight="700" style="fill:var(--pub)">Public route table</text>
+          <text x="614" y="308" font-size="11" style="fill:var(--muted)" letter-spacing=".06em">DESTINATION</text>
+          <text x="780" y="308" font-size="11" style="fill:var(--muted)" letter-spacing=".06em">TARGET</text>
+          <line x1="606" y1="316" x2="914" y2="316" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="614" y="337" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">10.0.0.0/16</text>
+          <text x="780" y="337" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">local</text>
+          <rect x="606" y="350" width="308" height="30" rx="4" fill="var(--pub-fill)"/>
+          <text x="614" y="370" font-size="13.5" font-weight="700" style="font-family:ui-monospace,Menlo,Consolas,monospace">0.0.0.0/0</text>
+          <text x="780" y="370" font-size="13.5" font-weight="700" style="font-family:ui-monospace,Menlo,Consolas,monospace;fill:var(--vpc)">igw-0a1b</text>
+        </g>
+
+        <!-- Step 4: public IP -->
+        <g data-step="4">
+          <text x="400" y="374" font-size="13" font-weight="700" style="fill:var(--pub)">Public IP 13.233.10.25</text>
+          <text x="396" y="210" font-size="12" style="fill:var(--muted)">maps 13.233.10.25 ↔ 10.0.1.10 (1:1 NAT)</text>
+        </g>
+
+        <!-- Step 5: traffic flow -->
+        <g data-step="5">
+          <g stroke="var(--orange)" stroke-width="3.5" marker-start="url(#arrowO)" marker-end="url(#arrowO)">
+            <line x1="360" y1="71" x2="360" y2="158"/>
+            <line x1="360" y1="222" x2="360" y2="309"/>
+          </g>
+          <text x="374" y="114" font-size="12.5" font-weight="600" style="fill:var(--orange)">requests in, responses out</text>
+        </g>
+
+        <!-- Step 6: private subnet stays private -->
+        <g data-step="6">
+          <line x1="560" y1="486" x2="600" y2="486" stroke="var(--priv)" stroke-width="2" stroke-dasharray="5 4"/>
+          <rect x="600" y="430" width="320" height="118" rx="6" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="614" y="454" font-size="14" font-weight="700" style="fill:var(--priv)">Main route table (private subnet)</text>
+          <text x="614" y="476" font-size="11" style="fill:var(--muted)" letter-spacing=".06em">DESTINATION</text>
+          <text x="780" y="476" font-size="11" style="fill:var(--muted)" letter-spacing=".06em">TARGET</text>
+          <line x1="606" y1="484" x2="914" y2="484" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="614" y="505" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">10.0.0.0/16</text>
+          <text x="780" y="505" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">local</text>
+          <text x="614" y="532" font-size="12.5" font-weight="600" style="fill:var(--bad)">✕ no 0.0.0.0/0 route</text>
+          <text x="114" y="556" font-size="12.5" font-weight="600" style="fill:var(--bad)">✕ No path to or from the internet</text>
+          <text x="400" y="536" font-size="13" style="fill:var(--muted)">No public IP</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: traffic from the internet enters through the <b>Internet Gateway</b> attached to the VPC. The public subnet's <b>route table</b> sends everything that is not local (<code>0.0.0.0/0</code>) to that gateway, and the web server has a <b>public IP</b>. The private subnet has none of these, so it stays unreachable.</p>
+    <div class="legend">
+      <span style="--c:var(--vpc)">VPC / Internet Gateway</span>
+      <span style="--c:var(--pub)">Public subnet and its route table</span>
+      <span style="--c:var(--priv)">Private subnet and its route table</span>
+      <span style="--c:var(--orange)">Traffic flow</span>
+      <span style="--c:var(--bad)">Blocked</span>
+    </div>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Internet Gateway (IGW)</h3>
+      <p>The door between your VPC and the internet. You create it, then <b>attach</b> it to the VPC.</p>
+      <ul>
+        <li>One IGW per VPC. Draw it on the VPC border, because it belongs to the VPC, not to a subnet.</li>
+        <li>AWS runs it for you: it scales by itself and has no single point of failure.</li>
+        <li>The gateway is free; you pay for the data that leaves through it.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Route table</h3>
+      <p>A list of rules: “traffic for this destination goes to that target”. Every subnet is associated with exactly one route table.</p>
+      <ul>
+        <li>Every table has the <b>local</b> route for the VPC range. You cannot delete it.</li>
+        <li><code>0.0.0.0/0</code> means “everything else”, also called the default route.</li>
+        <li>The <b>most specific</b> matching route wins: <code>/16</code> beats <code>/0</code>.</li>
+        <li>A subnet with no explicit association uses the VPC's <b>main route table</b>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Public IP and Elastic IP</h3>
+      <p>The IGW only forwards traffic for instances that have a public IPv4 address.</p>
+      <ul>
+        <li><b>Auto-assigned public IP</b> — given at launch, changes when you stop and start the instance.</li>
+        <li><b>Elastic IP</b> — a fixed public address you own until you release it.</li>
+        <li>The instance itself only knows its private IP. The IGW translates between the two (1:1 NAT).</li>
+        <li>AWS charges for every public IPv4 address, in use or not.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>What “public subnet” really means</h3>
+      <p>There is no “public” checkbox on a subnet. A subnet is public when <b>its route table has a route to an Internet Gateway</b>.</p>
+      <ul>
+        <li>Same VPC, same kind of subnet; only the route table differs.</li>
+        <li>Keep the main route table private, and make a separate one for public subnets. Then a new subnet is private by default.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Four things needed for internet access</h2>
+  <div class="card">
+    <p>If an instance cannot be reached from the internet, check these in order. Miss any one and it fails.</p>
+    <ol>
+      <li>An <b>Internet Gateway</b> is attached to the VPC.</li>
+      <li>The subnet's <b>route table</b> has <code>0.0.0.0/0 → igw</code>.</li>
+      <li>The instance has a <b>public IP</b> or Elastic IP.</li>
+      <li><b>Security group and network ACL</b> allow the traffic (Day 5).</li>
+    </ol>
+  </div>
+
+  <h2>Route lookup practice</h2>
+  <div class="card">
+    <p>Pick where the packet starts and where it is going. Predict which route matches before you read the answer.</p>
+    <div class="seg" id="segSrc"><b>From</b>
+      <button data-v="pub" class="on">Public subnet</button>
+      <button data-v="priv">Private subnet</button>
+    </div>
+    <div class="seg" id="segDst"><b>To</b>
+      <button data-v="8.8.8.8" class="on">8.8.8.8 (internet)</button>
+      <button data-v="10.0.2.10">10.0.2.10 (database)</button>
+      <button data-v="10.0.1.10">10.0.1.10 (web server)</button>
+    </div>
+    <div class="table-wrap">
+      <table id="rt"></table>
+    </div>
+    <p class="result" id="rtResult"></p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Redraw yesterday's VPC: Region, VPC, one AZ, public subnet on top, private subnet below, one instance in each.</li>
+      <li>Draw the <b>Internet</b> above the AWS Cloud box.</li>
+      <li>Place the <b>Internet Gateway</b> icon on the top border of the VPC.</li>
+      <li>Draw the <b>public route table</b> next to the public subnet with two rows: <code>10.0.0.0/16 → local</code> and <code>0.0.0.0/0 → igw</code>. Connect it to the subnet with a dashed line.</li>
+      <li>Write a <b>public IP</b> under the web server's private IP.</li>
+      <li>Draw a two-way arrow: Internet ↔ IGW ↔ web server.</li>
+      <li>Draw the <b>main route table</b> next to the private subnet with only the local route.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Always write the route table rows; they are what an interviewer looks for.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>What makes a subnet “public”?</summary><p>Its route table has a route to an Internet Gateway, normally <code>0.0.0.0/0 → igw</code>. Nothing else about the subnet is different.</p></details>
+  <details><summary>An instance is in a public subnet but has no public IP. Can the internet reach it?</summary><p>No. The route exists, but the IGW has no public address to map to the instance. It also cannot go out to the internet.</p></details>
+  <details><summary>A packet goes from the web server to <code>10.0.2.10</code>. The route table has <code>10.0.0.0/16 → local</code> and <code>0.0.0.0/0 → igw</code>. Which route is used?</summary><p>The local route. Both match, but <code>/16</code> is more specific than <code>/0</code>, and the most specific route wins. The packet never leaves the VPC.</p></details>
+  <details><summary>You run <code>ip addr</code> on the web server. Do you see <code>13.233.10.25</code>?</summary><p>No, only <code>10.0.1.10</code>. The public IP lives at the Internet Gateway, which translates it to the private IP.</p></details>
+  <details><summary>You stop and start the web server. What happens to its public IP?</summary><p>An auto-assigned public IP is released and a new one is given. To keep the same address, use an Elastic IP.</p></details>
+  <details><summary>How many Internet Gateways can one VPC have?</summary><p>One. And one IGW can be attached to only one VPC at a time.</p></details>
+  <details><summary>Why not just add the IGW route to the main route table?</summary><p>Because every subnet without its own association uses the main table, so any new subnet would silently become public. Keeping the main table private is the safe default.</p></details>
+  <details><summary>The database server needs to download security updates. Can it today?</summary><p>No. It has no route to the internet. Giving it one without exposing it is the job of the NAT Gateway on Day 4.</p></details>
+
+  <div class="next">
+    <b>Next — Day 4: Private subnet with outbound access.</b> You will add a NAT Gateway in the public subnet and a route <code>0.0.0.0/0 → nat</code> in the private route table, so the database server can reach out for updates while staying unreachable from outside.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Yesterday's VPC.</b> Start from Day 2: a VPC with a public and a private subnet and one instance in each. The internet is drawn above the AWS Cloud, and nothing connects to it yet.",
+    "<b>Step 2 — Internet Gateway.</b> Create an Internet Gateway and attach it to the VPC. Draw it on the VPC border. On its own it changes nothing, because no route points to it yet.",
+    "<b>Step 3 — Public route table.</b> Create a new route table, add <code>0.0.0.0/0 → igw</code>, and associate it with the public subnet. This is the step that makes the subnet public.",
+    "<b>Step 4 — Public IP.</b> Give the web server a public IP. The instance still only knows its private address; the gateway translates between the two.",
+    "<b>Step 5 — Traffic flows.</b> A request from the internet reaches the gateway, is translated to <code>10.0.1.10</code>, and arrives at the web server. The response leaves the same way, following the <code>0.0.0.0/0</code> route.",
+    "<b>Step 6 — The private subnet stays private.</b> It still uses the main route table, which has only the local route, and its instance has no public IP. It can talk to the web server but not to the internet."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const tables = {
+    pub:  { name: "Public route table", routes: [["10.0.0.0/16", "local"], ["0.0.0.0/0", "igw-0a1b"]] },
+    priv: { name: "Main route table",   routes: [["10.0.0.0/16", "local"]] }
+  };
+  const pick = { src: "pub", dst: "8.8.8.8" };
+
+  function lookup() {
+    const t = tables[pick.src];
+    // Most specific match wins: the /16 local route beats the /0 default route.
+    const hit = pick.dst.startsWith("10.0.") ? 0 : t.routes.findIndex(r => r[0] === "0.0.0.0/0");
+    document.getElementById("rt").innerHTML =
+      `<tr><th>${t.name}: destination</th><th>Target</th></tr>` +
+      t.routes.map((r, i) => `<tr class="${i === hit ? "hit" : ""}"><td><code>${r[0]}</code></td><td><code>${r[1]}</code></td></tr>`).join("");
+    const out = document.getElementById("rtResult");
+    if (hit === -1) {
+      out.innerHTML = `<b>Dropped.</b> No route matches <code>${pick.dst}</code>. The private subnet has no default route, so the packet has nowhere to go.`;
+    } else if (hit === 0) {
+      out.innerHTML = `<b>Delivered inside the VPC.</b> <code>${pick.dst}</code> falls inside <code>10.0.0.0/16</code>, so the local route is used` +
+        (pick.src === "pub" ? `. The default route also matches, but <code>/16</code> is more specific than <code>/0</code>.` : `.`);
+    } else {
+      out.innerHTML = `<b>Sent to the Internet Gateway.</b> <code>${pick.dst}</code> is outside the VPC range, so only <code>0.0.0.0/0</code> matches. The gateway swaps the private source IP for the public one and forwards the packet.`;
+    }
+  }
+  for (const [id, key] of [["segSrc", "src"], ["segDst", "dst"]]) {
+    const seg = document.getElementById(id);
+    seg.querySelectorAll("button").forEach(b => b.onclick = () => {
+      seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      pick[key] = b.dataset.v;
+      lookup();
+    });
+  }
+  lookup();
+</script>
+</body>
+</html>
