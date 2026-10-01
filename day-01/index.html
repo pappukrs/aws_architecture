@@ -4,60 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Day 1 — AWS Global Infrastructure</title>
-<style>
-  :root {
-    --bg: #f5f7fa; --card: #ffffff; --text: #16202c; --muted: #5a6878; --border: #d9e0e8;
-    --orange: #e07b00; --region: #008a8c; --az: #1272b0; --edge: #7a3ff2; --dc: #3c4a5c;
-    --region-fill: #e9f7f7; --az-fill: #eef6fc; --edge-fill: #f3edff; --cloud-fill: #ffffff;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0f151c; --card: #18212c; --text: #e8eef5; --muted: #9aa8b8; --border: #2c3948;
-      --orange: #ff9d2e; --region: #2cc5c7; --az: #55b0ee; --edge: #b08cff; --dc: #b7c4d3;
-      --region-fill: #12292c; --az-fill: #142736; --edge-fill: #241c3a; --cloud-fill: #141c26;
-    }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 1060px; margin: 0 auto; padding: 24px 16px 64px; }
-  header .tag { color: var(--orange); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; }
-  h1 { margin: 4px 0 8px; font-size: 30px; line-height: 1.2; }
-  h2 { margin: 40px 0 12px; font-size: 22px; }
-  h3 { margin: 0 0 6px; font-size: 17px; }
-  p { margin: 0 0 12px; }
-  .lead { color: var(--muted); max-width: 720px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
-  button { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; }
-  button:hover { border-color: var(--orange); }
-  button.primary { background: var(--orange); border-color: var(--orange); color: #fff; font-weight: 600; }
-  button:disabled { opacity: .45; cursor: default; }
-  #caption { margin: 12px 0 0; padding: 10px 14px; border-left: 4px solid var(--orange); background: var(--bg); border-radius: 0 8px 8px 0; min-height: 48px; }
-  .diagram-wrap { overflow-x: auto; }
-  svg { display: block; width: 100%; min-width: 760px; height: auto; }
-  svg text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--text); }
-  .hidden-step { display: none; }
-  .practice svg { visibility: hidden; }
-  .practice .diagram-wrap { background: repeating-linear-gradient(45deg, transparent 0 12px, var(--border) 12px 13px); border-radius: 8px; }
-  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 14px; color: var(--muted); }
-  .legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
-  .card.region { border-top: 4px solid var(--region); } .card.az { border-top: 4px solid var(--az); }
-  .card.dc { border-top: 4px solid var(--dc); } .card.edge { border-top: 4px solid var(--edge); }
-  .card ul, ol { margin: 0; padding-left: 20px; } li { margin-bottom: 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 15px; }
-  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .05em; }
-  .table-wrap { overflow-x: auto; }
-  code { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; font-size: 14px; }
-  details { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 12px 16px; margin-bottom: 10px; }
-  summary { cursor: pointer; font-weight: 600; }
-  details p { margin: 10px 0 0; color: var(--muted); }
-  .next { margin-top: 40px; padding: 16px; border-radius: 12px; border: 1px dashed var(--orange); }
-</style>
+<link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
 <main>
+  <nav class="nav"><a href="../README.md">30-day plan</a><a href="../day-02/index.html">Day 2 →</a></nav>
   <header>
     <div class="tag">Day 1 of 30 · Week 1 — Networking Foundations</div>
     <h1>AWS Global Infrastructure</h1>
@@ -301,12 +252,12 @@
   <details><summary>Where would you draw IAM on this diagram?</summary><p>Outside the Region boxes. IAM is a global service; users and roles exist once for the whole account.</p></details>
 
   <div class="next">
-    <b>Tomorrow — Day 2: Basic VPC.</b> You will draw your own private network inside one Region: a VPC with CIDR <code>10.0.0.0/16</code>, split into a public and a private subnet, each sitting inside one of the AZ boxes you learned today.
+    <b>Next — <a href="../day-02/index.html">Day 2: Basic VPC</a>.</b> You will draw your own private network inside one Region: a VPC with CIDR <code>10.0.0.0/16</code>, split into a public and a private subnet, each sitting inside one of the AZ boxes you learned today.
   </div>
 </main>
 
 <script>
-  const captions = [
+  window.CAPTIONS = [
     "",
     "<b>Step 1 — Region.</b> Start with a dashed box for the Region and label it with its code and city. Everything you build lives in a Region you choose.",
     "<b>Step 2 — Availability Zones.</b> Inside the Region, draw three AZ boxes. They are physically separate sites, so one failing does not take down the others.",
@@ -314,26 +265,7 @@
     "<b>Step 4 — A second Region.</b> Regions are fully isolated from each other. They are connected by the AWS global backbone, but nothing is copied across unless you set it up.",
     "<b>Step 5 — Edge locations and users.</b> Edge locations sit in many more cities than Regions. Users connect to the nearest one, which serves cached content or forwards the request to the Region."
   ];
-  const fullCaption = document.getElementById("caption").innerHTML;
-  const groups = [...document.querySelectorAll("[data-step]")];
-  const max = 5;
-  let step = 0; // 0 = show all
-  const $ = id => document.getElementById(id);
-
-  function render() {
-    groups.forEach(g => g.classList.toggle("hidden-step", step !== 0 && +g.dataset.step > step));
-    $("caption").innerHTML = step === 0 ? fullCaption : captions[step];
-    $("btnPrev").disabled = step <= 1;
-    $("btnNext").disabled = step === 0 || step >= max;
-  }
-  $("btnBuild").onclick = () => { step = 1; render(); };
-  $("btnNext").onclick = () => { if (step < max) step++; render(); };
-  $("btnPrev").onclick = () => { if (step > 1) step--; render(); };
-  $("btnAll").onclick = () => { step = 0; render(); };
-  $("btnPractice").onclick = e => {
-    const on = $("diagramCard").classList.toggle("practice");
-    e.target.textContent = on ? "Reveal diagram" : "Hide diagram (draw from memory)";
-  };
 </script>
+<script src="../assets/steps.js"></script>
 </body>
 </html>

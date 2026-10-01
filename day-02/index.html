@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 2 — Basic VPC</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-01/index.html">← Day 1</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 2 of 30 · Week 1 — Networking Foundations</div>
+    <h1>Basic VPC</h1>
+    <p class="lead">A VPC is your own private network inside a Region. Today you carve out an address range and split it into two subnets. Nothing connects to the internet yet; that comes on Day 3.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 570" role="img" aria-label="A VPC with CIDR 10.0.0.0/16 spanning two Availability Zones, with a public subnet 10.0.1.0/24 and a private subnet 10.0.2.0/24 in the first zone">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <!-- AWS Cloud -->
+        <rect x="20" y="20" width="960" height="535" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="44" font-size="15" font-weight="700">AWS Cloud</text>
+
+        <!-- Step 1: Region -->
+        <g data-step="1">
+          <rect x="40" y="60" width="920" height="482" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="84" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+        </g>
+
+        <!-- Step 2: VPC -->
+        <g data-step="2">
+          <rect x="60" y="100" width="880" height="428" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="125" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <text x="926" y="125" font-size="13" text-anchor="end" style="fill:var(--vpc)">65,536 addresses · spans every AZ in the Region</text>
+        </g>
+
+        <!-- Step 1: Availability Zones -->
+        <g data-step="1">
+          <rect x="80" y="140" width="520" height="372" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="163" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+          <rect x="620" y="140" width="300" height="372" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="634" y="163" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+        </g>
+        <g data-step="2">
+          <text x="770" y="322" font-size="13.5" text-anchor="middle" style="fill:var(--muted)">No subnets here yet.</text>
+          <text x="770" y="342" font-size="13.5" text-anchor="middle" style="fill:var(--muted)">The VPC already covers this AZ;</text>
+          <text x="770" y="362" font-size="13.5" text-anchor="middle" style="fill:var(--muted)">we add subnets on Day 6.</text>
+        </g>
+
+        <!-- Step 3: public subnet -->
+        <g data-step="3">
+          <rect x="100" y="178" width="480" height="140" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="201" font-size="14" font-weight="700" style="fill:var(--pub)">Public subnet — 10.0.1.0/24</text>
+          <text x="566" y="201" font-size="12.5" text-anchor="end" style="fill:var(--pub)">256 addresses, 251 usable</text>
+          <text x="566" y="306" font-size="11.5" text-anchor="end" style="fill:var(--muted)">AWS reserves .0 .1 .2 .3 .255</text>
+        </g>
+
+        <!-- Step 4: private subnet -->
+        <g data-step="4">
+          <rect x="100" y="352" width="480" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="375" font-size="14" font-weight="700" style="fill:var(--priv)">Private subnet — 10.0.2.0/24</text>
+          <text x="566" y="375" font-size="12.5" text-anchor="end" style="fill:var(--priv)">256 addresses, 251 usable</text>
+          <text x="566" y="480" font-size="11.5" text-anchor="end" style="fill:var(--muted)">AWS reserves .0 .1 .2 .3 .255</text>
+        </g>
+
+        <!-- Step 5: instances + local route -->
+        <g data-step="5">
+          <use href="#ec2" x="130" y="222" width="56" height="56"/>
+          <text x="200" y="246" font-size="14" font-weight="600">Web server (EC2)</text>
+          <text x="200" y="266" font-size="13" style="fill:var(--muted)">Private IP 10.0.1.10</text>
+          <use href="#ec2" x="130" y="396" width="56" height="56"/>
+          <text x="200" y="420" font-size="14" font-weight="600">Database server (EC2)</text>
+          <text x="200" y="440" font-size="13" style="fill:var(--muted)">Private IP 10.0.2.10</text>
+          <line x1="130" y1="321" x2="130" y2="349" stroke="var(--muted)" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+          <text x="146" y="340" font-size="12.5" style="fill:var(--text)">Local route: every subnet in the VPC can reach every other</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: one <b>VPC</b> with the range <code>10.0.0.0/16</code> covers the whole Region. Inside AZ <code>1a</code> it is split into two <b>subnets</b>, each a <code>/24</code> slice of the VPC range. Instances get private IPs from their subnet and can talk to each other, but nothing can reach the internet yet.</p>
+    <div class="legend">
+      <span style="--c:var(--region)">Region</span>
+      <span style="--c:var(--az)">Availability Zone</span>
+      <span style="--c:var(--vpc)">VPC</span>
+      <span style="--c:var(--pub)">Public subnet</span>
+      <span style="--c:var(--priv)">Private subnet</span>
+      <span style="--c:var(--orange)">EC2 instance</span>
+    </div>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>VPC (Virtual Private Cloud)</h3>
+      <p>An isolated virtual network that belongs to your account. Nothing gets in or out unless you allow it.</p>
+      <ul>
+        <li>A VPC is <b>regional</b>: it covers all AZs of one Region and cannot span two Regions.</li>
+        <li>You give it an address range (CIDR block) between <code>/16</code> and <code>/28</code>.</li>
+        <li>Every account already has a <b>default VPC</b> (<code>172.31.0.0/16</code>) in each Region. For real work you create your own.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>CIDR block</h3>
+      <p><code>10.0.0.0/16</code> means “the first 16 bits are fixed, the rest are yours”. The smaller the number after the slash, the bigger the network.</p>
+      <ul>
+        <li><code>/16</code> → 32 − 16 = 16 free bits → 2<sup>16</sup> = 65,536 addresses.</li>
+        <li><code>/24</code> → 8 free bits → 256 addresses.</li>
+        <li>Use private ranges only: <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, <code>192.168.0.0/16</code>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Subnet</h3>
+      <p>A slice of the VPC range placed in <b>exactly one AZ</b>. Resources such as EC2 instances live in subnets, not directly in the VPC.</p>
+      <ul>
+        <li>Subnet ranges must sit inside the VPC range and must not overlap each other.</li>
+        <li>You cannot resize a subnet after creating it, so plan ahead.</li>
+        <li>AWS keeps 5 addresses in every subnet, so a <code>/24</code> gives 251, not 256.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Public vs private — not yet</h3>
+      <p>Today the two subnets are identical; “public” and “private” are only names.</p>
+      <ul>
+        <li>A subnet becomes <b>public</b> only when its route table sends traffic to an Internet Gateway. You add that on Day 3.</li>
+        <li>Every VPC has a built-in <b>local route</b>, so all its subnets can already reach each other.</li>
+        <li>Convention: draw public on top, private below.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>The 5 reserved addresses</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Address in 10.0.1.0/24</th><th>Used for</th></tr>
+      <tr><td><code>10.0.1.0</code></td><td>Network address</td></tr>
+      <tr><td><code>10.0.1.1</code></td><td>VPC router</td></tr>
+      <tr><td><code>10.0.1.2</code></td><td>DNS server</td></tr>
+      <tr><td><code>10.0.1.3</code></td><td>Reserved for future use</td></tr>
+      <tr><td><code>10.0.1.255</code></td><td>Broadcast address (broadcast is not supported in a VPC, but the address is still held back)</td></tr>
+    </table>
+  </div>
+
+  <h2>CIDR calculator</h2>
+  <div class="card">
+    <div class="calc">
+      <div><div class="lbl">Prefix</div><div class="big" id="cPrefix">/24</div><input type="range" id="prefix" min="16" max="28" value="24" aria-label="CIDR prefix length"></div>
+      <div><div class="lbl">Total addresses</div><div class="big" id="cTotal">256</div></div>
+      <div><div class="lbl">Usable in AWS</div><div class="big" id="cUsable">251</div></div>
+      <div><div class="lbl">How many fit in a /16 VPC</div><div class="big" id="cFit">256</div></div>
+    </div>
+    <p style="margin:14px 0 0;color:var(--muted)">Formula: total = 2<sup>(32 − prefix)</sup>, usable = total − 5. Drag the slider and predict the numbers before you look.</p>
+  </div>
+
+  <h2>How much of the VPC is used?</h2>
+  <div class="card">
+    <p>Each square is one possible <code>/24</code> subnet inside <code>10.0.0.0/16</code>. There are 256 of them; you have used two. Hover a square to see its range.</p>
+    <div class="cells" id="cells"></div>
+    <div class="legend">
+      <span style="--c:var(--pub)">10.0.1.0/24 public</span>
+      <span style="--c:var(--priv)">10.0.2.0/24 private</span>
+      <span style="--c:var(--border)">free</span>
+    </div>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the <b>AWS Cloud</b> and <b>Region</b> boxes from Day 1.</li>
+      <li>Draw a solid <b>VPC</b> box inside the Region and write its CIDR: <code>10.0.0.0/16</code>.</li>
+      <li>Inside the VPC, draw two dashed <b>AZ</b> boxes.</li>
+      <li>In the first AZ, draw the <b>public subnet</b> on top with <code>10.0.1.0/24</code>.</li>
+      <li>Below it, draw the <b>private subnet</b> with <code>10.0.2.0/24</code>.</li>
+      <li>Put one EC2 instance in each subnet and write a private IP from that subnet's range.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Always write the CIDR on every VPC and subnet box.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>How many usable IPs are in a /24 subnet on AWS, and why?</summary><p>251. A /24 has 256 addresses and AWS reserves 5 in every subnet: network, router, DNS, future use and broadcast.</p></details>
+  <details><summary>Can one subnet span two Availability Zones?</summary><p>No. A subnet lives in exactly one AZ. To cover two AZs you create two subnets. The VPC is what spans AZs.</p></details>
+  <details><summary>Can <code>10.0.1.0/24</code> and <code>10.0.1.128/25</code> exist in the same VPC?</summary><p>No. The /25 is the upper half of the /24, so they overlap. Subnets in a VPC must never overlap.</p></details>
+  <details><summary>Can the web server at <code>10.0.1.10</code> be reached from the internet right now?</summary><p>No. The VPC has no Internet Gateway and the instance has no public IP. The “public” subnet is public in name only until Day 3.</p></details>
+  <details><summary>Can the web server reach the database server at <code>10.0.2.10</code>?</summary><p>Yes at the network level, through the VPC's built-in local route. Security groups can still block it; that is Day 5.</p></details>
+  <details><summary>Why pick a /16 for the VPC when you only need two /24 subnets?</summary><p>Room to grow. Subnets cannot be resized, and re-addressing a live network is painful. Also choose a range that will not overlap with other networks you may connect later, such as an office network or another VPC.</p></details>
+  <details><summary>What is the smallest subnet AWS allows, and how many usable IPs does it have?</summary><p>A /28: 16 addresses minus 5 reserved leaves 11 usable.</p></details>
+
+  <div class="next">
+    <b>Next — Day 3: Public subnet with internet access.</b> You will attach an Internet Gateway to this VPC, add a route table with <code>0.0.0.0/0 → IGW</code>, and give the web server a public IP. That is what makes the public subnet really public.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Region and AZs.</b> Start with what you learned on Day 1: a Region box and its Availability Zones. Two AZs are enough for today.",
+    "<b>Step 2 — VPC.</b> Draw a solid box for the VPC and write its CIDR, <code>10.0.0.0/16</code>. The VPC is regional, so the box stretches across every AZ. That gives you 65,536 private addresses to hand out.",
+    "<b>Step 3 — Public subnet.</b> Cut the first slice: <code>10.0.1.0/24</code>, placed in AZ 1a. A subnet belongs to exactly one AZ. It has 256 addresses, of which AWS keeps 5.",
+    "<b>Step 4 — Private subnet.</b> Cut a second, non-overlapping slice: <code>10.0.2.0/24</code>. Right now it behaves exactly like the first one; the difference appears on Day 3.",
+    "<b>Step 5 — Instances.</b> Launch one EC2 instance in each subnet. Each gets a private IP from its subnet's range. They can reach each other through the VPC's local route, but neither can reach the internet."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const fmt = n => n.toLocaleString("en-US");
+  const prefix = document.getElementById("prefix");
+  function calc() {
+    const p = +prefix.value, total = 2 ** (32 - p);
+    document.getElementById("cPrefix").textContent = "/" + p;
+    document.getElementById("cTotal").textContent = fmt(total);
+    document.getElementById("cUsable").textContent = fmt(total - 5);
+    document.getElementById("cFit").textContent = fmt(2 ** (p - 16));
+  }
+  prefix.oninput = calc;
+  calc();
+
+  const cells = document.getElementById("cells");
+  for (let i = 0; i < 256; i++) {
+    const c = document.createElement("i");
+    c.title = `10.0.${i}.0/24` + (i === 1 ? " — public subnet" : i === 2 ? " — private subnet" : " — free");
+    if (i === 1) c.className = "pub";
+    if (i === 2) c.className = "priv";
+    cells.appendChild(c);
+  }
+</script>
+</body>
+</html>
