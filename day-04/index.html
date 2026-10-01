@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 4 — Private Subnet with Outbound Access</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-03/index.html">← Day 3</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 4 of 30 · Week 1 — Networking Foundations</div>
+    <h1>Private Subnet with Outbound Access</h1>
+    <p class="lead">The database server must stay unreachable from the internet, but it still needs to download updates. A NAT Gateway gives it a one-way door: connections can start from inside, never from outside.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 640" role="img" aria-label="A NAT Gateway with an Elastic IP sits in the public subnet. The private route table sends 0.0.0.0/0 to it, so the database reaches the internet through the NAT Gateway and then the Internet Gateway.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: Day 3 recap -->
+        <g data-step="1">
+          <rect x="280" y="14" width="160" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="360" y="45" font-size="15" font-weight="700" text-anchor="middle">Internet</text>
+
+          <rect x="20" y="90" width="960" height="535" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+
+          <rect x="40" y="128" width="920" height="485" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+
+          <rect x="60" y="190" width="880" height="410" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="360" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="360" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <text x="396" y="178" font-size="13.5" font-weight="700" style="fill:var(--vpc)">Internet Gateway · igw-0a1b</text>
+
+          <rect x="80" y="232" width="500" height="355" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+
+          <rect x="100" y="268" width="460" height="140" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="291" font-size="14" font-weight="700" style="fill:var(--pub)">Public subnet — 10.0.1.0/24</text>
+          <use href="#ec2" x="124" y="322" width="44" height="44"/>
+          <text x="178" y="341" font-size="13.5" font-weight="600">Web server</text>
+          <text x="178" y="359" font-size="12.5" style="fill:var(--muted)">10.0.1.10</text>
+
+          <rect x="100" y="430" width="460" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="453" font-size="14" font-weight="700" style="fill:var(--priv)">Private subnet — 10.0.2.0/24</text>
+          <use href="#ec2" x="332" y="478" width="56" height="56"/>
+          <text x="400" y="498" font-size="14" font-weight="600">Database (EC2)</text>
+          <text x="400" y="517" font-size="13" style="fill:var(--muted)">Private IP 10.0.2.10</text>
+          <text x="400" y="536" font-size="13" style="fill:var(--muted)">No public IP</text>
+
+          <!-- public route table -->
+          <line x1="560" y1="330" x2="600" y2="330" stroke="var(--pub)" stroke-width="2" stroke-dasharray="5 4"/>
+          <rect x="600" y="262" width="320" height="136" rx="6" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="614" y="286" font-size="14" font-weight="700" style="fill:var(--pub)">Public route table</text>
+          <text x="614" y="308" font-size="11" style="fill:var(--muted)" letter-spacing=".06em">DESTINATION</text>
+          <text x="780" y="308" font-size="11" style="fill:var(--muted)" letter-spacing=".06em">TARGET</text>
+          <line x1="606" y1="316" x2="914" y2="316" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="614" y="337" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">10.0.0.0/16</text>
+          <text x="780" y="337" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">local</text>
+          <text x="614" y="370" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">0.0.0.0/0</text>
+          <text x="780" y="370" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace;fill:var(--vpc)">igw-0a1b</text>
+
+          <!-- private route table: local only -->
+          <line x1="560" y1="498" x2="600" y2="498" stroke="var(--priv)" stroke-width="2" stroke-dasharray="5 4"/>
+          <rect x="600" y="430" width="320" height="136" rx="6" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="614" y="454" font-size="14" font-weight="700" style="fill:var(--priv)">Private route table</text>
+          <text x="614" y="476" font-size="11" style="fill:var(--muted)" letter-spacing=".06em">DESTINATION</text>
+          <text x="780" y="476" font-size="11" style="fill:var(--muted)" letter-spacing=".06em">TARGET</text>
+          <line x1="606" y1="484" x2="914" y2="484" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="614" y="505" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">10.0.0.0/16</text>
+          <text x="780" y="505" font-size="13.5" style="font-family:ui-monospace,Menlo,Consolas,monospace">local</text>
+        </g>
+
+        <!-- Step 2: NAT Gateway in the public subnet -->
+        <g data-step="2">
+          <rect x="332" y="316" width="56" height="56" rx="8" fill="var(--vpc)"/>
+          <text x="360" y="349" font-size="14" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          <text x="400" y="336" font-size="14" font-weight="600">NAT Gateway</text>
+          <text x="400" y="355" font-size="13" style="fill:var(--muted)">nat-0c2d · 10.0.1.20</text>
+        </g>
+
+        <!-- Step 3: Elastic IP -->
+        <g data-step="3">
+          <text x="400" y="374" font-size="13" font-weight="700" style="fill:var(--pub)">Elastic IP 13.126.5.80</text>
+        </g>
+
+        <!-- Step 4: route to NAT -->
+        <g data-step="4">
+          <rect x="606" y="518" width="308" height="30" rx="4" fill="var(--priv-fill)"/>
+          <text x="614" y="538" font-size="13.5" font-weight="700" style="font-family:ui-monospace,Menlo,Consolas,monospace">0.0.0.0/0</text>
+          <text x="780" y="538" font-size="13.5" font-weight="700" style="font-family:ui-monospace,Menlo,Consolas,monospace;fill:var(--vpc)">nat-0c2d</text>
+        </g>
+
+        <!-- Step 5: outbound flow -->
+        <g data-step="5">
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="360" y1="474" x2="360" y2="381"/>
+            <line x1="360" y1="312" x2="360" y2="223"/>
+            <line x1="360" y1="162" x2="360" y2="71"/>
+          </g>
+          <g font-size="12" font-weight="700" text-anchor="middle">
+            <circle cx="360" cy="419" r="10" fill="var(--orange)"/><text x="360" y="423" style="fill:#fff">1</text>
+            <circle cx="360" cy="252" r="10" fill="var(--orange)"/><text x="360" y="256" style="fill:#fff">2</text>
+            <circle cx="360" cy="109" r="10" fill="var(--orange)"/><text x="360" y="113" style="fill:#fff">3</text>
+          </g>
+          <g font-size="12" font-weight="600">
+            <text x="378" y="423" style="fill:var(--orange)">source 10.0.2.10</text>
+            <text x="378" y="256" style="fill:var(--orange)">source 10.0.1.20</text>
+            <text x="378" y="113" style="fill:var(--orange)">source 13.126.5.80</text>
+          </g>
+        </g>
+
+        <!-- Step 6: inbound still blocked -->
+        <g data-step="6">
+          <text x="114" y="556" font-size="12.5" font-weight="600" style="fill:var(--bad)">✕ The internet cannot start a connection inward</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the database sends its request to the <b>NAT Gateway</b> in the public subnet, because the private route table says <code>0.0.0.0/0 → nat</code>. The NAT Gateway forwards it through the <b>Internet Gateway</b> using its own <b>Elastic IP</b>. Replies come back the same way, but nobody outside can open a connection to the database.</p>
+    <div class="legend">
+      <span style="--c:var(--vpc)">Internet Gateway / NAT Gateway</span>
+      <span style="--c:var(--pub)">Public subnet and its route table</span>
+      <span style="--c:var(--priv)">Private subnet and its route table</span>
+      <span style="--c:var(--orange)">Outbound request</span>
+      <span style="--c:var(--bad)">Blocked</span>
+    </div>
+  </div>
+
+  <h2>The packet's journey</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Hop</th><th>What happens</th><th>Source IP on the packet</th></tr>
+      <tr><td><b>1</b> Database → NAT Gateway</td><td>Destination <code>8.8.8.8</code> is outside the VPC. The private route table matches <code>0.0.0.0/0 → nat</code>.</td><td><code>10.0.2.10</code></td></tr>
+      <tr><td><b>2</b> NAT Gateway → Internet Gateway</td><td>The NAT Gateway replaces the source with its own private IP and remembers the connection. The public route table matches <code>0.0.0.0/0 → igw</code>.</td><td><code>10.0.1.20</code></td></tr>
+      <tr><td><b>3</b> Internet Gateway → Internet</td><td>The Internet Gateway maps the NAT Gateway's private IP to its Elastic IP.</td><td><code>13.126.5.80</code></td></tr>
+      <tr><td><b>Reply</b></td><td>The reply arrives at the Elastic IP. The NAT Gateway looks up the remembered connection and passes it back to <code>10.0.2.10</code>.</td><td>—</td></tr>
+    </table>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>NAT Gateway</h3>
+      <p>NAT means Network Address Translation. Many private instances share one public address to reach the internet.</p>
+      <ul>
+        <li><b>Outbound only.</b> It forwards replies to connections started from inside and drops everything else.</li>
+        <li>Managed by AWS: no patching, scales by itself.</li>
+        <li>It lives in <b>one AZ</b>. If that AZ fails, so does the NAT Gateway (fixed on Day 6).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Why it sits in the public subnet</h3>
+      <p>This is the most common mistake in drawings. The NAT Gateway serves the private subnet but <b>lives in the public one</b>.</p>
+      <ul>
+        <li>It needs its own way out, and only the public subnet has a route to the Internet Gateway.</li>
+        <li>It needs an <b>Elastic IP</b>, the fixed public address the internet sees.</li>
+        <li>Placed in a private subnet, it would have no path to the internet at all.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Private route table</h3>
+      <p>The private subnet gets its own route table with a default route to the NAT Gateway.</p>
+      <ul>
+        <li><code>10.0.0.0/16 → local</code> for traffic inside the VPC.</li>
+        <li><code>0.0.0.0/0 → nat</code> for everything else.</li>
+        <li>The subnet is still private: its route points to a NAT Gateway, not to an Internet Gateway.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Cost</h3>
+      <p>Unlike the Internet Gateway, a NAT Gateway is <b>not free</b>.</p>
+      <ul>
+        <li>You pay per hour it exists plus per GB it processes, roughly 30–40 US dollars a month before any data.</li>
+        <li>Delete it after practising in a real account, and release the Elastic IP too.</li>
+        <li>Traffic to S3 or DynamoDB can skip the NAT Gateway through VPC endpoints (Day 24).</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Internet Gateway vs NAT Gateway</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Internet Gateway</th><th>NAT Gateway</th></tr>
+      <tr><td><b>Direction</b></td><td>Inbound and outbound</td><td>Outbound only</td></tr>
+      <tr><td><b>Used by</b></td><td>Instances with a public IP</td><td>Instances with only a private IP</td></tr>
+      <tr><td><b>Where you draw it</b></td><td>On the VPC border</td><td>Inside a public subnet</td></tr>
+      <tr><td><b>Scope</b></td><td>Whole VPC, all AZs</td><td>One AZ</td></tr>
+      <tr><td><b>Address translation</b></td><td>One public IP per instance (1:1)</td><td>One Elastic IP shared by many instances</td></tr>
+      <tr><td><b>Price</b></td><td>Free</td><td>Hourly charge plus per GB</td></tr>
+    </table>
+  </div>
+
+  <h2>Who can start a connection?</h2>
+  <div class="card">
+    <p>Pick who opens the connection and who receives it. Predict the answer first.</p>
+    <div class="seg" id="segFrom"><b>From</b>
+      <button data-v="db" class="on">Database</button>
+      <button data-v="web">Web server</button>
+      <button data-v="net">Internet</button>
+    </div>
+    <div class="seg" id="segTo"><b>To</b>
+      <button data-v="net" class="on">Internet</button>
+      <button data-v="web">Web server</button>
+      <button data-v="db">Database</button>
+    </div>
+    <p class="result" id="connResult"></p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Redraw Day 3: VPC, Internet Gateway, public subnet with its route table, private subnet below.</li>
+      <li>Draw the <b>NAT Gateway</b> inside the <b>public</b> subnet.</li>
+      <li>Write its <b>Elastic IP</b> next to it.</li>
+      <li>Draw the <b>private route table</b> with two rows: <code>10.0.0.0/16 → local</code> and <code>0.0.0.0/0 → nat</code>.</li>
+      <li>Draw one-way arrows: database → NAT Gateway → Internet Gateway → Internet.</li>
+      <li>Number the hops and write the source IP at each one.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Check two things: the NAT Gateway is in the public subnet, and the arrows point outward only.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Why does the NAT Gateway sit in the public subnet?</summary><p>It needs a route to the Internet Gateway and a public address of its own. Only a public subnet provides the route. In a private subnet it would be as cut off as the instances it is meant to serve.</p></details>
+  <details><summary>An external server receives a request from the database. Which source IP does it see?</summary><p>The NAT Gateway's Elastic IP, <code>13.126.5.80</code>. It never sees <code>10.0.2.10</code>. This is useful when a partner needs to allow-list your address.</p></details>
+  <details><summary>Can someone on the internet SSH into the database using the NAT Gateway's Elastic IP?</summary><p>No. The NAT Gateway only passes replies to connections that were started from inside. An unsolicited incoming packet matches no connection and is dropped.</p></details>
+  <details><summary>You point the private route table at the Internet Gateway instead of the NAT Gateway. The database has no public IP. Does it get internet access?</summary><p>No. The Internet Gateway only works for instances that have a public IP. And if you did add one, the database would become reachable from outside, which is exactly what you wanted to avoid.</p></details>
+  <details><summary>Does the web server use the NAT Gateway when it downloads updates?</summary><p>No. It is in the public subnet and has its own public IP, so its traffic goes straight to the Internet Gateway.</p></details>
+  <details><summary>Is the private subnet now a public subnet, since it can reach the internet?</summary><p>No. A subnet is public only if its route table points to an Internet Gateway. This one points to a NAT Gateway.</p></details>
+  <details><summary>The AZ holding the NAT Gateway fails. Private subnets in other AZs route through it. What happens?</summary><p>They lose internet access. A NAT Gateway lives in one AZ, so the usual design is one NAT Gateway per AZ, each used by the private subnets of its own AZ. You draw that on Day 6.</p></details>
+  <details><summary>You finished practising and deleted the NAT Gateway. Are you still paying for anything?</summary><p>Yes, if you forgot the Elastic IP. AWS charges for public IPv4 addresses, so release it as well.</p></details>
+
+  <div class="next">
+    <b>Next — Day 5: Security layers.</b> Routing decides where traffic <i>can</i> go. Tomorrow you add what is <i>allowed</i> to go: security groups on instances, network ACLs on subnets, and a bastion host for reaching the private subnet.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Where Day 3 ended.</b> The public subnet reaches the internet through the Internet Gateway. The private subnet has a route table with only the local route, so the database is completely cut off.",
+    "<b>Step 2 — NAT Gateway.</b> Create a NAT Gateway and place it in the <b>public</b> subnet. It gets a private IP from that subnet like any other resource.",
+    "<b>Step 3 — Elastic IP.</b> Attach an Elastic IP to the NAT Gateway. This is the single public address the internet will see for everything in the private subnet.",
+    "<b>Step 4 — Route to the NAT Gateway.</b> Add <code>0.0.0.0/0 → nat</code> to the private route table. Now traffic leaving the private subnet has somewhere to go.",
+    "<b>Step 5 — Outbound flow.</b> Follow the three hops. The source IP changes at each one: the database's private IP, then the NAT Gateway's private IP, then the Elastic IP. Replies return along the same path.",
+    "<b>Step 6 — Still private.</b> The arrows point one way. A connection that starts on the internet has no public IP to aim at and no remembered connection at the NAT Gateway, so it is dropped."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const ok = t => `<b style="color:var(--pub)">Allowed.</b> ${t}`;
+  const no = t => `<b style="color:var(--bad)">Blocked.</b> ${t}`;
+  const answers = {
+    "db>net":  ok("The private route table sends it to the NAT Gateway, which forwards it through the Internet Gateway. The internet sees the Elastic IP <code>13.126.5.80</code>."),
+    "db>web":  ok("Both are in <code>10.0.0.0/16</code>, so the local route delivers it inside the VPC. The NAT Gateway is not involved."),
+    "web>net": ok("The web server has its own public IP, so the public route table sends it straight to the Internet Gateway. It does not use the NAT Gateway."),
+    "web>db":  ok("The local route delivers it inside the VPC. Whether the database accepts it is a security group question (Day 5)."),
+    "net>web": ok("The Internet Gateway maps the web server's public IP to <code>10.0.1.10</code> and delivers the request."),
+    "net>db":  no("The database has no public IP to aim at, and the NAT Gateway only passes replies to connections started from inside. This is the whole point of a private subnet.")
+  };
+  const sel = { from: "db", to: "net" };
+  function show() {
+    document.getElementById("connResult").innerHTML =
+      sel.from === sel.to ? "Pick two different ends." : answers[sel.from + ">" + sel.to];
+  }
+  for (const [id, key] of [["segFrom", "from"], ["segTo", "to"]]) {
+    const seg = document.getElementById(id);
+    seg.querySelectorAll("button").forEach(b => b.onclick = () => {
+      seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      sel[key] = b.dataset.v;
+      show();
+    });
+  }
+  show();
+</script>
+</body>
+</html>
