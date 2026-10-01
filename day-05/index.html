@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 5 — Security Layers</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-04/index.html">← Day 4</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 5 of 30 · Week 1 — Networking Foundations</div>
+    <h1>Security Layers</h1>
+    <p class="lead">Route tables decide where traffic <i>can</i> go. Today you add what is <i>allowed</i> to go: a security group around every instance, a network ACL around every subnet, and a bastion host as the only way in for administrators.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 685" role="img" aria-label="A VPC where each instance is wrapped in a security group and each subnet in a network ACL. Users reach the web server on port 443, the web server reaches the database on 3306, and an administrator reaches the database over SSH through a bastion host.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--az)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: the network from Days 2–4 -->
+        <g data-step="1">
+          <rect x="375" y="14" width="140" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="445" y="45" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+
+          <rect x="20" y="90" width="960" height="580" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+          <rect x="40" y="128" width="920" height="530" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="190" width="880" height="455" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="345" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="345" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+
+          <rect x="100" y="250" width="480" height="172" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="410" font-size="13.5" font-weight="700" style="fill:var(--pub)">Public subnet — 10.0.1.0/24</text>
+          <use href="#ec2" x="372" y="310" width="48" height="48"/>
+          <text x="430" y="330" font-size="13.5" font-weight="600">Web server</text>
+          <text x="430" y="348" font-size="12.5" style="fill:var(--muted)">10.0.1.10</text>
+
+          <rect x="100" y="462" width="480" height="150" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="600" font-size="13.5" font-weight="700" style="fill:var(--priv)">Private subnet — 10.0.2.0/24</text>
+          <use href="#ec2" x="372" y="508" width="48" height="48"/>
+          <text x="430" y="528" font-size="13.5" font-weight="600">Database</text>
+          <text x="430" y="546" font-size="12.5" style="fill:var(--muted)">10.0.2.10</text>
+        </g>
+
+        <!-- Step 2: security groups -->
+        <g data-step="2">
+          <rect x="360" y="280" width="200" height="104" rx="8" fill="none" stroke="var(--bad)" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="370" y="297" font-size="11.5" font-weight="700" style="fill:var(--bad)">Security group: web-sg</text>
+          <rect x="360" y="480" width="200" height="96" rx="8" fill="none" stroke="var(--bad)" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="370" y="497" font-size="11.5" font-weight="700" style="fill:var(--bad)">Security group: db-sg</text>
+        </g>
+
+        <!-- Step 3: web-sg rule + user traffic -->
+        <g data-step="3">
+          <rect x="612" y="232" width="312" height="84" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+          <text x="624" y="254" font-size="13" font-weight="700" style="fill:var(--bad)">web-sg — inbound rules</text>
+          <text x="624" y="278" font-size="12" class="mono">HTTPS 443   from 0.0.0.0/0</text>
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="445" y1="66" x2="363" y2="162"/>
+            <line x1="357" y1="214" x2="447" y2="275"/>
+          </g>
+          <text x="394" y="229" font-size="12" font-weight="700" style="fill:var(--orange)">HTTPS 443</text>
+        </g>
+
+        <!-- Step 4: db-sg rule + web → db -->
+        <g data-step="4">
+          <rect x="612" y="326" width="312" height="84" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+          <text x="624" y="348" font-size="13" font-weight="700" style="fill:var(--bad)">db-sg — inbound rules</text>
+          <text x="624" y="372" font-size="12" class="mono">MySQL 3306  from web-sg</text>
+          <line x1="460" y1="386" x2="460" y2="475" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <text x="472" y="447" font-size="12" font-weight="700" style="fill:var(--orange)">MySQL 3306</text>
+        </g>
+
+        <!-- Step 5: bastion host + SSH path -->
+        <g data-step="5">
+          <rect x="150" y="14" width="190" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="245" y="36" font-size="13.5" font-weight="700" text-anchor="middle">Admin laptop</text>
+          <text x="245" y="53" font-size="12" text-anchor="middle" style="fill:var(--muted)">203.0.113.5</text>
+
+          <use href="#ec2" x="142" y="310" width="48" height="48"/>
+          <text x="200" y="330" font-size="13.5" font-weight="600">Bastion host</text>
+          <text x="200" y="348" font-size="12.5" style="fill:var(--muted)">10.0.1.5</text>
+          <rect x="130" y="280" width="200" height="104" rx="8" fill="none" stroke="var(--bad)" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="140" y="297" font-size="11.5" font-weight="700" style="fill:var(--bad)">Security group: bastion-sg</text>
+
+          <rect x="612" y="420" width="312" height="62" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+          <text x="624" y="442" font-size="13" font-weight="700" style="fill:var(--bad)">bastion-sg — inbound rules</text>
+          <text x="624" y="466" font-size="12" class="mono">SSH 22      from 203.0.113.5/32</text>
+          <text x="624" y="300" font-size="12" class="mono">SSH 22      from bastion-sg</text>
+          <text x="624" y="394" font-size="12" class="mono">SSH 22      from bastion-sg</text>
+
+          <g stroke="var(--az)" stroke-width="3" stroke-dasharray="7 4" marker-end="url(#arrowB)">
+            <line x1="245" y1="66" x2="327" y2="162"/>
+            <line x1="333" y1="214" x2="243" y2="275"/>
+            <line x1="320" y1="386" x2="372" y2="475"/>
+          </g>
+          <text x="296" y="229" font-size="12" font-weight="700" text-anchor="end" style="fill:var(--az)">SSH 22</text>
+          <text x="345" y="447" font-size="12" font-weight="700" text-anchor="end" style="fill:var(--az)">SSH 22</text>
+        </g>
+
+        <!-- Step 6: network ACLs -->
+        <g data-step="6">
+          <rect x="92" y="242" width="496" height="188" rx="9" fill="none" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="10 5"/>
+          <rect x="104" y="231" width="100" height="22" rx="4" fill="var(--dc)"/>
+          <text x="154" y="246" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:var(--card)">Public NACL</text>
+          <rect x="92" y="454" width="496" height="166" rx="9" fill="none" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="10 5"/>
+          <rect x="104" y="443" width="104" height="22" rx="4" fill="var(--dc)"/>
+          <text x="156" y="458" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:var(--card)">Private NACL</text>
+
+          <rect x="612" y="492" width="312" height="140" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <text x="624" y="514" font-size="13" font-weight="700" style="fill:var(--dc)">Private NACL — numbered rules</text>
+          <text x="624" y="537" font-size="11.5" class="mono">IN  100 ALLOW 3306       10.0.1.0/24</text>
+          <text x="624" y="556" font-size="11.5" class="mono">IN  110 ALLOW 22         10.0.1.0/24</text>
+          <text x="624" y="575" font-size="11.5" class="mono">OUT 100 ALLOW 1024-65535 10.0.1.0/24</text>
+          <text x="624" y="594" font-size="11.5" class="mono">    *   DENY  everything else</text>
+          <text x="624" y="619" font-size="11.5" style="fill:var(--muted)">Lowest number is checked first; first match wins.</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: every instance sits inside a <b>security group</b> and every subnet inside a <b>network ACL</b>. Users reach only the web server on port 443. The web server reaches the database on 3306. An administrator reaches the database over SSH, but only by hopping through the <b>bastion host</b>.</p>
+    <div class="legend">
+      <span style="--c:var(--bad)">Security group (instance level)</span>
+      <span style="--c:var(--dc)">Network ACL (subnet level)</span>
+      <span style="--c:var(--orange)">Application traffic</span>
+      <span style="--c:var(--az)">Admin SSH traffic</span>
+    </div>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Security group (SG)</h3>
+      <p>A firewall wrapped around an <b>instance</b>. Draw it as a box around the instance.</p>
+      <ul>
+        <li><b>Stateful:</b> if a request is allowed in, its reply is allowed out automatically.</li>
+        <li><b>Allow rules only.</b> Anything not allowed is denied; you cannot write a deny rule.</li>
+        <li>A new security group allows no inbound traffic and all outbound traffic.</li>
+        <li>The source of a rule can be <b>another security group</b>, not just an IP range.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Network ACL (NACL)</h3>
+      <p>A firewall at the edge of a <b>subnet</b>. Draw it on the subnet border.</p>
+      <ul>
+        <li><b>Stateless:</b> replies are checked like new traffic, so you need a rule in each direction.</li>
+        <li><b>Allow and deny rules</b>, numbered. The lowest number is checked first and the first match wins.</li>
+        <li>The default NACL allows everything. A custom NACL denies everything until you add rules.</li>
+        <li>One NACL per subnet; it applies to every instance in it.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Bastion host</h3>
+      <p>A small instance in the public subnet whose only job is to be the entry point for administrators. Also called a jump box.</p>
+      <ul>
+        <li>Its security group allows SSH from <b>your IP only</b>, never from <code>0.0.0.0/0</code>.</li>
+        <li>Private instances allow SSH only from the bastion's security group.</li>
+        <li>Today AWS Systems Manager Session Manager can replace it with no open port at all, but the bastion pattern is still asked about and still drawn.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Security group chaining</h3>
+      <p><code>db-sg</code> allows 3306 from <code>web-sg</code>, not from an IP range. This is the pattern to remember.</p>
+      <ul>
+        <li>Only instances that carry <code>web-sg</code> get in, wherever they are and whatever their IP.</li>
+        <li>Add ten more web servers and the rule still works unchanged.</li>
+        <li>The bastion is in the same subnet as the web server but cannot reach the database on 3306.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Security group vs network ACL</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Security group</th><th>Network ACL</th></tr>
+      <tr><td><b>Protects</b></td><td>An instance</td><td>A subnet</td></tr>
+      <tr><td><b>State</b></td><td>Stateful: replies pass automatically</td><td>Stateless: replies need their own rule</td></tr>
+      <tr><td><b>Rule types</b></td><td>Allow only</td><td>Allow and deny</td></tr>
+      <tr><td><b>Evaluation</b></td><td>All rules are considered together</td><td>In number order, first match wins</td></tr>
+      <tr><td><b>Default</b></td><td>Deny all inbound, allow all outbound</td><td>Default NACL allows all</td></tr>
+      <tr><td><b>Typical use</b></td><td>Your main firewall, precise rules</td><td>A coarse extra layer, or blocking one bad IP</td></tr>
+    </table>
+  </div>
+
+  <h2>Why stateless matters: ephemeral ports</h2>
+  <div class="card">
+    <p>When the web server connects to the database on port 3306, the reply does not come back on 3306. It returns to a random high port on the web server, somewhere in <code>1024–65535</code>. These are called <b>ephemeral ports</b>.</p>
+    <p>A security group remembers the connection and lets the reply through. A network ACL remembers nothing, so the private NACL needs an explicit outbound rule for <code>1024–65535</code>. Forgetting that rule is the classic reason a custom NACL “breaks everything”.</p>
+  </div>
+
+  <h2>Packet checker</h2>
+  <div class="card">
+    <p>A packet must pass the network ACL of the subnet <b>and</b> the security group of the instance. Pick a packet and predict where it stops.</p>
+    <div class="seg" id="segPkt"></div>
+    <p class="result" id="pktResult"></p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Redraw the VPC with the Internet Gateway, a public subnet with a web server, and a private subnet with a database.</li>
+      <li>Draw a dashed red <b>security group</b> box around each instance and name it.</li>
+      <li>Draw the arrow Users → Internet Gateway → web server and label it <code>HTTPS 443</code>.</li>
+      <li>Draw the arrow web server → database and label it <code>MySQL 3306</code>.</li>
+      <li>Add the <b>bastion host</b> in the public subnet with its own security group, and the admin's SSH path: laptop → Internet Gateway → bastion → database.</li>
+      <li>Draw a <b>network ACL</b> boundary around each subnet.</li>
+      <li>Beside the diagram, write the inbound rules of each security group.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Label every arrow with protocol and port.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Security group or network ACL: which one needs explicit rules for return traffic?</summary><p>The network ACL. It is stateless, so the reply is judged as a separate packet. A security group is stateful and lets replies through automatically.</p></details>
+  <details><summary>Can you write a deny rule in a security group?</summary><p>No. Security groups have allow rules only. To block a specific address you use a network ACL deny rule.</p></details>
+  <details><summary>Why does <code>db-sg</code> use <code>web-sg</code> as its source instead of <code>10.0.1.0/24</code>?</summary><p>The subnet range would also let in the bastion and anything else placed in the public subnet. Referencing <code>web-sg</code> lets in web servers only, and keeps working when instances are added or their IPs change.</p></details>
+  <details><summary>A NACL has rule 100 <code>ALLOW 22 from 0.0.0.0/0</code> and rule 200 <code>DENY 22 from 198.51.100.9/32</code>. Is that address blocked?</summary><p>No. Rule 100 is checked first and already matches, so rule 200 is never reached. The deny must have a lower number than the allow.</p></details>
+  <details><summary>The web server calls an external API. Do you need an inbound security group rule for the response?</summary><p>No. The security group is stateful and outbound is allowed by default, so the response to a connection the server opened comes back in automatically.</p></details>
+  <details><summary>An instance has two security groups attached. Which rules apply?</summary><p>All of them, combined. If either group allows the traffic, it is allowed.</p></details>
+  <details><summary>Why should <code>bastion-sg</code> allow SSH only from your own IP?</summary><p>Port 22 open to <code>0.0.0.0/0</code> is found by scanning bots within minutes. Limiting the source to one address removes almost the whole attack surface.</p></details>
+  <details><summary>You add a custom NACL with only inbound allow rules and the application stops working. Why?</summary><p>There is no outbound rule for the ephemeral ports <code>1024–65535</code>, so every reply is dropped on its way out of the subnet.</p></details>
+
+  <div class="next">
+    <b>Next — Day 6: Multi-AZ VPC.</b> Everything so far lives in one Availability Zone. Tomorrow you duplicate it: public and private subnets in two AZs, and one NAT Gateway per AZ, so the loss of a zone does not take the network down.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The network so far.</b> A VPC with an Internet Gateway, a web server in the public subnet and a database in the private subnet. Routing is in place, but nothing yet says which traffic is permitted.",
+    "<b>Step 2 — Security groups.</b> Wrap each instance in its own security group. A new security group allows nothing in, so at this point both instances are unreachable.",
+    "<b>Step 3 — Let users in.</b> Add one inbound rule to <code>web-sg</code>: HTTPS 443 from anywhere. Users can now reach the web server, and only on that port.",
+    "<b>Step 4 — Let the web server reach the database.</b> <code>db-sg</code> allows MySQL 3306, and its source is the security group <code>web-sg</code>, not an IP range. Only web servers get in.",
+    "<b>Step 5 — Bastion host.</b> Administrators need SSH. Add a bastion in the public subnet that accepts SSH only from the admin's IP. The other security groups accept SSH only from <code>bastion-sg</code>.",
+    "<b>Step 6 — Network ACLs.</b> Add a second layer at each subnet border. Because a NACL is stateless, the private NACL needs an outbound rule for the reply ports <code>1024–65535</code>."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const Y = t => `<span style="color:var(--pub)">✓</span> ${t}`;
+  const N = t => `<span style="color:var(--bad)">✕</span> ${t}`;
+  const packets = [
+    { label: "User → web server :443",
+      nacl: Y("The public NACL is the default one and allows everything."),
+      sg: Y("<code>web-sg</code> allows 443 from <code>0.0.0.0/0</code>."), ok: true },
+    { label: "User → web server :22",
+      nacl: Y("The public NACL allows everything."),
+      sg: N("<code>web-sg</code> allows 22 only from <code>bastion-sg</code>. A user on the internet is not in that group."), ok: false },
+    { label: "Stranger → bastion :22",
+      nacl: Y("The public NACL allows everything."),
+      sg: N("<code>bastion-sg</code> allows 22 only from <code>203.0.113.5/32</code>. Any other source address is dropped."), ok: false },
+    { label: "Admin → bastion :22",
+      nacl: Y("The public NACL allows everything."),
+      sg: Y("The source is <code>203.0.113.5</code>, which matches the rule in <code>bastion-sg</code>."), ok: true },
+    { label: "Web server → database :3306",
+      nacl: Y("Private NACL rule 100 allows 3306 from <code>10.0.1.0/24</code>."),
+      sg: Y("<code>db-sg</code> allows 3306 from <code>web-sg</code>."), ok: true },
+    { label: "Bastion → database :3306",
+      nacl: Y("Private NACL rule 100 allows 3306 from <code>10.0.1.0/24</code>, and the bastion is in that subnet."),
+      sg: N("<code>db-sg</code> allows 3306 only from <code>web-sg</code>. The NACL is coarse; the security group is precise."), ok: false },
+    { label: "Bastion → database :22",
+      nacl: Y("Private NACL rule 110 allows 22 from <code>10.0.1.0/24</code>."),
+      sg: Y("<code>db-sg</code> allows 22 from <code>bastion-sg</code>."), ok: true },
+    { label: "Database reply → web server :51000",
+      nacl: Y("Outbound rule 100 allows ports <code>1024–65535</code> to <code>10.0.1.0/24</code>. Without it the reply would be dropped here."),
+      sg: Y("Security groups are stateful, so the reply needs no rule."), ok: true }
+  ];
+  const seg = document.getElementById("segPkt");
+  function showPkt(i) {
+    const p = packets[i];
+    [...seg.children].forEach((b, j) => b.classList.toggle("on", j === i));
+    document.getElementById("pktResult").innerHTML =
+      `<b>Network ACL:</b> ${p.nacl}<br><b>Security group:</b> ${p.sg}<br>` +
+      (p.ok ? `<b style="color:var(--pub)">Delivered.</b>` : `<b style="color:var(--bad)">Blocked.</b>`);
+  }
+  packets.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.textContent = p.label;
+    b.onclick = () => showPkt(i);
+    seg.appendChild(b);
+  });
+  showPkt(0);
+</script>
+</body>
+</html>

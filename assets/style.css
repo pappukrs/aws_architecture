@@ -63,3 +63,4 @@ a { color: var(--orange); }
 button.on { background: var(--orange); border-color: var(--orange); color: #fff; font-weight: 600; }
 tr.hit td { background: var(--pub-fill); font-weight: 600; }
 .result { margin: 12px 0 0; padding: 10px 14px; border-left: 4px solid var(--orange); background: var(--bg); border-radius: 0 8px 8px 0; }
+svg text.mono { font-family: ui-monospace, Menlo, Consolas, monospace; white-space: pre; }
