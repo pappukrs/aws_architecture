@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 1 — AWS Global Infrastructure</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --card: #ffffff; --text: #16202c; --muted: #5a6878; --border: #d9e0e8;
+    --orange: #e07b00; --region: #008a8c; --az: #1272b0; --edge: #7a3ff2; --dc: #3c4a5c;
+    --region-fill: #e9f7f7; --az-fill: #eef6fc; --edge-fill: #f3edff; --cloud-fill: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f151c; --card: #18212c; --text: #e8eef5; --muted: #9aa8b8; --border: #2c3948;
+      --orange: #ff9d2e; --region: #2cc5c7; --az: #55b0ee; --edge: #b08cff; --dc: #b7c4d3;
+      --region-fill: #12292c; --az-fill: #142736; --edge-fill: #241c3a; --cloud-fill: #141c26;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1060px; margin: 0 auto; padding: 24px 16px 64px; }
+  header .tag { color: var(--orange); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; }
+  h1 { margin: 4px 0 8px; font-size: 30px; line-height: 1.2; }
+  h2 { margin: 40px 0 12px; font-size: 22px; }
+  h3 { margin: 0 0 6px; font-size: 17px; }
+  p { margin: 0 0 12px; }
+  .lead { color: var(--muted); max-width: 720px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  button { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--orange); }
+  button.primary { background: var(--orange); border-color: var(--orange); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  #caption { margin: 12px 0 0; padding: 10px 14px; border-left: 4px solid var(--orange); background: var(--bg); border-radius: 0 8px 8px 0; min-height: 48px; }
+  .diagram-wrap { overflow-x: auto; }
+  svg { display: block; width: 100%; min-width: 760px; height: auto; }
+  svg text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--text); }
+  .hidden-step { display: none; }
+  .practice svg { visibility: hidden; }
+  .practice .diagram-wrap { background: repeating-linear-gradient(45deg, transparent 0 12px, var(--border) 12px 13px); border-radius: 8px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 14px; color: var(--muted); }
+  .legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
+  .card.region { border-top: 4px solid var(--region); } .card.az { border-top: 4px solid var(--az); }
+  .card.dc { border-top: 4px solid var(--dc); } .card.edge { border-top: 4px solid var(--edge); }
+  .card ul, ol { margin: 0; padding-left: 20px; } li { margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .05em; }
+  .table-wrap { overflow-x: auto; }
+  code { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; font-size: 14px; }
+  details { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 12px 16px; margin-bottom: 10px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { margin: 10px 0 0; color: var(--muted); }
+  .next { margin-top: 40px; padding: 16px; border-radius: 12px; border: 1px dashed var(--orange); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="tag">Day 1 of 30 · Week 1 — Networking Foundations</div>
+    <h1>AWS Global Infrastructure</h1>
+    <p class="lead">Before any VPC or subnet, you need the map everything sits on: Regions, Availability Zones, data centers and edge locations. Every architecture diagram you draw for the next 29 days starts with these boxes.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 620" role="img" aria-label="AWS global infrastructure: two Regions, each with three Availability Zones, connected by the AWS backbone, with edge locations serving users">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/>
+          </marker>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <symbol id="dc" viewBox="0 0 45 55">
+            <rect x="1.5" y="1.5" width="42" height="52" rx="4" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+            <g stroke="var(--dc)" stroke-width="2" stroke-linecap="round">
+              <line x1="9" y1="13" x2="36" y2="13"/><line x1="9" y1="24" x2="36" y2="24"/>
+              <line x1="9" y1="35" x2="36" y2="35"/>
+            </g>
+            <circle cx="12" cy="45" r="2.5" fill="var(--orange)"/>
+          </symbol>
+          <symbol id="user" viewBox="0 0 30 30">
+            <circle cx="15" cy="9" r="6" fill="var(--muted)"/>
+            <path d="M3 29 a12 12 0 0 1 24 0 z" fill="var(--muted)"/>
+          </symbol>
+        </defs>
+
+        <!-- AWS Cloud -->
+        <rect x="20" y="30" width="960" height="495" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="54" font-size="15" font-weight="700">AWS Cloud</text>
+
+        <!-- Step 1: Region -->
+        <g data-step="1">
+          <rect x="40" y="70" width="560" height="340" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="94" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+        </g>
+
+        <!-- Step 2: Availability Zones -->
+        <g data-step="2">
+          <g>
+            <rect x="60" y="112" width="160" height="240" rx="6" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+            <text x="140" y="134" font-size="12.5" text-anchor="middle" style="fill:var(--az)">Availability Zone</text>
+            <text x="140" y="153" font-size="15" font-weight="700" text-anchor="middle" style="fill:var(--az)">ap-south-1a</text>
+          </g>
+          <g>
+            <rect x="240" y="112" width="160" height="240" rx="6" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+            <text x="320" y="134" font-size="12.5" text-anchor="middle" style="fill:var(--az)">Availability Zone</text>
+            <text x="320" y="153" font-size="15" font-weight="700" text-anchor="middle" style="fill:var(--az)">ap-south-1b</text>
+          </g>
+          <g>
+            <rect x="420" y="112" width="160" height="240" rx="6" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+            <text x="500" y="134" font-size="12.5" text-anchor="middle" style="fill:var(--az)">Availability Zone</text>
+            <text x="500" y="153" font-size="15" font-weight="700" text-anchor="middle" style="fill:var(--az)">ap-south-1c</text>
+          </g>
+        </g>
+
+        <!-- Step 3: data centers + AZ links -->
+        <g data-step="3">
+          <use href="#dc" x="88" y="180" width="45" height="55"/><use href="#dc" x="147" y="180" width="45" height="55"/>
+          <use href="#dc" x="268" y="180" width="45" height="55"/><use href="#dc" x="327" y="180" width="45" height="55"/>
+          <use href="#dc" x="448" y="180" width="45" height="55"/><use href="#dc" x="507" y="180" width="45" height="55"/>
+          <g font-size="12.5" text-anchor="middle" style="fill:var(--muted)">
+            <text x="140" y="262" style="fill:var(--muted)">Data centers</text>
+            <text x="140" y="290" style="fill:var(--muted)">own power, cooling,</text>
+            <text x="140" y="306" style="fill:var(--muted)">network</text>
+            <text x="320" y="262" style="fill:var(--muted)">Data centers</text>
+            <text x="320" y="290" style="fill:var(--muted)">own power, cooling,</text>
+            <text x="320" y="306" style="fill:var(--muted)">network</text>
+            <text x="500" y="262" style="fill:var(--muted)">Data centers</text>
+            <text x="500" y="290" style="fill:var(--muted)">own power, cooling,</text>
+            <text x="500" y="306" style="fill:var(--muted)">network</text>
+          </g>
+          <g stroke="var(--orange)" stroke-width="3" fill="none" marker-start="url(#arrowO)" marker-end="url(#arrowO)">
+            <line x1="207" y1="207" x2="253" y2="207"/>
+            <line x1="387" y1="207" x2="433" y2="207"/>
+            <path d="M140 356 Q320 392 500 356"/>
+          </g>
+          <text x="320" y="400" font-size="12.5" text-anchor="middle" style="fill:var(--orange)" font-weight="600">Low-latency private fiber between AZs</text>
+        </g>
+
+        <!-- Step 4: second Region + backbone -->
+        <g data-step="4">
+          <rect x="720" y="70" width="240" height="340" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="734" y="94" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-southeast-1</text>
+          <text x="734" y="112" font-size="13" style="fill:var(--region)">(Singapore)</text>
+          <g>
+            <rect x="740" y="126" width="200" height="76" rx="6" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+            <use href="#dc" x="754" y="140" width="38" height="47"/>
+            <text x="806" y="170" font-size="14" font-weight="700" style="fill:var(--az)">AZ 1a</text>
+            <rect x="740" y="222" width="200" height="76" rx="6" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+            <use href="#dc" x="754" y="236" width="38" height="47"/>
+            <text x="806" y="266" font-size="14" font-weight="700" style="fill:var(--az)">AZ 1b</text>
+            <rect x="740" y="318" width="200" height="76" rx="6" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+            <use href="#dc" x="754" y="332" width="38" height="47"/>
+            <text x="806" y="362" font-size="14" font-weight="700" style="fill:var(--az)">AZ 1c</text>
+            <g stroke="var(--orange)" stroke-width="3"><line x1="880" y1="202" x2="880" y2="222"/><line x1="880" y1="298" x2="880" y2="318"/></g>
+          </g>
+          <line x1="606" y1="240" x2="714" y2="240" stroke="var(--edge)" stroke-width="4" stroke-dasharray="2 0"/>
+          <circle cx="606" cy="240" r="5" fill="var(--edge)"/><circle cx="714" cy="240" r="5" fill="var(--edge)"/>
+          <text x="660" y="212" font-size="12.5" font-weight="600" text-anchor="middle" style="fill:var(--edge)">AWS global</text>
+          <text x="660" y="228" font-size="12.5" font-weight="600" text-anchor="middle" style="fill:var(--edge)">backbone</text>
+          <text x="660" y="262" font-size="11.5" text-anchor="middle" style="fill:var(--muted)">Regions are</text>
+          <text x="660" y="277" font-size="11.5" text-anchor="middle" style="fill:var(--muted)">isolated;</text>
+          <text x="660" y="292" font-size="11.5" text-anchor="middle" style="fill:var(--muted)">replication is</text>
+          <text x="660" y="307" font-size="11.5" text-anchor="middle" style="fill:var(--muted)">opt-in</text>
+        </g>
+
+        <!-- Step 5: edge locations + users -->
+        <g data-step="5">
+          <g stroke="var(--edge)" stroke-width="1.5" stroke-dasharray="4 4">
+            <line x1="140" y1="410" x2="140" y2="444"/><line x1="340" y1="410" x2="340" y2="444"/>
+            <line x1="540" y1="410" x2="540" y2="444"/><line x1="840" y1="410" x2="840" y2="444"/>
+          </g>
+          <g>
+            <rect x="65" y="444" width="150" height="58" rx="29" fill="var(--edge-fill)" stroke="var(--edge)" stroke-width="2"/>
+            <text x="140" y="468" font-size="12.5" text-anchor="middle" style="fill:var(--edge)">Edge location</text>
+            <text x="140" y="487" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:var(--edge)">Delhi</text>
+            <rect x="265" y="444" width="150" height="58" rx="29" fill="var(--edge-fill)" stroke="var(--edge)" stroke-width="2"/>
+            <text x="340" y="468" font-size="12.5" text-anchor="middle" style="fill:var(--edge)">Edge location</text>
+            <text x="340" y="487" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:var(--edge)">Bengaluru</text>
+            <rect x="465" y="444" width="150" height="58" rx="29" fill="var(--edge-fill)" stroke="var(--edge)" stroke-width="2"/>
+            <text x="540" y="468" font-size="12.5" text-anchor="middle" style="fill:var(--edge)">Edge location</text>
+            <text x="540" y="487" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:var(--edge)">Dubai</text>
+            <rect x="765" y="444" width="150" height="58" rx="29" fill="var(--edge-fill)" stroke="var(--edge)" stroke-width="2"/>
+            <text x="840" y="468" font-size="12.5" text-anchor="middle" style="fill:var(--edge)">Edge location</text>
+            <text x="840" y="487" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:var(--edge)">Jakarta</text>
+          </g>
+          <g stroke="var(--muted)" stroke-width="2" marker-end="url(#arrow)">
+            <line x1="140" y1="566" x2="140" y2="508"/><line x1="340" y1="566" x2="340" y2="508"/>
+            <line x1="540" y1="566" x2="540" y2="508"/><line x1="840" y1="566" x2="840" y2="508"/>
+          </g>
+          <use href="#user" x="125" y="572" width="30" height="30"/><use href="#user" x="325" y="572" width="30" height="30"/>
+          <use href="#user" x="525" y="572" width="30" height="30"/><use href="#user" x="825" y="572" width="30" height="30"/>
+          <g font-size="13" style="fill:var(--muted)">
+            <text x="164" y="594" style="fill:var(--muted)">Users</text><text x="364" y="594" style="fill:var(--muted)">Users</text>
+            <text x="564" y="594" style="fill:var(--muted)">Users</text><text x="864" y="594" style="fill:var(--muted)">Users</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: users reach the nearest <b>edge location</b>, which talks to a <b>Region</b> over the AWS backbone. Each Region holds three isolated <b>Availability Zones</b>, each made of one or more <b>data centers</b>. Press “Build step by step” to see the drawing order.</p>
+    <div class="legend">
+      <span style="--c:var(--region)">Region</span>
+      <span style="--c:var(--az)">Availability Zone</span>
+      <span style="--c:var(--dc)">Data center</span>
+      <span style="--c:var(--orange)">AZ-to-AZ fiber</span>
+      <span style="--c:var(--edge)">Edge location / backbone</span>
+    </div>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card region">
+      <h3>Region</h3>
+      <p>A separate geographic area where AWS runs a full set of services, such as <code>ap-south-1</code> (Mumbai) or <code>us-east-1</code> (N. Virginia). There are 30+ Regions worldwide.</p>
+      <ul>
+        <li>Regions are <b>isolated</b> from each other. Data never leaves a Region unless you copy it.</li>
+        <li>Most services are regional: you pick the Region first, then create resources.</li>
+        <li>Prices and available services differ per Region.</li>
+      </ul>
+    </div>
+    <div class="card az">
+      <h3>Availability Zone (AZ)</h3>
+      <p>An isolated location inside a Region, named with a letter suffix: <code>ap-south-1a</code>, <code>1b</code>, <code>1c</code>. Every Region has at least three.</p>
+      <ul>
+        <li>AZs are kilometres apart (within about 100 km), so a fire, flood or power cut hits only one.</li>
+        <li>They are linked by redundant private fiber with single-digit-millisecond latency.</li>
+        <li><b>High availability means spreading across at least two AZs.</b> This is the most repeated idea in AWS design.</li>
+      </ul>
+    </div>
+    <div class="card dc">
+      <h3>Data center</h3>
+      <p>The physical building with servers. One AZ is <b>one or more</b> data centers, each with independent power, cooling and networking.</p>
+      <ul>
+        <li>You never choose a data center; the AZ is the smallest unit you select.</li>
+        <li>In real diagrams you do not draw data centers. They are here today only so you know what an AZ is made of.</li>
+      </ul>
+    </div>
+    <div class="card edge">
+      <h3>Edge location</h3>
+      <p>A small site close to users, in far more cities than Regions (600+). It does not run your servers; it caches and routes.</p>
+      <ul>
+        <li><b>CloudFront</b> caches your content there, so a user in Delhi is served from Delhi.</li>
+        <li><b>Route 53</b> answers DNS queries from there.</li>
+        <li>Traffic then rides the private AWS backbone to the Region instead of the public internet.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Where does each service live?</h2>
+  <p class="lead">When you place an icon on a diagram, its scope tells you which box it goes inside.</p>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Scope</th><th>Draw it</th><th>Examples</th></tr>
+      <tr><td><b>Global</b></td><td>Outside every Region box</td><td>IAM, Route 53, CloudFront, WAF (for CloudFront)</td></tr>
+      <tr><td><b>Regional</b></td><td>Inside the Region, spanning all AZs</td><td>VPC, S3, DynamoDB, Lambda, load balancers, Auto Scaling groups</td></tr>
+      <tr><td><b>Zonal</b></td><td>Inside one AZ box</td><td>Subnet, EC2 instance, EBS volume, NAT Gateway, RDS instance</td></tr>
+    </table>
+  </div>
+
+  <h2>How to choose a Region</h2>
+  <div class="card">
+    <ol>
+      <li><b>Compliance</b> — if the law says data must stay in a country, that decides it.</li>
+      <li><b>Latency</b> — choose the Region closest to most of your users.</li>
+      <li><b>Service availability</b> — new services do not launch everywhere at once.</li>
+      <li><b>Cost</b> — the same instance costs different amounts in different Regions.</li>
+    </ol>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the outer <b>AWS Cloud</b> box.</li>
+      <li>Add a dashed <b>Region</b> box and label it with code and city.</li>
+      <li>Place three dashed <b>AZ</b> boxes side by side inside it, labelled a, b, c.</li>
+      <li>Put two data centers in each AZ and connect the AZs with links.</li>
+      <li>Add a second Region to the right and join the two with the backbone.</li>
+      <li>Add edge locations along the bottom, with users below them and arrows pointing up.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> above and redraw it from memory in draw.io or Excalidraw. Aim for under 5 minutes.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Why is an AZ not the same as a data center?</summary><p>An AZ is a logical group of one or more data centers. AWS can add buildings to an AZ without you noticing. The AZ, not the building, is the unit of isolation you design around.</p></details>
+  <details><summary>Your app runs on two EC2 instances in the same AZ. Is it highly available?</summary><p>No. It survives one instance failing, but not the AZ failing. Put the instances in two different AZs.</p></details>
+  <details><summary>If the Mumbai Region goes down, does your S3 data automatically appear in Singapore?</summary><p>No. Regions are isolated. You must turn on cross-Region replication yourself, and pay for it.</p></details>
+  <details><summary>A user in Delhi loads an image served through CloudFront. Where does it come from?</summary><p>From the nearest edge location if it is cached there. Only on a cache miss does the edge fetch it from the origin in the Region.</p></details>
+  <details><summary>Is <code>ap-south-1a</code> in your account the same physical AZ as in someone else's?</summary><p>Not necessarily. AWS maps the letters differently per account to spread load. The AZ ID (for example <code>aps1-az1</code>) is the same for everyone.</p></details>
+  <details><summary>Where would you draw IAM on this diagram?</summary><p>Outside the Region boxes. IAM is a global service; users and roles exist once for the whole account.</p></details>
+
+  <div class="next">
+    <b>Tomorrow — Day 2: Basic VPC.</b> You will draw your own private network inside one Region: a VPC with CIDR <code>10.0.0.0/16</code>, split into a public and a private subnet, each sitting inside one of the AZ boxes you learned today.
+  </div>
+</main>
+
+<script>
+  const captions = [
+    "",
+    "<b>Step 1 — Region.</b> Start with a dashed box for the Region and label it with its code and city. Everything you build lives in a Region you choose.",
+    "<b>Step 2 — Availability Zones.</b> Inside the Region, draw three AZ boxes. They are physically separate sites, so one failing does not take down the others.",
+    "<b>Step 3 — Data centers and links.</b> Each AZ is one or more data centers with their own power and cooling. The AZs are joined by fast private fiber, so you can replicate between them almost instantly.",
+    "<b>Step 4 — A second Region.</b> Regions are fully isolated from each other. They are connected by the AWS global backbone, but nothing is copied across unless you set it up.",
+    "<b>Step 5 — Edge locations and users.</b> Edge locations sit in many more cities than Regions. Users connect to the nearest one, which serves cached content or forwards the request to the Region."
+  ];
+  const fullCaption = document.getElementById("caption").innerHTML;
+  const groups = [...document.querySelectorAll("[data-step]")];
+  const max = 5;
+  let step = 0; // 0 = show all
+  const $ = id => document.getElementById(id);
+
+  function render() {
+    groups.forEach(g => g.classList.toggle("hidden-step", step !== 0 && +g.dataset.step > step));
+    $("caption").innerHTML = step === 0 ? fullCaption : captions[step];
+    $("btnPrev").disabled = step <= 1;
+    $("btnNext").disabled = step === 0 || step >= max;
+  }
+  $("btnBuild").onclick = () => { step = 1; render(); };
+  $("btnNext").onclick = () => { if (step < max) step++; render(); };
+  $("btnPrev").onclick = () => { if (step > 1) step--; render(); };
+  $("btnAll").onclick = () => { step = 0; render(); };
+  $("btnPractice").onclick = e => {
+    const on = $("diagramCard").classList.toggle("practice");
+    e.target.textContent = on ? "Reveal diagram" : "Hide diagram (draw from memory)";
+  };
+</script>
+</body>
+</html>

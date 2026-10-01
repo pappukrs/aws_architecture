@@ -24,7 +24,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 
 | Day | Architecture | Components to draw | Check yourself |
 |-----|--------------|--------------------|----------------|
-| 1 | **Global infrastructure** | Region, 3 Availability Zones, Edge locations | Why is an AZ not the same as a data center? |
+| 1 | **[Global infrastructure](day-01/index.html)** | Region, 3 Availability Zones, Edge locations | Why is an AZ not the same as a data center? |
 | 2 | **Basic VPC** | VPC `10.0.0.0/16`, 1 public subnet `10.0.1.0/24`, 1 private subnet `10.0.2.0/24` | How many usable IPs are in a /24 on AWS? (251) |
 | 3 | **Public subnet with internet access** | Internet Gateway, route table (`0.0.0.0/0 → IGW`), EC2 with public IP | What makes a subnet "public"? |
 | 4 | **Private subnet with outbound access** | NAT Gateway in public subnet, Elastic IP, private route table (`0.0.0.0/0 → NAT`) | Why does the NAT Gateway sit in the public subnet? |
