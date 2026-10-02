@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 7 — Week 1 Review</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .timer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 16px; }
+  .timer .clock { font-size: 44px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; min-width: 132px; }
+  .timer .clock.over { color: var(--bad); }
+  .timer .meta { color: var(--muted); font-size: 14px; }
+  .checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 20px; margin: 0; padding: 0; list-style: none; }
+  .checklist label, .mistakes label { display: flex; gap: 10px; align-items: flex-start; padding: 5px 0; cursor: pointer; }
+  input[type=checkbox] { width: 18px; height: 18px; margin-top: 4px; accent-color: var(--orange); flex: none; }
+  .fill { display: grid; grid-template-columns: 1fr auto; gap: 10px 16px; align-items: center; }
+  .fill select { font: inherit; font-size: 15px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); max-width: 100%; }
+  .fill select.ok { border-color: var(--pub); background: var(--pub-fill); }
+  .fill select.no { border-color: var(--bad); }
+  @media (max-width: 640px) { .fill { grid-template-columns: 1fr; } }
+  .mistakes { list-style: none; margin: 0; padding: 0; }
+  .mistakes li { border-bottom: 1px solid var(--border); padding: 4px 0; }
+  .mistakes .why { display: none; margin: 0 0 8px 28px; font-size: 14.5px; color: var(--muted); }
+  .mistakes.checked .why { display: block; }
+  .mistakes.checked li.right label { color: var(--pub); }
+  .mistakes.checked li.miss label { color: var(--bad); }
+  .row-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-06/index.html">← Day 6</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 7 of 30 · Week 1 — Networking Foundations</div>
+    <h1>Week 1 Review</h1>
+    <p class="lead">No new services today. You draw the whole of Week 1 from a blank page: a multi-AZ VPC with every CIDR and route table, plus the security layers. If you can do this in ten minutes, you have the base of every architecture that follows.</p>
+  </header>
+
+  <h2>1. Timed challenge</h2>
+  <div class="card">
+    <p>Open draw.io, Excalidraw or a sheet of paper. Press <b>Start</b>, draw the architecture described below without looking at anything, then press <b>Done</b>.</p>
+    <p style="color:var(--muted)"><b>The brief:</b> a VPC in Mumbai across two Availability Zones. Each zone has a public subnet with a web server and a private subnet with an app server. Private servers can download updates but cannot be reached from the internet. Administrators get in through a bastion host. Show addresses, routing and firewalls.</p>
+    <div class="timer">
+      <div class="clock" id="clock">00:00</div>
+      <button class="primary" id="tStart">Start</button>
+      <button id="tDone" disabled>Done</button>
+      <button id="tReset">Reset</button>
+      <span class="meta" id="tMeta">Target: under 10:00</span>
+    </div>
+    <p style="margin-bottom:6px"><b>Mark what your drawing contains.</b> Be strict; a box without its label does not count.</p>
+    <ul class="checklist" id="checklist"></ul>
+    <p class="result" id="score"></p>
+  </div>
+
+  <h2>2. Reference diagram</h2>
+  <div class="card practice" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Reveal diagram</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 760" role="img" aria-label="Reference: a VPC across two Availability Zones with public and private subnets, an Internet Gateway, a NAT Gateway per zone, three route tables, security groups around instances, network ACLs around subnets, and a bastion host.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <marker id="arrowP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--vpc)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: Region, VPC, IGW -->
+        <g data-step="1">
+          <rect x="430" y="14" width="140" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="45" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="20" y="90" width="960" height="655" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+          <rect x="40" y="128" width="920" height="605" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="190" width="880" height="530" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="500" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <text x="536" y="178" font-size="13.5" font-weight="700" style="fill:var(--vpc)">Internet Gateway</text>
+        </g>
+
+        <!-- Step 2: two AZs -->
+        <g data-step="2">
+          <rect x="80" y="232" width="410" height="385" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+          <rect x="510" y="232" width="410" height="385" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="906" y="254" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+        </g>
+
+        <!-- Step 3: four subnets -->
+        <g data-step="3">
+          <rect x="100" y="272" width="370" height="150" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="410" font-size="13" font-weight="700" style="fill:var(--pub)">Public A — 10.0.1.0/24</text>
+          <rect x="530" y="272" width="370" height="150" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="886" y="410" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--pub)">Public B — 10.0.3.0/24</text>
+          <rect x="100" y="450" width="370" height="150" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="588" font-size="13" font-weight="700" style="fill:var(--priv)">Private A — 10.0.2.0/24</text>
+          <rect x="530" y="450" width="370" height="150" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="886" y="588" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--priv)">Private B — 10.0.4.0/24</text>
+        </g>
+
+        <!-- Step 4: NAT Gateways -->
+        <g data-step="4">
+          <use href="#nat" x="376" y="300" width="48" height="48"/>
+          <text x="400" y="366" font-size="12.5" font-weight="600" text-anchor="middle">nat-a</text>
+          <use href="#nat" x="576" y="300" width="48" height="48"/>
+          <text x="600" y="366" font-size="12.5" font-weight="600" text-anchor="middle">nat-b</text>
+        </g>
+
+        <!-- Step 5: route tables -->
+        <g data-step="5">
+          <rect x="80" y="632" width="268" height="72" rx="6" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="92" y="652" font-size="13" font-weight="700" style="fill:var(--priv)">Private route table A</text>
+          <text x="92" y="672" font-size="12" class="mono">10.0.0.0/16   local</text>
+          <text x="92" y="690" font-size="12" font-weight="700" class="mono">0.0.0.0/0     nat-a</text>
+          <rect x="366" y="632" width="268" height="72" rx="6" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="378" y="652" font-size="13" font-weight="700" style="fill:var(--pub)">Public route table (both public subnets)</text>
+          <text x="378" y="672" font-size="12" class="mono">10.0.0.0/16   local</text>
+          <text x="378" y="690" font-size="12" font-weight="700" class="mono">0.0.0.0/0     igw</text>
+          <rect x="652" y="632" width="268" height="72" rx="6" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="664" y="652" font-size="13" font-weight="700" style="fill:var(--priv)">Private route table B</text>
+          <text x="664" y="672" font-size="12" class="mono">10.0.0.0/16   local</text>
+          <text x="664" y="690" font-size="12" font-weight="700" class="mono">0.0.0.0/0     nat-b</text>
+        </g>
+
+        <!-- Step 6: instances and security groups -->
+        <g data-step="6">
+          <g font-size="12.5" font-weight="600" text-anchor="middle">
+            <use href="#ec2" x="148" y="304" width="40" height="40"/><text x="168" y="364">Bastion</text>
+            <use href="#ec2" x="270" y="304" width="40" height="40"/><text x="290" y="364">Web server</text>
+            <use href="#ec2" x="690" y="304" width="40" height="40"/><text x="710" y="364">Web server</text>
+            <use href="#ec2" x="380" y="486" width="40" height="40"/><text x="400" y="546">App server</text>
+            <use href="#ec2" x="580" y="486" width="40" height="40"/><text x="600" y="546">App server</text>
+          </g>
+          <g fill="none" stroke="var(--bad)" stroke-width="2" stroke-dasharray="6 4">
+            <rect x="112" y="284" width="112" height="92" rx="8"/>
+            <rect x="234" y="284" width="112" height="92" rx="8"/>
+            <rect x="654" y="284" width="112" height="92" rx="8"/>
+            <rect x="344" y="466" width="112" height="92" rx="8"/>
+            <rect x="544" y="466" width="112" height="92" rx="8"/>
+          </g>
+          <g font-size="10.5" font-weight="700">
+            <text x="120" y="298" style="fill:var(--bad)">bastion-sg</text>
+            <text x="242" y="298" style="fill:var(--bad)">web-sg</text>
+            <text x="662" y="298" style="fill:var(--bad)">web-sg</text>
+            <text x="352" y="480" style="fill:var(--bad)">app-sg</text>
+            <text x="552" y="480" style="fill:var(--bad)">app-sg</text>
+          </g>
+        </g>
+
+        <!-- Step 7: network ACLs -->
+        <g data-step="7">
+          <g fill="none" stroke="var(--dc)" stroke-width="2" stroke-dasharray="10 5">
+            <rect x="94" y="266" width="382" height="162" rx="9"/><rect x="524" y="266" width="382" height="162" rx="9"/>
+            <rect x="94" y="444" width="382" height="162" rx="9"/><rect x="524" y="444" width="382" height="162" rx="9"/>
+          </g>
+          <g fill="var(--dc)">
+            <rect x="418" y="420" width="46" height="16" rx="4"/><rect x="536" y="420" width="46" height="16" rx="4"/>
+            <rect x="418" y="598" width="46" height="16" rx="4"/><rect x="536" y="598" width="46" height="16" rx="4"/>
+          </g>
+          <g font-size="10.5" font-weight="700" text-anchor="middle">
+            <text x="441" y="432" style="fill:var(--card)">NACL</text><text x="559" y="432" style="fill:var(--card)">NACL</text>
+            <text x="441" y="610" style="fill:var(--card)">NACL</text><text x="559" y="610" style="fill:var(--card)">NACL</text>
+          </g>
+        </g>
+
+        <!-- Step 8: traffic flows -->
+        <g data-step="8">
+          <g stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)">
+            <line x1="492" y1="66" x2="492" y2="161"/>
+            <line x1="476" y1="200" x2="298" y2="280"/>
+            <line x1="524" y1="200" x2="702" y2="280"/>
+          </g>
+          <g stroke="var(--vpc)" stroke-width="3" marker-end="url(#arrowP)">
+            <line x1="400" y1="464" x2="400" y2="374"/>
+            <line x1="404" y1="296" x2="486" y2="218"/>
+            <line x1="600" y1="464" x2="600" y2="374"/>
+            <line x1="596" y1="296" x2="514" y2="218"/>
+            <line x1="508" y1="162" x2="508" y2="70"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Compare your drawing with this one. Orange arrows are user requests coming in to the web servers. Purple arrows are the app servers going out through the NAT Gateway of their own zone. Press “Build step by step” to see the order to draw it in.</p>
+    <div class="legend">
+      <span style="--c:var(--pub)">Public subnet</span>
+      <span style="--c:var(--priv)">Private subnet</span>
+      <span style="--c:var(--bad)">Security group</span>
+      <span style="--c:var(--dc)">Network ACL</span>
+      <span style="--c:var(--orange)">Inbound user traffic (HTTPS 443)</span>
+      <span style="--c:var(--vpc)">Outbound through NAT Gateway</span>
+    </div>
+  </div>
+
+  <h2>Security group rules for the reference</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Security group</th><th>Inbound rule</th><th>Source</th></tr>
+      <tr><td><code>web-sg</code></td><td>HTTPS 443</td><td><code>0.0.0.0/0</code></td></tr>
+      <tr><td><code>web-sg</code></td><td>SSH 22</td><td><code>bastion-sg</code></td></tr>
+      <tr><td><code>app-sg</code></td><td>App port 8080</td><td><code>web-sg</code></td></tr>
+      <tr><td><code>app-sg</code></td><td>SSH 22</td><td><code>bastion-sg</code></td></tr>
+      <tr><td><code>bastion-sg</code></td><td>SSH 22</td><td>Admin IP, <code>203.0.113.5/32</code></td></tr>
+    </table>
+  </div>
+
+  <h2>3. Complete the design</h2>
+  <div class="card">
+    <p>Choose the right value for each blank, then check.</p>
+    <div class="fill" id="fill"></div>
+    <div class="row-actions"><button class="primary" id="fillCheck">Check answers</button><span id="fillScore"></span></div>
+  </div>
+
+  <h2>4. Spot the mistakes</h2>
+  <div class="card">
+    <p>A colleague sends you this design for review. Tick every line that is <b>wrong</b>, then check.</p>
+    <ul class="mistakes" id="mistakes"></ul>
+    <div class="row-actions"><button class="primary" id="mistCheck">Check</button><span id="mistScore"></span></div>
+  </div>
+
+  <h2>Week 1 in one table</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Day</th><th>You added</th><th>The one idea to keep</th></tr>
+      <tr><td><a href="../day-01/index.html">1</a></td><td>Region, AZs, edge locations</td><td>High availability means at least two AZs.</td></tr>
+      <tr><td><a href="../day-02/index.html">2</a></td><td>VPC and subnets</td><td>A VPC spans the Region; a subnet lives in one AZ. A <code>/24</code> has 251 usable addresses.</td></tr>
+      <tr><td><a href="../day-03/index.html">3</a></td><td>Internet Gateway, route table</td><td>A subnet is public because its route table points to an Internet Gateway.</td></tr>
+      <tr><td><a href="../day-04/index.html">4</a></td><td>NAT Gateway</td><td>It lives in the public subnet and allows outbound connections only.</td></tr>
+      <tr><td><a href="../day-05/index.html">5</a></td><td>Security groups, NACLs, bastion</td><td>Security groups are stateful and allow-only; NACLs are stateless and ordered.</td></tr>
+      <tr><td><a href="../day-06/index.html">6</a></td><td>Second AZ</td><td>Duplicate what is tied to an AZ; share what is regional.</td></tr>
+    </table>
+  </div>
+
+  <h2>5. Explain it out loud</h2>
+  <p class="lead">Answer each one aloud in two or three sentences before opening it. Being able to say it is the real test.</p>
+  <details><summary>Trace a user's HTTPS request to the web server in AZ a, naming every component it passes.</summary><p>Internet → Internet Gateway (maps the public IP to the private IP) → public NACL (allows it) → <code>web-sg</code> (allows 443 from anywhere) → web server. The reply returns the same way; the security group lets it out automatically.</p></details>
+  <details><summary>Trace the app server in AZ b downloading a package from the internet.</summary><p>App server → private route table B matches <code>0.0.0.0/0 → nat-b</code> → NAT Gateway B in public subnet B (source becomes its own IP) → public route table matches <code>0.0.0.0/0 → igw</code> → Internet Gateway (source becomes the Elastic IP) → internet.</p></details>
+  <details><summary>Why are there three route tables and not two or four?</summary><p>Both public subnets have the same default route, so they share one. Each private subnet needs a different NAT Gateway as its target, so each needs its own. One plus two is three.</p></details>
+  <details><summary>Which components in the drawing would you still have with only one of each, and why is that safe?</summary><p>The VPC and the Internet Gateway. Both are regional services that AWS already runs across AZs, so they are not a single point of failure.</p></details>
+  <details><summary>An admin wants to SSH into the app server in AZ b. What path, and which rules allow it?</summary><p>Laptop → Internet Gateway → bastion in public subnet A (<code>bastion-sg</code> allows 22 from the admin's IP) → app server in private subnet B over the local route (<code>app-sg</code> allows 22 from <code>bastion-sg</code>). One bastion reaches both AZs because the VPC's local route covers every subnet.</p></details>
+  <details><summary>The bastion is only in AZ a. Is that a problem?</summary><p>For users, no: the application does not depend on it. For administrators, yes: if AZ a fails they lose their way in. Either keep a second bastion in AZ b, or use Session Manager, which needs no bastion at all.</p></details>
+  <details><summary>What is still missing before this could serve real users reliably?</summary><p>Nothing spreads users across the two web servers or moves them when one fails, and the number of servers is fixed. A load balancer (Day 8) and Auto Scaling (Day 9) solve those.</p></details>
+
+  <div class="next">
+    <b>Next — Day 8: Load-balanced web tier.</b> Week 2 starts. You put an Application Load Balancer across the two public subnets and move the web servers into the private subnets, so users reach a single address and traffic is spread over both zones.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Outside in.</b> AWS Cloud, Region, then the VPC with its CIDR. Put the Internet Gateway on the VPC's top border.",
+    "<b>Step 2 — Availability Zones.</b> Two dashed boxes side by side inside the VPC. Everything tied to a zone goes inside one of them.",
+    "<b>Step 3 — Subnets.</b> Public on top, private below, in each zone. Write four different CIDRs.",
+    "<b>Step 4 — NAT Gateways.</b> One in each <b>public</b> subnet.",
+    "<b>Step 5 — Route tables.</b> One shared public table pointing to the Internet Gateway, and one private table per zone pointing to that zone's NAT Gateway.",
+    "<b>Step 6 — Instances and security groups.</b> Web servers and the bastion in public subnets, app servers in private subnets, each wrapped in a named security group.",
+    "<b>Step 7 — Network ACLs.</b> A second boundary around every subnet.",
+    "<b>Step 8 — Traffic flows.</b> Orange: users come in through the Internet Gateway to the web servers. Purple: app servers go out through the NAT Gateway of their own zone."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+
+  // ---- Timer ----
+  let secs = 0, tick = null;
+  const fmt = s => String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  function paint() {
+    $("clock").textContent = fmt(secs);
+    $("clock").classList.toggle("over", secs > 600);
+  }
+  $("tStart").onclick = () => {
+    if (tick) return;
+    tick = setInterval(() => { secs++; paint(); }, 1000);
+    $("tStart").disabled = true; $("tDone").disabled = false;
+    $("tMeta").textContent = "Drawing… target: under 10:00";
+  };
+  $("tDone").onclick = () => {
+    clearInterval(tick); tick = null;
+    $("tStart").disabled = false; $("tDone").disabled = true;
+    $("tStart").textContent = "Resume";
+    $("tMeta").textContent = secs <= 600
+      ? `Finished in ${fmt(secs)}. Under the target. Now mark the checklist.`
+      : `Finished in ${fmt(secs)}. Over the 10:00 target; mark the checklist, then try again tomorrow.`;
+  };
+  $("tReset").onclick = () => {
+    clearInterval(tick); tick = null; secs = 0; paint();
+    $("tStart").disabled = false; $("tDone").disabled = true;
+    $("tStart").textContent = "Start";
+    $("tMeta").textContent = "Target: under 10:00";
+  };
+
+  // ---- Checklist ----
+  const items = [
+    "Region box, labelled with its code",
+    "VPC box with CIDR <code>10.0.0.0/16</code>",
+    "Two Availability Zone boxes",
+    "A public subnet in each AZ",
+    "A private subnet in each AZ",
+    "Four different CIDRs written on the subnets",
+    "Internet Gateway on the VPC border",
+    "A NAT Gateway in each <b>public</b> subnet",
+    "Public route table with <code>0.0.0.0/0 → igw</code>",
+    "A private route table per AZ, pointing to that AZ's NAT Gateway",
+    "The <code>local</code> route written in the tables",
+    "A security group around every instance",
+    "A security group rule whose source is another security group",
+    "Bastion host with SSH from one IP only",
+    "Network ACL shown at the subnet border",
+    "Arrows with a direction and a port"
+  ];
+  $("checklist").innerHTML = items.map(t => `<li><label><input type="checkbox"><span>${t}</span></label></li>`).join("");
+  function score() {
+    const n = $("checklist").querySelectorAll("input:checked").length;
+    const msg = n === items.length ? "Complete. This is the drawing an interviewer hopes to see."
+      : n >= 13 ? "Strong. Fix the gaps and you are ready for Week 2."
+      : n >= 9 ? "The structure is there. Reveal the reference below, note what you missed, and redraw once more."
+      : n > 0 ? "Go back to the day pages for the parts you missed, then try again."
+      : "Tick each item your drawing contains.";
+    $("score").innerHTML = `<b>${n} / ${items.length}</b> — ${msg}`;
+  }
+  $("checklist").onchange = score;
+  score();
+
+  // ---- Complete the design ----
+  const blanks = [
+    ["Default route target in the public route table", ["nat-a", "igw", "local"], 1],
+    ["Default route target in private route table B", ["igw", "nat-a", "nat-b"], 2],
+    ["Subnet that NAT Gateway A is placed in", ["Private subnet A", "Public subnet A", "Any subnet in AZ a"], 1],
+    ["What the Internet Gateway is attached to", ["A public subnet", "An Availability Zone", "The VPC"], 2],
+    ["Source for the app port rule in <code>app-sg</code>", ["0.0.0.0/0", "web-sg", "10.0.0.0/16"], 1],
+    ["Source for SSH in <code>bastion-sg</code>", ["203.0.113.5/32", "0.0.0.0/0", "web-sg"], 0],
+    ["Usable addresses in <code>10.0.1.0/24</code>", ["256", "254", "251"], 2],
+    ["Firewall that needs an explicit rule for reply traffic", ["Security group", "Network ACL", "Both"], 1],
+    ["How many AZs one subnet can span", ["One", "Two", "All in the Region"], 0],
+    ["Number of Internet Gateways in the reference design", ["One per AZ", "One per public subnet", "One"], 2]
+  ];
+  $("fill").innerHTML = blanks.map((b, i) =>
+    `<label for="f${i}">${i + 1}. ${b[0]}</label><select id="f${i}"><option value="">Choose…</option>` +
+    b[1].map((o, j) => `<option value="${j}">${o}</option>`).join("") + `</select>`).join("");
+  $("fillCheck").onclick = () => {
+    let right = 0;
+    blanks.forEach((b, i) => {
+      const s = $("f" + i), ok = s.value !== "" && +s.value === b[2];
+      s.classList.toggle("ok", ok); s.classList.toggle("no", !ok);
+      if (ok) right++;
+    });
+    $("fillScore").innerHTML = `<b>${right} / ${blanks.length}</b>` + (right === blanks.length ? " — all correct." : " — red boxes are wrong or empty; change them and check again.");
+  };
+
+  // ---- Spot the mistakes ----
+  const lines = [
+    ["VPC <code>10.0.0.0/16</code> in ap-south-1, across AZ a and AZ b.", false, "Correct. A VPC spans every AZ of its Region."],
+    ["Public subnet A is <code>10.0.1.0/24</code> and public subnet B is <code>10.0.1.0/24</code>.", true, "Wrong. Subnets in one VPC must not overlap, even in different AZs."],
+    ["One Internet Gateway, attached to the VPC.", false, "Correct. One per VPC, and it is already redundant."],
+    ["The NAT Gateway is placed in private subnet A, next to the servers that use it.", true, "Wrong. It must sit in a public subnet, because it needs a route to the Internet Gateway."],
+    ["The private route tables have <code>0.0.0.0/0 → igw</code>.", true, "Wrong. That makes the subnets public by definition. It should point to a NAT Gateway."],
+    ["Both private subnets route through the single NAT Gateway, and the design is described as highly available.", true, "Wrong. If that NAT Gateway's AZ fails, the other AZ loses outbound access. High availability needs one per AZ."],
+    ["The bastion's security group allows SSH from the admin's IP only.", false, "Correct. Never open port 22 to <code>0.0.0.0/0</code>."],
+    ["The database security group allows 3306 from <code>0.0.0.0/0</code> “because it is in a private subnet anyway”.", true, "Wrong. Layers must each be tight on their own. The source should be the application's security group."],
+    ["A security group contains the rule “DENY 22 from <code>198.51.100.9</code>”.", true, "Wrong. Security groups have allow rules only. Blocking an address is done with a NACL deny rule."],
+    ["The custom NACL on the private subnet has an outbound rule for ports <code>1024–65535</code>.", false, "Correct. NACLs are stateless, so replies on ephemeral ports need their own rule."]
+  ];
+  $("mistakes").innerHTML = lines.map(l => `<li><label><input type="checkbox"><span>${l[0]}</span></label><p class="why">${l[2]}</p></li>`).join("");
+  $("mistCheck").onclick = () => {
+    let right = 0;
+    [...$("mistakes").children].forEach((li, i) => {
+      const ok = li.querySelector("input").checked === lines[i][1];
+      li.className = ok ? "right" : "miss";
+      if (ok) right++;
+    });
+    $("mistakes").classList.add("checked");
+    const wrong = lines.filter(l => l[1]).length;
+    $("mistScore").innerHTML = `<b>${right} / ${lines.length}</b> lines judged correctly. The design had ${wrong} mistakes.`;
+  };
+</script>
+</body>
+</html>

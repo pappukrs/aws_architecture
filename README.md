@@ -30,7 +30,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | 4 | **[Private subnet with outbound access](day-04/index.html)** | NAT Gateway in public subnet, Elastic IP, private route table (`0.0.0.0/0 → NAT`) | Why does the NAT Gateway sit in the public subnet? |
 | 5 | **[Security layers](day-05/index.html)** | Security Group (stateful) on EC2, NACL (stateless) on subnet, bastion host | SG vs NACL — which one needs explicit return rules? |
 | 6 | **[Multi-AZ VPC](day-06/index.html)** | 2 AZs, public + private subnet in each, IGW, one NAT Gateway per AZ | What breaks if you use only one NAT Gateway? |
-| 7 | **Review** | Redraw Day 6 from memory with CIDRs and route tables | Can you draw it in under 10 minutes? |
+| 7 | **[Review](day-07/index.html)** | Redraw Day 6 from memory with CIDRs and route tables | Can you draw it in under 10 minutes? |
 
 ## Week 2 — Compute, Load Balancing, High Availability
 
