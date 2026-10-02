@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 25 — Security Architecture</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .ly { transition: opacity .25s; }
+  #diagram.lit .ly { opacity: .14; }
+  #diagram.lit .ly.on { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-24/index.html">← Day 24</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 25 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Security Architecture</h1>
+    <p class="lead">Security is not one product. It is several independent layers, so that whatever gets past one is stopped by the next. Today you take the web application from Week 2 and add six layers to the same drawing: protection at the edge, the network you already built, identity, encryption, secrets, and detection.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 690" role="img" aria-label="A web application with six numbered security layers: Shield and WAF on CloudFront, private subnets and security groups, an IAM role on the app servers, KMS encryption at rest with TLS in transit, Secrets Manager for the database password, and GuardDuty for detection.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/><line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/><line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="rds" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--priv)"/><g fill="none" stroke="#fff" stroke-width="2.5"><ellipse cx="28" cy="17" rx="14" ry="6"/><path d="M14 17 V39 A14 6 0 0 0 42 39 V17"/><path d="M14 28 A14 6 0 0 0 42 28"/></g></symbol>
+          <symbol id="s3" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g></symbol>
+          <symbol id="key" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--priv)"/><g fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"><circle cx="20" cy="28" r="7"/><path d="M27 28 H44 M38 28 V35 M44 28 V33"/></g></symbol>
+          <symbol id="secret" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--bad)"/><text x="28" y="40" font-size="26" font-weight="700" text-anchor="middle" style="fill:#fff">***</text></symbol>
+          <symbol id="guard" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--dc)"/><path d="M28 11 L42 16 V28 C42 37 36 43 28 46 C20 43 14 37 14 28 V16 Z" fill="none" stroke="var(--card)" stroke-width="2.5" stroke-linejoin="round"/></symbol>
+          <symbol id="lockT" viewBox="0 0 22 22"><circle cx="11" cy="11" r="11" fill="var(--pub)"/><rect x="6.5" y="10" width="9" height="7" rx="1.5" fill="#fff"/><path d="M8.3 10 V8 a2.7 2.7 0 0 1 5.4 0 V10" fill="none" stroke="#fff" stroke-width="1.8"/></symbol>
+          <symbol id="lockR" viewBox="0 0 22 22"><circle cx="11" cy="11" r="11" fill="var(--priv)"/><rect x="6.5" y="10" width="9" height="7" rx="1.5" fill="#fff"/><path d="M8.3 10 V8 a2.7 2.7 0 0 1 5.4 0 V10" fill="none" stroke="#fff" stroke-width="1.8"/></symbol>
+        </defs>
+
+        <rect x="20" y="70" width="960" height="605" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="966" y="93" font-size="15" font-weight="700" text-anchor="end">AWS Cloud</text>
+
+        <!-- Step 1: the application before any security layer is drawn -->
+        <g data-step="1">
+          <rect x="260" y="10" width="140" height="44" rx="22" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="330" y="38" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="180" y="86" width="300" height="58" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="194" y="111" font-size="13.5" font-weight="700" style="fill:var(--vpc)">CloudFront</text>
+          <text x="194" y="130" font-size="11" style="fill:var(--muted)">TLS certificate from ACM</text>
+
+          <rect x="35" y="160" width="930" height="500" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="951" y="182" font-size="13.5" font-weight="700" text-anchor="end" style="fill:var(--region)">Region — ap-south-1</text>
+          <rect x="50" y="196" width="560" height="450" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="80" y="219" font-size="13.5" font-weight="700" style="fill:var(--vpc)">VPC — one AZ shown</text>
+          <circle cx="330" cy="196" r="18" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="330" y="200" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+
+          <rect x="70" y="232" width="520" height="84" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="84" y="306" font-size="12" font-weight="700" style="fill:var(--pub)">Public subnet</text>
+          <rect x="200" y="246" width="260" height="44" rx="10" fill="var(--vpc)"/>
+          <text x="330" y="273" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+
+          <rect x="70" y="338" width="520" height="110" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="84" y="438" font-size="12" font-weight="700" style="fill:var(--priv)">Private subnet · app</text>
+          <use href="#ec2" x="308" y="356" width="44" height="44"/>
+          <text x="364" y="372" font-size="12.5" font-weight="700">App servers</text>
+          <text x="364" y="389" font-size="11" style="fill:var(--muted)">Auto Scaling group</text>
+
+          <rect x="70" y="470" width="520" height="150" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="84" y="610" font-size="12" font-weight="700" style="fill:var(--priv)">Private subnet · data</text>
+          <use href="#rds" x="308" y="494" width="44" height="44"/>
+          <text x="364" y="510" font-size="12.5" font-weight="700">RDS database</text>
+          <text x="364" y="527" font-size="11" style="fill:var(--muted)">customer records</text>
+
+          <rect x="650" y="364" width="300" height="70" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+          <use href="#s3" x="662" y="381" width="36" height="36"/>
+          <text x="708" y="395" font-size="12.5" font-weight="700">S3 bucket</text>
+          <text x="708" y="412" font-size="11" style="fill:var(--muted)">uploaded documents</text>
+
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="330" y1="56" x2="330" y2="81"/><line x1="330" y1="146" x2="330" y2="173"/><line x1="330" y1="216" x2="330" y2="241"/>
+            <line x1="330" y1="292" x2="330" y2="351"/><line x1="330" y1="402" x2="330" y2="489"/>
+            <line x1="540" y1="386" x2="645" y2="398"/>
+          </g>
+        </g>
+
+        <!-- Step 2: layer 1, the edge -->
+        <g data-step="2" class="ly" id="L1">
+          <rect x="352" y="94" width="56" height="22" rx="11" fill="var(--bad)"/>
+          <text x="380" y="109" font-size="11" font-weight="700" text-anchor="middle" style="fill:#fff">Shield</text>
+          <rect x="414" y="94" width="50" height="22" rx="11" fill="var(--bad)"/>
+          <text x="439" y="109" font-size="11" font-weight="700" text-anchor="middle" style="fill:#fff">WAF</text>
+          <circle cx="180" cy="86" r="11" fill="var(--orange)"/><text x="180" y="90.5" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">1</text>
+        </g>
+
+        <!-- Step 3: layer 2, the network -->
+        <g data-step="3" class="ly" id="L2">
+          <g font-size="11" font-weight="700">
+            <text x="576" y="306" text-anchor="end" style="fill:var(--bad)">alb-sg: 443 from CloudFront</text>
+            <text x="576" y="438" text-anchor="end" style="fill:var(--bad)">app-sg: from alb-sg only</text>
+            <text x="576" y="610" text-anchor="end" style="fill:var(--bad)">db-sg: from app-sg only</text>
+          </g>
+          <circle cx="62" cy="212" r="11" fill="var(--orange)"/><text x="62" y="216.5" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">2</text>
+        </g>
+
+        <!-- Step 4: layer 3, identity -->
+        <g data-step="4" class="ly" id="L3">
+          <rect x="364" y="400" width="150" height="22" rx="11" fill="var(--bad)"/>
+          <text x="439" y="415" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">IAM role: app-role</text>
+          <rect x="650" y="542" width="300" height="104" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2.5"/>
+          <text x="672" y="563" font-size="12.5" font-weight="700" style="fill:var(--bad)">What app-role may do</text>
+          <g font-size="10.5">
+            <text x="662" y="583" class="mono">read 1 secret in Secrets Manager</text>
+            <text x="662" y="599" class="mono">get / put objects in 1 bucket</text>
+            <text x="662" y="615" class="mono">decrypt with 1 KMS key</text>
+            <text x="662" y="634" style="fill:var(--muted)">Everything else is denied. No access keys.</text>
+          </g>
+          <circle cx="650" cy="542" r="11" fill="var(--orange)"/><text x="650" y="546.5" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">3</text>
+        </g>
+
+        <!-- Step 5: layer 4, encryption in transit and at rest -->
+        <g data-step="5">
+          <g class="ly" id="LT">
+            <use href="#lockT" x="319" y="57" width="22" height="22"/>
+            <use href="#lockT" x="319" y="148" width="22" height="22"/>
+            <use href="#lockT" x="319" y="316" width="22" height="22"/>
+            <use href="#lockT" x="319" y="448" width="22" height="22"/>
+            <use href="#lockT" x="581" y="380" width="22" height="22"/>
+          </g>
+          <g class="ly" id="L4">
+            <rect x="650" y="200" width="300" height="70" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2.5"/>
+            <use href="#key" x="672" y="217" width="36" height="36"/>
+            <text x="718" y="231" font-size="12.5" font-weight="700">KMS key</text>
+            <text x="718" y="248" font-size="11" style="fill:var(--muted)">encrypts everything stored</text>
+            <use href="#lockR" x="341" y="527" width="24" height="24"/>
+            <text x="372" y="544" font-size="11" font-weight="700" style="fill:var(--priv)">encrypted at rest</text>
+            <use href="#lockR" x="914" y="372" width="24" height="24"/>
+            <circle cx="650" cy="200" r="11" fill="var(--orange)"/><text x="650" y="204.5" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">4</text>
+          </g>
+        </g>
+
+        <!-- Step 6: layer 5, secrets -->
+        <g data-step="6" class="ly" id="L5">
+          <rect x="650" y="282" width="300" height="70" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2.5"/>
+          <use href="#secret" x="672" y="299" width="36" height="36"/>
+          <text x="718" y="313" font-size="12.5" font-weight="700">Secrets Manager</text>
+          <text x="718" y="330" font-size="11" style="fill:var(--muted)">database password, auto-rotated</text>
+          <use href="#lockR" x="914" y="290" width="24" height="24"/>
+          <line x1="540" y1="372" x2="645" y2="322" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <use href="#lockT" x="581" y="336" width="22" height="22"/>
+          <circle cx="650" cy="282" r="11" fill="var(--orange)"/><text x="650" y="286.5" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">5</text>
+        </g>
+
+        <!-- Step 7: layer 6, detection -->
+        <g data-step="7" class="ly" id="L6">
+          <line x1="612" y1="490" x2="645" y2="490" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="5 3" marker-end="url(#arrowD)"/>
+          <rect x="650" y="446" width="300" height="84" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2.5"/>
+          <use href="#guard" x="672" y="463" width="36" height="36"/>
+          <text x="718" y="477" font-size="12.5" font-weight="700">GuardDuty</text>
+          <text x="718" y="494" font-size="11" style="fill:var(--muted)">reads flow logs, DNS, CloudTrail</text>
+          <text x="718" y="511" font-size="11" style="fill:var(--muted)">finding → EventBridge → alert</text>
+          <circle cx="650" cy="446" r="11" fill="var(--orange)"/><text x="650" y="450.5" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">6</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: six layers on one application. <b>1</b> Shield and WAF filter traffic at the edge. <b>2</b> Private subnets and chained security groups limit who can reach what. <b>3</b> An IAM role gives the servers only the permissions they need. <b>4</b> Everything stored is encrypted with a KMS key, and every hop uses TLS. <b>5</b> The database password lives in Secrets Manager, not in the code. <b>6</b> GuardDuty watches the logs for anything that got through.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Request path, layer numbers</span>
+      <span style="--c:var(--pub)">Lock: encrypted in transit (TLS)</span>
+      <span style="--c:var(--priv)">Lock: encrypted at rest (KMS)</span>
+      <span style="--c:var(--bad)">Shield, WAF, security groups, IAM, secrets</span>
+      <span style="--c:var(--dc)">Detection</span>
+    </div>
+  </div>
+
+  <h2>Which layer stops it?</h2>
+  <div class="card">
+    <p>Each button is an attack or an accident. Name the layer that deals with it before you click. The diagram above lights that layer.</p>
+    <div class="seg" id="simBtns"></div>
+    <p class="result" id="simMsg">Pick a threat.</p>
+  </div>
+
+  <h2>Where is data encrypted?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>In transit</th><th>Protected by</th></tr>
+      <tr><td>User → CloudFront</td><td>HTTPS, with an ACM certificate (requested in us-east-1)</td></tr>
+      <tr><td>CloudFront → load balancer</td><td>HTTPS, with an ACM certificate on the load balancer</td></tr>
+      <tr><td>Load balancer → app servers</td><td>HTTPS if you configure it; otherwise plain HTTP inside the VPC</td></tr>
+      <tr><td>App servers → RDS</td><td>TLS, which you can make the database require</td></tr>
+      <tr><td>App servers → S3, Secrets Manager, KMS</td><td>HTTPS always; AWS APIs accept nothing else</td></tr>
+      <tr><th>At rest</th><th>Protected by</th></tr>
+      <tr><td>RDS storage, its snapshots and replicas</td><td>KMS key, chosen when the database is created</td></tr>
+      <tr><td>S3 objects</td><td>Encrypted by default; use a KMS key for control and an audit trail</td></tr>
+      <tr><td>EBS volumes of the servers</td><td>KMS key</td></tr>
+      <tr><td>The secret in Secrets Manager</td><td>KMS key</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">On a diagram, a lock on an arrow means in transit and a lock on a data store means at rest. A reviewer looks for both on every path that carries customer data.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Shield and WAF</h3>
+      <ul>
+        <li><b>Shield</b> protects against DDoS, floods of traffic meant to overwhelm you. Shield Standard is automatic and free; Shield Advanced adds more protection and a response team.</li>
+        <li><b>WAF</b>, web application firewall, inspects each HTTP request: SQL injection, cross-site scripting, bad bots, too many requests from one address.</li>
+        <li>Both attach to CloudFront, a load balancer or API Gateway. At CloudFront, bad traffic is dropped before it reaches your Region.</li>
+        <li>A security group filters by port and address; WAF filters by what the request <i>says</i>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>IAM roles</h3>
+      <p>How one AWS service gets permission to call another, with no passwords or keys.</p>
+      <ul>
+        <li>The role is attached to the servers; AWS gives them short-lived credentials that renew themselves.</li>
+        <li><b>Least privilege:</b> name the exact actions and the exact resources.</li>
+        <li>Never put access keys in code or config files. Stolen keys work from anywhere; a role works only on that server.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>KMS</h3>
+      <p>Key Management Service creates and guards encryption keys. Other services use them to encrypt what they store.</p>
+      <ul>
+        <li>The key never leaves KMS. Services ask KMS to encrypt or decrypt.</li>
+        <li>Access to data now needs two permissions: to the data and to the key.</li>
+        <li>Every use of a key is logged in CloudTrail.</li>
+        <li>A stolen snapshot or disk is useless without access to the key.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Secrets Manager and GuardDuty</h3>
+      <ul>
+        <li><b>Secrets Manager</b> stores passwords and API keys, encrypted. The app fetches the database password at start-up using its role. It can <b>rotate</b> the password automatically, so a leaked one soon stops working.</li>
+        <li><b>GuardDuty</b> is threat detection. It needs nothing installed: it analyses VPC flow logs, DNS queries and CloudTrail for known bad patterns.</li>
+        <li>GuardDuty only <b>reports</b>. An EventBridge rule turns a finding into an alert or an automatic response, such as isolating an instance.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Who is responsible for what</h2>
+  <div class="card">
+    <p>AWS calls this the <b>shared responsibility model</b>.</p>
+    <ul>
+      <li><b>AWS secures the cloud itself:</b> buildings, hardware, the network, and the software that runs managed services.</li>
+      <li><b>You secure what you put in it:</b> who has access (IAM), how the network is opened (security groups), whether data is encrypted, and your own application code.</li>
+      <li>The more managed the service, the less is yours: on EC2 you patch the operating system; on Lambda or RDS, AWS does.</li>
+    </ul>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the application: users → CloudFront → load balancer → app servers → RDS, plus an S3 bucket.</li>
+      <li><b>Layer 1:</b> write Shield and WAF on CloudFront.</li>
+      <li><b>Layer 2:</b> label the subnets public and private, and write the three chained security groups.</li>
+      <li><b>Layer 3:</b> tag the app servers with an IAM role and list what it allows.</li>
+      <li><b>Layer 4:</b> draw a KMS key; put a lock on each data store and a lock on each arrow.</li>
+      <li><b>Layer 5:</b> draw Secrets Manager with an arrow from the app servers.</li>
+      <li><b>Layer 6:</b> draw GuardDuty with a dashed arrow from the VPC.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Number the layers; it makes the drawing easy to explain from the outside in.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Where is data encrypted in transit and at rest in this design?</summary><p>In transit: TLS on every hop, from the user to CloudFront, CloudFront to the load balancer, on to the app servers, from them to the database, and to every AWS API. At rest: the RDS storage with its snapshots, the S3 objects, the servers' volumes and the secret itself, all with a KMS key.</p></details>
+  <details><summary>What is the difference between Shield and WAF?</summary><p>Shield deals with volume: DDoS floods that try to exhaust your capacity. WAF deals with content: individual requests that are malicious, such as SQL injection. A site usually needs both.</p></details>
+  <details><summary>The database already has a security group. Why add WAF?</summary><p>They work at different levels. The security group only checks that traffic comes from the app tier on the right port. A SQL injection arrives as a perfectly normal HTTPS request through the front door; only WAF reads the request and sees the attack.</p></details>
+  <details><summary>Why an IAM role on the servers instead of access keys in a config file?</summary><p>Keys in a file can be copied, committed to Git or left in a backup, and they work from anywhere until someone rotates them. A role's credentials are temporary, renewed automatically, and never stored by you.</p></details>
+  <details><summary>An attacker takes over one app server. What can they reach?</summary><p>Only what <code>app-role</code> allows: one secret, one bucket, one key, and the database through <code>db-sg</code>. They cannot list other buckets, create users or touch other systems. Least privilege limits the damage; GuardDuty should then notice the unusual behaviour.</p></details>
+  <details><summary>An RDS snapshot is shared with the wrong AWS account by mistake. Is the data exposed?</summary><p>Not if it is encrypted with your own KMS key. The other account can see the snapshot but cannot restore it without permission to use the key, which is a separate grant.</p></details>
+  <details><summary>Does GuardDuty block attacks?</summary><p>No. It detects and reports. To act, send its findings through EventBridge to a notification or to a Lambda function that responds, for example by swapping the instance's security group for one that allows nothing.</p></details>
+  <details><summary>A developer needs the database password to run a migration. How should they get it?</summary><p>From Secrets Manager, through an IAM permission granted to them for that secret, with the access logged in CloudTrail. Not from a chat message, a wiki page or the source code. Rotation then makes any copy they kept useless.</p></details>
+
+  <div class="next">
+    <b>Next — Day 26: Monitoring and logging.</b> You cannot secure or fix what you cannot see. CloudWatch collects metrics, logs and alarms; CloudTrail records who did what; VPC Flow Logs and AWS Config add the rest, all flowing into one central bucket.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The application.</b> Users reach CloudFront, then a load balancer, app servers and a database, with an S3 bucket for documents. This is Week 2's design, one AZ shown to leave room.",
+    "<b>Layer 1 — The edge.</b> Shield absorbs floods of traffic; WAF blocks malicious requests. Attached to CloudFront, they act before anything reaches your Region.",
+    "<b>Layer 2 — The network.</b> What you built in Weeks 1 and 2: only the load balancer is public, and each security group accepts traffic only from the tier in front.",
+    "<b>Layer 3 — Identity.</b> The app servers carry an IAM role. It lists exactly what they may call. There are no access keys anywhere.",
+    "<b>Layer 4 — Encryption.</b> Green locks: TLS on every hop. Blue locks: data stores encrypted at rest with a KMS key.",
+    "<b>Layer 5 — Secrets.</b> The database password is kept in Secrets Manager, encrypted and rotated. The app fetches it at start-up using its role.",
+    "<b>Layer 6 — Detection.</b> GuardDuty analyses network and API logs and raises a finding when something looks wrong. Prevention eventually fails somewhere; detection tells you where."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  const threats = [
+    ["A flood of traffic from a botnet", ["L1"], "<b>Layer 1, Shield.</b> A DDoS attack tries to exhaust your capacity. Shield and the size of the CloudFront network absorb it at the edge, far from your servers."],
+    ["SQL injection in a search box", ["L1"], "<b>Layer 1, WAF.</b> The request is valid HTTPS on port 443, so security groups let it through. WAF inspects its content, matches an injection rule, and blocks it at CloudFront."],
+    ["Someone scans for open database ports", ["L2"], "<b>Layer 2, the network.</b> The database has no public address and sits in a private subnet. Its security group accepts only the app tier. From the internet there is nothing to find."],
+    ["An app server is taken over", ["L3"], "<b>Layer 3, IAM.</b> The attacker inherits the server's role and nothing more: one secret, one bucket, one key. They cannot read other buckets or create resources. Least privilege turns a breach into a contained incident."],
+    ["A backup disk or snapshot is stolen", ["L4"], "<b>Layer 4, KMS.</b> The data is encrypted at rest. Without permission to use the key, which stays inside KMS, the copy is unreadable."],
+    ["Traffic is sniffed on public Wi-Fi", ["LT"], "<b>Layer 4, TLS.</b> Every hop is encrypted in transit, so the listener sees only scrambled bytes."],
+    ["The database password is committed to Git", ["L5"], "<b>Layer 5, Secrets Manager.</b> In this design there is no password in the code to commit: the app reads it at run time. If one does leak, automatic rotation makes it stop working."],
+    ["A server starts talking to a crypto-mining pool", ["L6"], "<b>Layer 6, GuardDuty.</b> Nothing above prevented it, so detection matters. GuardDuty sees connections to a known bad address in the flow and DNS logs and raises a finding, which EventBridge turns into an alert."]
+  ];
+  threats.forEach((t, i) => {
+    const b = document.createElement("button");
+    b.textContent = t[0];
+    b.onclick = () => {
+      [...$("simBtns").children].forEach((x, j) => x.classList.toggle("on", j === i));
+      $("simMsg").innerHTML = t[2];
+      svg.classList.add("lit");
+      svg.querySelectorAll(".ly").forEach(g => g.classList.toggle("on", t[1].includes(g.id)));
+    };
+    $("simBtns").appendChild(b);
+  });
+</script>
+</body>
+</html>
