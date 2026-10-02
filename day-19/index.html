@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 19 — Kubernetes on EKS</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .pod, #diagram .node { transition: opacity .3s; }
+  #diagram .pod.off { opacity: 0; }
+  #diagram .node.down { opacity: .25; }
+  #diagram .nx { opacity: 0; transition: opacity .3s; }
+  #diagram .nx.show { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-18/index.html">← Day 18</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 19 of 30 · Week 3 — Serverless, Decoupling, Containers</div>
+    <h1>Kubernetes on EKS</h1>
+    <p class="lead">Kubernetes is the container orchestrator most of the industry uses, and it works the same on every cloud. On AWS you run it with EKS: AWS operates the control plane, the brain of the cluster, and you bring the worker nodes that run your containers. The drawing is yesterday's, with one new box that is not yours and one new layer inside the nodes.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 800" role="img" aria-label="An EKS cluster. The control plane is managed by AWS outside your VPC. Worker nodes in a managed node group run pods in the private subnets of two Availability Zones. An engineer sends desired state with kubectl, and an ingress creates a load balancer that sends traffic to the pods.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--az)"/></marker>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+          <symbol id="pod" viewBox="0 0 34 34">
+            <rect width="34" height="34" rx="6" fill="var(--az)"/>
+            <text x="17" y="21" font-size="10" font-weight="700" text-anchor="middle" style="fill:#fff">pod</text>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: network -->
+        <g data-step="1">
+          <rect x="430" y="14" width="140" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="45" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="20" y="90" width="960" height="627" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+          <rect x="40" y="128" width="920" height="577" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="190" width="880" height="400" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">Your VPC — 10.0.0.0/16</text>
+          <circle cx="500" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <rect x="80" y="232" width="410" height="345" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+          <rect x="510" y="232" width="410" height="345" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="906" y="254" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+          <rect x="100" y="272" width="370" height="120" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="380" font-size="13" font-weight="700" style="fill:var(--pub)">Public A — 10.0.1.0/24</text>
+          <rect x="530" y="272" width="370" height="120" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="886" y="380" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--pub)">Public B — 10.0.3.0/24</text>
+          <rect x="100" y="420" width="370" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="550" font-size="13" font-weight="700" style="fill:var(--priv)">Private A — 10.0.2.0/24</text>
+          <rect x="530" y="420" width="370" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="886" y="550" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--priv)">Private B — 10.0.4.0/24</text>
+          <use href="#nat" x="124" y="296" width="40" height="40"/>
+          <text x="144" y="352" font-size="12" font-weight="600" text-anchor="middle">nat-a</text>
+          <use href="#nat" x="836" y="296" width="40" height="40"/>
+          <text x="856" y="352" font-size="12" font-weight="600" text-anchor="middle">nat-b</text>
+        </g>
+
+        <!-- Step 2: control plane, managed by AWS -->
+        <g data-step="2">
+          <rect x="80" y="612" width="545" height="82" rx="6" fill="var(--card)" stroke="var(--az)" stroke-width="2.5"/>
+          <text x="92" y="633" font-size="13" font-weight="700" style="fill:var(--az)">EKS control plane — managed by AWS, outside your VPC</text>
+          <g fill="var(--az-fill)" stroke="var(--az)" stroke-width="1.5">
+            <rect x="92" y="642" width="100" height="24" rx="12"/><rect x="200" y="642" width="150" height="24" rx="12"/><rect x="358" y="642" width="180" height="24" rx="12"/>
+          </g>
+          <g font-size="11.5" font-weight="600" text-anchor="middle">
+            <text x="142" y="658">API server</text><text x="275" y="658">etcd: cluster state</text><text x="448" y="658">scheduler · controllers</text>
+          </g>
+        </g>
+
+        <!-- Step 3: worker nodes in a managed node group -->
+        <g data-step="3">
+          <rect x="120" y="438" width="760" height="90" rx="10" fill="none" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+          <rect x="330" y="517" width="340" height="22" rx="5" fill="var(--orange)"/>
+          <text x="500" y="532" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">Managed node group · Auto Scaling group</text>
+          <g class="node">
+            <rect x="132" y="450" width="306" height="60" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <text x="350" y="476" font-size="11.5" font-weight="700">Worker node</text>
+            <text x="350" y="492" font-size="10.5" style="fill:var(--muted)">EC2 instance</text>
+          </g>
+          <g class="node" id="nodeB">
+            <rect x="562" y="450" width="306" height="60" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <text x="780" y="476" font-size="11.5" font-weight="700">Worker node</text>
+            <text x="780" y="492" font-size="10.5" style="fill:var(--muted)">EC2 instance</text>
+          </g>
+          <text class="nx" id="nodeBx" x="715" y="494" font-size="40" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text>
+          <line x1="300" y1="610" x2="300" y2="534" stroke="var(--az)" stroke-width="2.5" stroke-dasharray="6 4" marker-start="url(#arrowB)" marker-end="url(#arrowB)"/>
+          <text x="310" y="605" font-size="11.5" font-weight="600" style="fill:var(--az)">nodes join and report</text>
+        </g>
+
+        <!-- Step 4: desired state, pods and images -->
+        <g data-step="4">
+          <rect x="80" y="740" width="250" height="46" rx="23" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="205" y="759" font-size="13" font-weight="700" text-anchor="middle">Engineer</text>
+          <text x="205" y="775" font-size="11" text-anchor="middle" class="mono">kubectl apply -f shop-api.yaml</text>
+          <line x1="205" y1="738" x2="205" y2="698" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+          <text x="216" y="730" font-size="11.5" font-weight="600" style="fill:var(--dc)">desired state</text>
+          <text id="depl" x="92" y="685" font-size="11.5" class="mono">Deployment shop-api: desired 4 · running 4</text>
+
+          <g id="podsA">
+            <use class="pod" href="#pod" x="144" y="463" width="34" height="34"/><use class="pod" href="#pod" x="190" y="463" width="34" height="34"/>
+            <use class="pod off" href="#pod" x="236" y="463" width="34" height="34"/><use class="pod off" href="#pod" x="282" y="463" width="34" height="34"/>
+          </g>
+          <g id="podsB">
+            <use class="pod" href="#pod" x="574" y="463" width="34" height="34"/><use class="pod" href="#pod" x="620" y="463" width="34" height="34"/>
+            <use class="pod off" href="#pod" x="666" y="463" width="34" height="34"/><use class="pod off" href="#pod" x="712" y="463" width="34" height="34"/>
+          </g>
+
+          <rect x="670" y="612" width="250" height="82" rx="6" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+          <text x="682" y="633" font-size="13" font-weight="700" style="fill:var(--orange)">ECR repository</text>
+          <text x="682" y="654" font-size="12" class="mono">shop-api:v1</text>
+          <text x="682" y="673" font-size="12" style="fill:var(--muted)">Nodes pull images from here</text>
+          <line x1="700" y1="610" x2="700" y2="534" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+          <text x="710" y="605" font-size="11.5" font-weight="600" style="fill:var(--dc)">pull images</text>
+        </g>
+
+        <!-- Step 5: ingress creates a load balancer -->
+        <g data-step="5">
+          <rect x="300" y="300" width="400" height="54" rx="10" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="324" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+          <text x="500" y="343" font-size="11.5" text-anchor="middle" style="fill:#fff">created for you from an Ingress object</text>
+        </g>
+
+        <!-- Step 6: traffic -->
+        <g data-step="6">
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="500" y1="66" x2="500" y2="161"/><line x1="500" y1="216" x2="500" y2="295"/>
+            <line x1="400" y1="357" x2="244" y2="445"/><line x1="600" y1="357" x2="664" y2="445"/>
+          </g>
+          <g font-size="12" font-weight="700">
+            <text x="522" y="258" style="fill:var(--orange)">HTTPS 443</text>
+            <text x="284" y="412" text-anchor="end" style="fill:var(--orange)">to pod IPs</text>
+            <text x="654" y="412" style="fill:var(--orange)">to pod IPs</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the <b>control plane</b> is run by AWS outside your VPC. The engineer tells it the desired state with <code>kubectl</code>. Its scheduler places <b>pods</b> on <b>worker nodes</b>, which are EC2 instances in a managed node group in your private subnets. An <b>Ingress</b> object makes a controller create the load balancer, which sends requests straight to pod IP addresses.</p>
+    <div class="legend">
+      <span style="--c:var(--az)">Kubernetes: control plane, pods</span>
+      <span style="--c:var(--orange)">Worker nodes, node group, user traffic</span>
+      <span style="--c:var(--vpc)">Load balancer</span>
+      <span style="--c:var(--dc)">kubectl, image pull</span>
+    </div>
+  </div>
+
+  <h2>Desired state simulator</h2>
+  <div class="card">
+    <p>In Kubernetes you never start a container yourself. You declare how many you want, and controllers keep reality matching that number. Change the number or break something, and watch the pods in the diagram above.</p>
+    <div class="seg" id="segRep"><b>Replicas</b>
+      <button data-v="2">2</button>
+      <button data-v="4" class="on">4</button>
+      <button data-v="6">6</button>
+      <button data-v="8">8</button>
+    </div>
+    <div class="seg" id="simBtns">
+      <button data-a="pod">Delete one pod</button>
+      <button data-a="node">Node in AZ b fails</button>
+      <button data-a="reset">Reset</button>
+    </div>
+    <p class="result" id="simMsg">Desired 4, running 4: two pods on each node.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Control plane</h3>
+      <p>The brain of a Kubernetes cluster. With EKS, AWS runs it for you.</p>
+      <ul>
+        <li><b>API server:</b> the one door everything talks to, including <code>kubectl</code>.</li>
+        <li><b>etcd:</b> the database holding the desired and actual state.</li>
+        <li><b>Scheduler and controllers:</b> decide which node gets each pod, and keep correcting drift.</li>
+        <li>It runs across three AZs in an AWS-owned account. You pay a flat hourly fee per cluster and never see the servers.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Worker nodes</h3>
+      <p>The machines your containers actually run on. These are in your VPC and on your bill.</p>
+      <ul>
+        <li><b>Managed node group:</b> EC2 instances in an Auto Scaling group that EKS creates and updates for you.</li>
+        <li><b>Fargate:</b> no nodes at all; each pod runs on capacity AWS finds, as on Day 18.</li>
+        <li>Nodes go in private subnets across at least two AZs.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Pod, Deployment, Service, Ingress</h3>
+      <ul>
+        <li><b>Pod:</b> the smallest unit, one or more containers with one IP address.</li>
+        <li><b>Deployment:</b> “keep N copies of this pod running”, with rolling updates.</li>
+        <li><b>Service:</b> one stable name in front of a changing set of pods.</li>
+        <li><b>Ingress:</b> HTTP routing from outside. On EKS, the AWS Load Balancer Controller reads it and creates a real Application Load Balancer.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Networking and permissions</h3>
+      <ul>
+        <li>Every pod gets a <b>real IP address from your subnet</b>. A <code>/24</code> runs out quickly; EKS subnets are usually much larger.</li>
+        <li>The load balancer can therefore target pod IPs directly.</li>
+        <li>A pod gets AWS permissions through an IAM role tied to its service account, the same idea as yesterday's task role.</li>
+        <li>Nodes still need the NAT Gateway or VPC endpoints to pull images.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>What AWS manages and what you manage</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Part</th><th>Who runs it</th><th>Where you draw it</th></tr>
+      <tr><td>API server, etcd, scheduler, controllers</td><td><b>AWS</b>: availability, scaling, patching, backups</td><td>Outside your VPC, one box</td></tr>
+      <tr><td>Kubernetes version upgrades</td><td><b>You</b> start them; AWS performs the control-plane part</td><td>—</td></tr>
+      <tr><td>Worker nodes in a managed node group</td><td><b>Shared</b>: AWS provisions and replaces them; you choose size and count, and pay for them</td><td>Private subnets, both AZs</td></tr>
+      <tr><td>Pods, Deployments, Services, Ingress</td><td><b>You</b></td><td>Pods inside nodes</td></tr>
+      <tr><td>Add-ons: load balancer controller, autoscaler, logging</td><td><b>You</b> install and maintain them</td><td>Usually not drawn</td></tr>
+      <tr><td>VPC, subnets, security groups, IAM roles</td><td><b>You</b></td><td>As in Week 1</td></tr>
+    </table>
+  </div>
+
+  <h2>ECS or EKS?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>ECS (Day 18)</th><th>EKS (today)</th></tr>
+      <tr><td><b>What it is</b></td><td>AWS's own orchestrator</td><td>Standard Kubernetes, managed</td></tr>
+      <tr><td><b>To learn</b></td><td>Four concepts</td><td>A large ecosystem</td></tr>
+      <tr><td><b>Portability</b></td><td>AWS only</td><td>Same definitions run on any cloud or on-premises</td></tr>
+      <tr><td><b>Control plane cost</b></td><td>Free</td><td>Hourly fee per cluster</td></tr>
+      <tr><td><b>Operations</b></td><td>Little to maintain</td><td>Upgrades and add-ons are your job</td></tr>
+      <tr><td><b>Choose it when</b></td><td>You want containers running with the least effort</td><td>The team already knows Kubernetes, or needs its tools and portability</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">The same ideas under different names: ECS task ↔ pod, ECS service ↔ Deployment plus Service, task definition ↔ pod specification, task role ↔ IAM role for a service account.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the multi-AZ VPC with public and private subnets and NAT Gateways.</li>
+      <li>Outside the VPC, draw the <b>EKS control plane</b> and write “managed by AWS”.</li>
+      <li>Draw a <b>managed node group</b> across both private subnets, with one <b>worker node</b> box in each AZ.</li>
+      <li>Draw <b>pods</b> inside the nodes. Three levels of nesting: node group, node, pod.</li>
+      <li>Draw the engineer with <code>kubectl</code> and an arrow to the control plane, and a two-way arrow between control plane and nodes.</li>
+      <li>Draw the load balancer in the public subnets and write “from Ingress”. Arrows go from it to the pods.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. The control plane must be outside your VPC; the nodes must be inside it.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>What does AWS manage in EKS, and what do you manage?</summary><p>AWS runs the control plane: API server, etcd, scheduler and controllers, across three AZs, patched and backed up. With managed node groups it also provisions and replaces the worker nodes. You manage what runs on the cluster, the add-ons, when to upgrade, and the VPC and IAM around it. You pay for the nodes.</p></details>
+  <details><summary>Where is the control plane on the diagram, and why there?</summary><p>Outside your VPC. It runs in an AWS-owned account and reaches your nodes through network interfaces placed in your subnets. Drawing it inside your VPC is a common mistake.</p></details>
+  <details><summary>You delete a pod by hand. Thirty seconds later there are still four. Why?</summary><p>The Deployment says four replicas. Its controller noticed three running and created a replacement. To have fewer pods you change the desired number, not the pods.</p></details>
+  <details><summary>A worker node dies. What happens to its pods, and what happens to the node?</summary><p>Kubernetes reschedules the pods onto remaining nodes that have room; any that do not fit wait as Pending. Separately, the node group's Auto Scaling group launches a replacement node, and the pending pods are placed on it.</p></details>
+  <details><summary>After the failed node is replaced, one node has four pods and the new one has none. Is something broken?</summary><p>No. Kubernetes does not move healthy running pods to rebalance. The new node fills up as pods are created later, for example at the next deployment.</p></details>
+  <details><summary>Why do EKS clusters need larger subnets than the <code>/24</code>s used so far?</summary><p>Each pod takes a real IP address from the subnet. A few dozen nodes with tens of pods each can exhaust the 251 addresses of a <code>/24</code>, and then new pods cannot start.</p></details>
+  <details><summary>You wrote an Ingress object and a load balancer appeared in the AWS console. What created it?</summary><p>The AWS Load Balancer Controller, an add-on running in the cluster. It watches Ingress objects and creates and configures a matching Application Load Balancer.</p></details>
+  <details><summary>A three-person team with no Kubernetes experience needs to run six containers. ECS or EKS?</summary><p>ECS on Fargate. It does the job with far less to learn and maintain. EKS earns its complexity when you need the Kubernetes ecosystem, portability, or the team already has the skills.</p></details>
+
+  <div class="next">
+    <b>Next — Day 20: Microservices.</b> You split one application into several small services, each with its own compute and its own database, an API Gateway in front to route requests, and queues between services so they do not depend on each other being up.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The network.</b> A multi-AZ VPC with public and private subnets and NAT Gateways. This part is entirely yours.",
+    "<b>Step 2 — Control plane.</b> Create the EKS cluster. AWS runs the API server, etcd and the scheduler in its own account. Draw it outside your VPC.",
+    "<b>Step 3 — Worker nodes.</b> Add a managed node group: EC2 instances in an Auto Scaling group, in your private subnets. Each node registers with the control plane.",
+    "<b>Step 4 — Desired state.</b> The engineer applies a Deployment asking for four replicas. The scheduler places pods on the nodes, and each node pulls the image from ECR.",
+    "<b>Step 5 — Ingress.</b> Apply an Ingress object. A controller in the cluster creates an Application Load Balancer in the public subnets to match it.",
+    "<b>Step 6 — Traffic.</b> Users → Internet Gateway → load balancer → pod IP addresses. Each pod has its own address in your subnet."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const CAP = 4;                                    // pods that fit on one node in this model
+  const st = { rep: 4, a: 2, b: 2, bUp: true, pending: 0 };
+  let busy = false;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  function paint() {
+    [...$("podsA").children].forEach((p, i) => p.classList.toggle("off", i >= st.a));
+    [...$("podsB").children].forEach((p, i) => p.classList.toggle("off", i >= st.b));
+    $("nodeB").classList.toggle("down", !st.bUp);
+    $("nodeBx").classList.toggle("show", !st.bUp);
+    $("depl").textContent = `Deployment shop-api: desired ${st.rep} · running ${st.a + st.b}` + (st.pending ? ` · pending ${st.pending}` : "");
+  }
+  function lock(on) {
+    busy = on;
+    document.querySelectorAll("#segRep button, #simBtns button").forEach(b => b.disabled = on);
+  }
+  // Add or remove pods one at a time, keeping the two nodes as even as possible.
+  function reconcile() {
+    while (st.a + st.b < st.rep) { if (st.a <= st.b) st.a++; else st.b++; }
+    while (st.a + st.b > st.rep) { if (st.a >= st.b) st.a--; else st.b--; }
+  }
+
+  $("segRep").querySelectorAll("button").forEach(b => b.onclick = () => {
+    const before = st.rep; st.rep = +b.dataset.v;
+    $("segRep").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    reconcile(); paint();
+    $("simMsg").innerHTML = st.rep > before
+      ? `<b>Desired ${st.rep}.</b> You changed one number. The Deployment controller created ${st.rep - before} more pods and the scheduler spread them over the nodes: ${st.a} in AZ a, ${st.b} in AZ b.` + (st.rep === 8 ? " Both nodes are now full; one more pod would need another node." : "")
+      : st.rep < before
+      ? `<b>Desired ${st.rep}.</b> The controller removed ${before - st.rep} pods to match. ${st.a} remain in AZ a and ${st.b} in AZ b.`
+      : `Desired is already ${st.rep}.`;
+  });
+
+  const actions = {
+    async pod() {
+      lock(true);
+      if (st.a >= st.b) st.a--; else st.b--;
+      paint();
+      $("simMsg").innerHTML = `<b>Pod deleted.</b> Running ${st.a + st.b}, desired ${st.rep}. The Deployment controller sees the difference…`;
+      await wait(1400);
+      reconcile(); paint();
+      $("simMsg").innerHTML = `<b>Reconciled.</b> A replacement pod was created and scheduled. Running ${st.rep} again. Deleting pods does not reduce their number; only changing the desired count does.`;
+      lock(false);
+    },
+    async node() {
+      lock(true);
+      const lost = st.b, move = Math.min(lost, CAP - st.a);
+      st.b = 0; st.bUp = false; st.a += move; st.pending = lost - move;
+      paint();
+      $("simMsg").innerHTML = `<b>Node in AZ b failed</b>, taking ${lost} pod${lost === 1 ? "" : "s"} with it. The scheduler placed ${move} on the node in AZ a.` +
+        (st.pending ? ` <b>${st.pending} could not fit and are Pending.</b>` : "") + ` Meanwhile the node group's Auto Scaling group is launching a new node…`;
+      await wait(2600);
+      st.bUp = true; st.b = st.pending; st.pending = 0;
+      paint();
+      $("simMsg").innerHTML = `<b>New node joined.</b> ` + (st.b ? `The pending pods were scheduled on it. ` : "") +
+        `AZ a now has ${st.a} pods and AZ b has ${st.b}. Kubernetes does not move healthy running pods to even things out; that happens gradually as pods are recreated.`;
+      lock(false);
+    },
+    reset() {
+      Object.assign(st, { rep: 4, a: 2, b: 2, bUp: true, pending: 0 });
+      $("segRep").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.v === "4"));
+      paint();
+      $("simMsg").innerHTML = "Desired 4, running 4: two pods on each node.";
+    }
+  };
+  $("simBtns").querySelectorAll("button").forEach(b => b.onclick = () => { if (!busy) actions[b.dataset.a](); });
+  paint();
+</script>
+</body>
+</html>
