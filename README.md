@@ -65,7 +65,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | 24 | **[Private access to AWS services](day-24/index.html)** | Gateway endpoint (S3, DynamoDB), interface endpoint / PrivateLink | Which endpoint type uses a route table entry? |
 | 25 | **[Security architecture](day-25/index.html)** | WAF + Shield on CloudFront/ALB, IAM roles, KMS encryption, Secrets Manager, GuardDuty | Where is data encrypted in transit and at rest? |
 | 26 | **[Monitoring and logging](day-26/index.html)** | CloudWatch metrics/logs/alarms, CloudTrail, VPC Flow Logs, AWS Config → central S3 bucket | CloudWatch vs CloudTrail? |
-| 27 | **Data pipeline** | Kinesis Data Streams → Firehose → S3 data lake → Glue → Athena → QuickSight | Where is the data at each stage — streaming or at rest? |
+| 27 | **[Data pipeline](day-27/index.html)** | Kinesis Data Streams → Firehose → S3 data lake → Glue → Athena → QuickSight | Where is the data at each stage — streaming or at rest? |
 | 28 | **Disaster recovery** | 2 regions; draw all four: backup & restore, pilot light, warm standby, multi-site active-active | Rank the four by RTO/RPO and cost. |
 | 29 | **Multi-account setup** | AWS Organizations, OUs, SCPs, Control Tower, separate security / logging / workload accounts | Why separate accounts instead of separate VPCs? |
 | 30 | **Capstone: production e-commerce platform** | Combine everything: Route 53, CloudFront, WAF, multi-AZ VPC, ALB, ECS/ASG, RDS Multi-AZ, ElastiCache, SQS, Lambda, S3, monitoring, DR region | Draw it from a blank page in 30 minutes and explain every arrow. |

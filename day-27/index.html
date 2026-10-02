@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 27 — Data Pipeline</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .tool { transition: opacity .25s; }
+  #diagram.lit .tool { opacity: .16; }
+  #diagram.lit .tool.on { opacity: 1; }
+  #diagram .dot { fill: var(--vpc); animation: flow 3s linear infinite; }
+  @keyframes flow { 0% { transform: translateX(0); opacity: 0; } 10%, 90% { opacity: 1; } 100% { transform: translateX(156px); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { #diagram .dot { animation: none; } }
+  .state { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 1px 9px; border-radius: 999px; color: var(--card); margin-right: 6px; }
+  .state.move { background: var(--vpc); } .state.rest { background: var(--pub); }
+  .scan .seg b { min-width: 120px; }
+  pre.sql { margin: 4px 0 16px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; overflow-x: auto; }
+  .scanbar { height: 16px; border-radius: 8px; background: var(--border); overflow: hidden; margin-top: 16px; }
+  .scanbar i { display: block; height: 100%; min-width: 3px; border-radius: 8px; background: var(--priv); transition: width .3s; }
+  .scan .note { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-26/index.html">← Day 26</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 27 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Data Pipeline</h1>
+    <p class="lead">A busy shop produces a million clicks an hour. No single click matters much, but together they show what sells, where people give up and which payments look like fraud. A data pipeline carries each event from the moment it happens to a chart that someone reads. Today you draw one, and you mark the point where the data stops moving and comes to rest.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 648" role="img" aria-label="Left: producers such as a website, a mobile app and sensors send events into AWS. Top band, data in motion: a Kinesis data stream with three shards, read by a real-time Lambda consumer and by Firehose. Bottom band, data at rest: Firehose writes files to the raw zone of an S3 data lake, a Glue job converts them into a curated zone, a Glue crawler fills the Data Catalog, Athena queries the files with SQL and QuickSight shows dashboards.">
+        <defs>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <marker id="arrowV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--vpc)"/></marker>
+          <symbol id="s3" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g></symbol>
+          <symbol id="lambda" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--orange)"/><text x="28" y="40" font-size="32" font-weight="700" text-anchor="middle" style="fill:#fff">λ</text></symbol>
+        </defs>
+
+        <rect x="190" y="20" width="790" height="608" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="204" y="42" font-size="15" font-weight="700">AWS Cloud</text>
+
+        <!-- Step 1: producers -->
+        <g data-step="1" class="tool" id="sProd">
+          <text x="22" y="74" font-size="12.5" font-weight="700">Producers</text>
+          <g fill="var(--card)" stroke="var(--border)" stroke-width="1.5">
+            <rect x="20" y="88" width="150" height="50" rx="8"/><rect x="20" y="146" width="150" height="50" rx="8"/><rect x="20" y="204" width="150" height="50" rx="8"/>
+          </g>
+          <text x="32" y="109" font-size="12" font-weight="700">Website clicks</text>
+          <text x="32" y="126" font-size="10.5" style="fill:var(--muted)">page views, add to cart</text>
+          <text x="32" y="167" font-size="12" font-weight="700">Mobile app</text>
+          <text x="32" y="184" font-size="10.5" style="fill:var(--muted)">taps, searches, orders</text>
+          <text x="32" y="225" font-size="12" font-weight="700">IoT sensors</text>
+          <text x="32" y="242" font-size="10.5" style="fill:var(--muted)">readings every second</text>
+        </g>
+
+        <!-- Step 2: Kinesis Data Streams -->
+        <g data-step="2">
+          <rect x="206" y="52" width="758" height="210" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <text x="220" y="74" font-size="12" font-weight="700" style="fill:var(--vpc);letter-spacing:.05em">DATA IN MOTION — streaming</text>
+          <g stroke="var(--vpc)" stroke-width="2.5" marker-end="url(#arrowV)">
+            <line x1="172" y1="113" x2="217" y2="140"/><line x1="172" y1="171" x2="217" y2="170"/><line x1="172" y1="229" x2="217" y2="200"/>
+          </g>
+          <g class="tool" id="sStream">
+            <rect x="222" y="88" width="260" height="160" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2.5"/>
+            <text x="236" y="110" font-size="13.5" font-weight="700" style="fill:var(--vpc)">Kinesis Data Streams</text>
+            <text x="236" y="127" font-size="11" style="fill:var(--muted)">an ordered log of events, in shards</text>
+            <g fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="1.5">
+              <rect x="236" y="138" width="232" height="20" rx="10"/><rect x="236" y="164" width="232" height="20" rx="10"/><rect x="236" y="190" width="232" height="20" rx="10"/>
+            </g>
+            <g font-size="10" style="fill:var(--muted)">
+              <text x="246" y="152" style="fill:var(--muted)">shard 1</text><text x="246" y="178" style="fill:var(--muted)">shard 2</text><text x="246" y="204" style="fill:var(--muted)">shard 3</text>
+            </g>
+            <circle class="dot" cx="300" cy="148" r="4"/><circle class="dot" cx="300" cy="148" r="4" style="animation-delay:-1s"/><circle class="dot" cx="300" cy="148" r="4" style="animation-delay:-2.2s"/>
+            <circle class="dot" cx="300" cy="174" r="4" style="animation-delay:-.5s"/><circle class="dot" cx="300" cy="174" r="4" style="animation-delay:-1.8s"/>
+            <circle class="dot" cx="300" cy="200" r="4" style="animation-delay:-.2s"/><circle class="dot" cx="300" cy="200" r="4" style="animation-delay:-1.3s"/><circle class="dot" cx="300" cy="200" r="4" style="animation-delay:-2.5s"/>
+            <text x="236" y="233" font-size="10.5" style="fill:var(--muted)">kept 24 h (up to 365 days) · replayable</text>
+          </g>
+        </g>
+
+        <!-- Step 3: real-time consumer -->
+        <g data-step="3">
+          <line x1="484" y1="150" x2="555" y2="122" stroke="var(--vpc)" stroke-width="2.5" marker-end="url(#arrowV)"/>
+          <g class="tool" id="sLambda">
+            <rect x="560" y="88" width="388" height="64" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <use href="#lambda" x="572" y="104" width="32" height="32"/>
+            <text x="614" y="114" font-size="12.5" font-weight="700">Real-time consumer (Lambda)</text>
+            <text x="614" y="132" font-size="11" style="fill:var(--muted)">reads each record within about a second: fraud alert</text>
+          </g>
+        </g>
+
+        <!-- Step 4: Firehose -->
+        <g data-step="4">
+          <line x1="484" y1="186" x2="555" y2="206" stroke="var(--vpc)" stroke-width="2.5" marker-end="url(#arrowV)"/>
+          <g class="tool" id="sFire">
+            <rect x="560" y="168" width="388" height="80" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2.5"/>
+            <text x="574" y="190" font-size="13.5" font-weight="700" style="fill:var(--vpc)">Amazon Data Firehose</text>
+            <text x="574" y="209" font-size="11" style="fill:var(--muted)">collects records into a batch, then writes one file</text>
+            <text x="574" y="227" font-size="11" style="fill:var(--muted)">flushes at 5 MB or 300 s, whichever comes first</text>
+          </g>
+        </g>
+
+        <!-- Step 5: S3 data lake, raw zone -->
+        <g data-step="5">
+          <rect x="206" y="290" width="758" height="322" rx="8" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <text x="220" y="312" font-size="12" font-weight="700" style="fill:var(--pub);letter-spacing:.05em">DATA AT REST — stored, catalogued, queried</text>
+          <rect x="600" y="326" width="348" height="270" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+          <use href="#s3" x="612" y="336" width="34" height="34"/>
+          <text x="656" y="351" font-size="13.5" font-weight="700" style="fill:var(--pub)">S3 data lake</text>
+          <text x="656" y="368" font-size="11" style="fill:var(--muted)">every event, kept cheaply for years</text>
+          <line x1="774" y1="250" x2="774" y2="321" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+          <text x="784" y="281" font-size="11" style="fill:var(--muted)">one file per batch</text>
+          <g class="tool" id="sRaw">
+            <rect x="614" y="384" width="320" height="54" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="1.5"/>
+            <text x="626" y="405" font-size="12.5" font-weight="700" class="mono">raw/</text>
+            <text x="626" y="423" font-size="11" style="fill:var(--muted)">as delivered: compressed JSON, one file per batch</text>
+          </g>
+        </g>
+
+        <!-- Step 6: Glue job, curated zone, crawler and catalog -->
+        <g data-step="6">
+          <line x1="774" y1="440" x2="774" y2="481" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+          <text x="784" y="465" font-size="11.5" font-weight="700" style="fill:var(--az)">Glue ETL job</text>
+          <g class="tool" id="sCur">
+            <rect x="614" y="486" width="320" height="96" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="1.5"/>
+            <text x="626" y="507" font-size="12.5" font-weight="700" class="mono">curated/</text>
+            <text x="626" y="525" font-size="11" style="fill:var(--muted)">cleaned, stored as Parquet (columnar)</text>
+            <text x="626" y="548" font-size="11" class="mono">clicks/day=2026-10-02/</text>
+            <text x="626" y="569" font-size="11" style="fill:var(--muted)">a folder per day, so queries can skip days</text>
+          </g>
+          <line x1="598" y1="498" x2="557" y2="440" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+          <g class="tool" id="sGlue">
+            <rect x="222" y="326" width="330" height="128" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="2.5"/>
+            <text x="236" y="349" font-size="13.5" font-weight="700" style="fill:var(--az)">AWS Glue</text>
+            <text x="236" y="366" font-size="11" style="fill:var(--muted)">What data do we have, and what shape is it?</text>
+            <g fill="var(--az-fill)" stroke="var(--az)" stroke-width="1.5">
+              <rect x="236" y="378" width="136" height="64" rx="6"/><rect x="404" y="378" width="136" height="64" rx="6"/>
+            </g>
+            <text x="246" y="398" font-size="12.5" font-weight="700">Crawler</text>
+            <text x="246" y="415" font-size="11" style="fill:var(--muted)">reads the files,</text>
+            <text x="246" y="430" font-size="11" style="fill:var(--muted)">works out columns</text>
+            <line x1="374" y1="410" x2="399" y2="410" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+            <text x="414" y="398" font-size="12.5" font-weight="700">Data Catalog</text>
+            <text x="414" y="415" font-size="11" style="fill:var(--muted)">table → location,</text>
+            <text x="414" y="430" font-size="11" style="fill:var(--muted)">columns, partitions</text>
+          </g>
+        </g>
+
+        <!-- Step 7: Athena -->
+        <g data-step="7">
+          <line x1="472" y1="456" x2="472" y2="489" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+          <text x="481" y="477" font-size="10.5" style="fill:var(--muted)">schema</text>
+          <line x1="598" y1="545" x2="557" y2="545" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+          <g class="tool" id="sAthena">
+            <rect x="392" y="494" width="160" height="102" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2.5"/>
+            <text x="406" y="516" font-size="13.5" font-weight="700" style="fill:var(--priv)">Athena</text>
+            <text x="406" y="535" font-size="11" style="fill:var(--muted)">SQL on the files in S3,</text>
+            <text x="406" y="550" font-size="11" style="fill:var(--muted)">nothing to load</text>
+            <text x="406" y="577" font-size="11" font-weight="700">pay per TB scanned</text>
+          </g>
+        </g>
+
+        <!-- Step 8: QuickSight -->
+        <g data-step="8">
+          <line x1="390" y1="545" x2="357" y2="545" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+          <g class="tool" id="sQS">
+            <rect x="222" y="494" width="130" height="102" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2.5"/>
+            <text x="234" y="516" font-size="13.5" font-weight="700" style="fill:var(--region)">QuickSight</text>
+            <text x="234" y="535" font-size="11" style="fill:var(--muted)">dashboards for</text>
+            <text x="234" y="550" font-size="11" style="fill:var(--muted)">the business</text>
+            <g fill="var(--region)">
+              <rect x="234" y="574" width="12" height="12" rx="2"/><rect x="251" y="566" width="12" height="20" rx="2"/><rect x="268" y="570" width="12" height="16" rx="2"/><rect x="285" y="560" width="12" height="26" rx="2"/><rect x="302" y="564" width="12" height="22" rx="2"/>
+            </g>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: events leave the producers and flow through a <b>Kinesis data stream</b>. Two consumers read it: <b>Lambda</b> reacts within a second, and <b>Firehose</b> collects records into files. In the top band the data is moving; in the bottom band it is at rest in the <b>S3 data lake</b>. <b>Glue</b> cleans it and catalogues it, <b>Athena</b> runs SQL on it and <b>QuickSight</b> draws the charts. Arrows show where the data goes. Solid arrows flow continuously or on request; dashed arrows run in batches.</p>
+    <div class="legend">
+      <span style="--c:var(--vpc)">Streaming: in motion</span>
+      <span style="--c:var(--orange)">Real-time consumer</span>
+      <span style="--c:var(--pub)">S3 data lake: at rest</span>
+      <span style="--c:var(--az)">Glue: prepare and catalogue</span>
+      <span style="--c:var(--priv)">Athena: query</span>
+      <span style="--c:var(--region)">QuickSight: charts</span>
+    </div>
+  </div>
+
+  <h2>Follow one click through the pipeline</h2>
+  <div class="card">
+    <p>A customer taps “add to cart”. Each button is a place that event passes through. Before you press, say whether the data is <b>in motion</b> or <b>at rest</b> there, and roughly how old it is. The diagram above lights the stage.</p>
+    <div class="seg" id="tBtns"></div>
+    <p class="result" id="tMsg">Pick a stage.</p>
+  </div>
+
+  <h2>What does an Athena query cost?</h2>
+  <div class="card scan">
+    <p>Athena charges for the data it has to read, not for the time it takes. The lake holds one year of click events, 10 GB of JSON a day. Change how the files are stored and what the query asks for, and watch how much gets read.</p>
+    <div id="scanOpts"></div>
+    <pre class="sql" id="sql"></pre>
+    <div class="calc">
+      <div><div class="lbl">Data scanned</div><div class="big" id="scanGb"></div></div>
+      <div><div class="lbl">Cost of one query</div><div class="big" id="scanCost"></div></div>
+      <div><div class="lbl">A dashboard running it 50 times a day</div><div class="big" id="scanMonth"></div></div>
+    </div>
+    <div class="scanbar" aria-hidden="true"><i id="scanFill"></i></div>
+    <p class="note">The bar is the share of the original 3.65 TB that Athena reads.</p>
+    <p class="result" id="scanMsg"></p>
+    <p class="note">Illustrative numbers: 20 columns of equal size, Parquet a quarter the size of JSON, and Athena's list price of about $5 per TB scanned.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Kinesis Data Streams</h3>
+      <ul>
+        <li>A stream is made of <b>shards</b>. Each shard takes in up to <b>1 MB or 1,000 records a second</b>. For more, add shards, or use on-demand mode and let AWS add them.</li>
+        <li>Every record carries a <b>partition key</b>. The same key always lands on the same shard, and order is kept within a shard.</li>
+        <li>Records stay for <b>24 hours</b> by default, up to 365 days. Reading does not remove them, unlike SQS on Day 16.</li>
+        <li>So several consumers can read the same data, and one that failed can go back and <b>replay</b>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Amazon Data Firehose</h3>
+      <ul>
+        <li>A <b>delivery</b> service: it takes records in and writes them to S3, Redshift or OpenSearch. No shards to size and no consumer code to write.</li>
+        <li>It <b>buffers</b> by size and by time, so it is near real time, not real time.</li>
+        <li>On the way it can compress, convert JSON to Parquet, or pass each record through a Lambda function.</li>
+        <li>It keeps nothing to re-read. Once delivered, the data is only at the destination.</li>
+        <li>Called Kinesis Data Firehose until 2024; you will see both names.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>S3 data lake and Glue</h3>
+      <ul>
+        <li>A <b>data lake</b> is all your data as files in S3, in open formats. Storage is separate from whatever queries it, so many tools can share the same files.</li>
+        <li>Keep <b>zones</b>: <code>raw/</code> exactly as it arrived, <code>curated/</code> cleaned and ready to query. Raw is never edited, so you can always rebuild.</li>
+        <li>A <b>Glue ETL job</b> reads, cleans, converts and writes. It is serverless and runs on a schedule or a trigger.</li>
+        <li>A <b>crawler</b> fills the <b>Data Catalog</b> with table definitions. The catalog holds descriptions only, never the data.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Athena and QuickSight</h3>
+      <ul>
+        <li><b>Athena</b> runs standard SQL on the files in place. There are no servers, and it costs nothing while nobody is querying.</li>
+        <li>It looks up the table in the Glue Data Catalog, reads the files, and saves the result to another S3 bucket.</li>
+        <li>Answers come in seconds to minutes. It is for analysis, not for serving an app's requests.</li>
+        <li><b>QuickSight</b> turns queries into charts and dashboards. It can keep a copy of the data in <b>SPICE</b>, its in-memory store, so a dashboard does not pay for an Athena query on every view.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Data Streams vs Firehose</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Kinesis Data Streams</th><th>Data Firehose</th></tr>
+      <tr><td><b>Its job</b></td><td>Hold a stream so that consumers can read it</td><td>Deliver a stream to a destination</td></tr>
+      <tr><td><b>Who reads from it</b></td><td>Your code: Lambda, applications, Flink. Several at once.</td><td>Nobody. It writes to S3, Redshift or OpenSearch for you.</td></tr>
+      <tr><td><b>Delay</b></td><td>Under a second</td><td>Seconds to minutes, set by the buffer</td></tr>
+      <tr><td><b>Keeps the data</b></td><td>24 hours to 365 days, replayable</td><td>No</td></tr>
+      <tr><td><b>Scaling</b></td><td>Shards you size, or on-demand mode</td><td>Automatic</td></tr>
+      <tr><td><b>Choose it when</b></td><td>You must react in real time, or several consumers need the same events</td><td>You only need the data to land in a lake or warehouse</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">A way to remember: Data Streams <b>holds</b>; Firehose <b>delivers</b>. Producers can also send straight to Firehose when nothing needs the stream.</p>
+  </div>
+
+  <h2>How fresh must the answer be?</h2>
+  <div class="card">
+    <p>That one question decides which part of the pipeline you read from.</p>
+    <ul>
+      <li><b>Within a second</b> (block a fraudulent payment): read the stream itself, with Lambda or with Managed Service for Apache Flink for running totals such as “orders in the last minute”.</li>
+      <li><b>Within minutes</b> (today's sales so far): Firehose into S3, queried with Athena.</li>
+      <li><b>By tomorrow morning</b> (the monthly report): a nightly Glue job over the lake. The slowest path and the cheapest.</li>
+    </ul>
+    <p style="margin-top:10px">Names you will meet around this drawing: <b>MSK</b> is managed Kafka, used in place of Kinesis. <b>Redshift</b> is a data warehouse, for heavy queries that run all day. <b>Lake Formation</b> controls who may see which tables and columns in the lake.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>On the left, outside AWS, draw the <b>producers</b>: website, mobile app, sensors.</li>
+      <li>Draw <b>Kinesis Data Streams</b> with three shards. Write “24 h, replayable” under it.</li>
+      <li>Draw two consumers reading the stream: <b>Lambda</b> for real time and <b>Firehose</b>. Write the buffer on Firehose: “5 MB or 300 s”.</li>
+      <li>Put a dashed box around those and label it <b>in motion</b>.</li>
+      <li>Below, draw the <b>S3 data lake</b> with two zones, <code>raw/</code> and <code>curated/</code>. A dashed arrow from Firehose into raw, and a <b>Glue ETL job</b> arrow from raw to curated.</li>
+      <li>Draw <b>Glue</b> with a crawler and the Data Catalog, then <b>Athena</b> reading the catalog and the files, then <b>QuickSight</b> reading Athena.</li>
+      <li>Put a second dashed box around the lower half and label it <b>at rest</b>.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. The line between the two boxes is the answer to today's question, so draw it last and on purpose.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Where is the data at each stage: streaming or at rest?</summary><p>In motion from the producer through Kinesis Data Streams, the Lambda consumer and the Firehose buffer. At rest from the moment Firehose writes a file to S3. Glue, Athena and QuickSight all work on data at rest: the catalog only describes the files, and Athena reads them where they are.</p></details>
+  <details><summary>A shard stores records on disk for 24 hours. Why is that still called data in motion?</summary><p>The storage is temporary and exists so that consumers can read the records and replay them. Nobody queries a shard, and the records expire. The lasting copy, the one you analyse, is the file in S3.</p></details>
+  <details><summary>Data Streams or Firehose: what is the difference?</summary><p>Data Streams holds records for your own consumers to read, in under a second, and lets them replay. Firehose is a delivery service that batches records and writes them to a destination such as S3, with a delay set by its buffer and no code to write.</p></details>
+  <details><summary>Firehose can take records directly from producers. Why put a stream in front of it?</summary><p>Because more than one thing needs the events. With a stream, a real-time consumer and Firehose both read the same records, a new consumer can be added later, and any of them can replay after a failure. If landing files in S3 is the only need, skip the stream.</p></details>
+  <details><summary>Traffic doubles and producers start getting “throughput exceeded” errors. What do you change?</summary><p>The stream's capacity. Each shard accepts 1 MB or 1,000 records a second, so add shards, or switch the stream to on-demand mode. Also check the partition key: if most records share one key they all go to one shard.</p></details>
+  <details><summary>Two events from the same customer must be processed in order. How do you guarantee it?</summary><p>Use the customer ID as the partition key. Records with the same key go to the same shard, and a shard keeps its records in order. There is no ordering across different shards.</p></details>
+  <details><summary>Events arrive every millisecond, but a new file appears in S3 only every five minutes. Why?</summary><p>Firehose buffers. It writes a file when the buffer reaches its size limit or its time limit, 5 MB or 300 seconds by default. With little traffic the time limit is reached first. Lower the interval for fresher data, at the cost of many small files.</p></details>
+  <details><summary>Does the Glue Data Catalog contain your data?</summary><p>No. It holds table definitions: the name, the columns and their types, the S3 location and the partitions. The data stays in S3, and Athena uses the catalog to find and read it.</p></details>
+  <details><summary>One Athena query costs $18 every time it runs. Name two changes that cut it.</summary><p>Store the data as Parquet, which is smaller and lets Athena read only the columns the query names. Partition it by date and filter on that date, so only the matching folders are read. Selecting named columns instead of <code>SELECT *</code> matters too.</p></details>
+  <details><summary>The business wants a fraud alert within one second. Can Athena on the data lake do it?</summary><p>No. The data reaches S3 minutes after the event, and Athena is built for analysis, not instant reaction. Read from the stream instead, with Lambda or Managed Service for Apache Flink.</p></details>
+
+  <div class="next">
+    <b>Next — Day 28: Disaster recovery.</b> A whole Region goes dark. You draw two Regions and four ways to survive it: backup and restore, pilot light, warm standby and multi-site active-active, then rank them by recovery time, data loss and cost.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Producers.</b> Anything that emits small events all the time: a website, a mobile app, sensors. They sit outside the pipeline and only send.",
+    "<b>Step 2 — Kinesis Data Streams.</b> The events enter a stream made of shards. It keeps them in order and holds them for 24 hours, so consumers can read them, and read them again. The data is in motion.",
+    "<b>Step 3 — Real-time consumer.</b> A Lambda function reads the stream within about a second and reacts: a fraud alert, a live counter. It stores nothing.",
+    "<b>Step 4 — Firehose.</b> A second consumer of the same stream. It collects records into a batch and writes the batch as one file when 5 MB or 300 seconds is reached.",
+    "<b>Step 5 — S3 data lake.</b> Firehose delivers each file to the <code>raw/</code> zone. This is the line: from here on the data is at rest, kept cheaply for years.",
+    "<b>Step 6 — Glue.</b> An ETL job cleans the raw files and rewrites them as Parquet in <code>curated/</code>, one folder per day. A crawler reads those files and records the table in the Data Catalog.",
+    "<b>Step 7 — Athena.</b> It takes the table definition from the catalog and runs SQL on the files where they lie. Nothing is loaded, and you pay for the data scanned.",
+    "<b>Step 8 — QuickSight.</b> Dashboards built on Athena queries. This is where the click from step 1 finally becomes a bar on a chart."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+
+  // ---- Follow one click: [button, diagram id, moving?, age, explanation] ----
+  const stages = [
+    ["Leaving the phone", "sProd", true, "0 ms", "The event exists only in the app and on the network. Until Kinesis confirms it has the record, a crash loses it, so producers retry."],
+    ["Inside a shard", "sStream", true, "a few milliseconds", "Still counted as in motion, although the shard does store it: the record is written to disk in three Availability Zones and kept for 24 hours. That storage is a waiting room for consumers, not a place you run queries."],
+    ["Read by Lambda", "sLambda", true, "under a second", "Lambda is handed small batches from each shard about once a second. It reacts and keeps nothing. This is the real-time branch."],
+    ["Waiting in Firehose", "sFire", true, "up to 5 minutes", "Firehose reads the same stream and holds records until the buffer reaches 5 MB or 300 seconds. This pause is where a stream turns into batches."],
+    ["A file in raw/", "sRaw", false, "about 5 minutes", "The batch is now one object in S3. It stays until a lifecycle rule moves or deletes it, and it can be read any number of times."],
+    ["A file in curated/", "sCur", false, "up to an hour", "An hourly Glue job reads the raw files and writes new Parquet files into that day's partition folder. The raw copy stays where it is."],
+    ["A row in a catalog table", "sGlue", false, "unchanged", "The data has not moved. The crawler only recorded a description: the table <code>clicks</code>, its columns, its S3 location and its partitions."],
+    ["Scanned by Athena", "sAthena", false, "unchanged", "Athena reads the files where they lie and loads nothing. The only new data is the query result, saved as a small file in another S3 bucket."],
+    ["On a QuickSight chart", "sQS", false, "an hour or more", "QuickSight either asks Athena each time, or keeps its own copy in SPICE and refreshes it on a schedule. Either way, the chart shows the past, not this second."]
+  ];
+  stages.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.textContent = s[0];
+    b.onclick = () => {
+      [...$("tBtns").children].forEach((x, j) => x.classList.toggle("on", j === i));
+      $("tMsg").innerHTML = `<span class="state ${s[2] ? "move" : "rest"}">${s[2] ? "In motion" : "At rest"}</span> <b>Age of the event: ${s[3]}.</b> ${s[4]}`;
+      svg.classList.add("lit");
+      svg.querySelectorAll(".tool").forEach(g => g.classList.toggle("on", g.id === s[1]));
+    };
+    $("tBtns").appendChild(b);
+  });
+
+  // ---- Athena scan cost: partitions cut days, Parquet cuts size and columns ----
+  const DAYS = 365, TOTAL_GB = 10 * DAYS, COLS = 20, PARQUET = 0.25, USD_PER_TB = 5, RUNS_PER_MONTH = 50 * 30;
+  const pick = { fmt: "json", part: 0, days: 1, cols: 2 };
+  const opts = [
+    ["fmt", "File format", [["json", "JSON text"], ["parquet", "Parquet"]]],
+    ["part", "Folders", [[0, "One big folder"], [1, "Partitioned by day"]]],
+    ["days", "Query asks for", [[1, "1 day"], [30, "30 days"], [365, "The whole year"]]],
+    ["cols", "Columns read", [[2, "2 of 20"], [20, "All 20 (SELECT *)"]]]
+  ];
+  const size = gb => gb >= 1000 ? (gb / 1000).toFixed(2) + " TB" : gb >= 10 ? Math.round(gb) + " GB" : gb >= 1 ? gb.toFixed(1) + " GB" : Math.round(gb * 1000) + " MB";
+  const money = v => v >= 100 ? "$" + Math.round(v).toLocaleString("en-US") : v >= 0.01 ? "$" + v.toFixed(2) : "under 1¢";
+  function paintScan() {
+    opts.forEach(([key, , choices], r) => [...$("scanOpts").children[r].querySelectorAll("button")].forEach((b, j) => b.classList.toggle("on", choices[j][0] === pick[key])));
+    const { fmt, part, days, cols } = pick;
+    const where = days === 1 ? "\nWHERE day = '2026-10-02'" : days === 30 ? "\nWHERE day BETWEEN '2026-09-03' AND '2026-10-02'" : "";
+    $("sql").textContent = cols === 2 ? `SELECT country, count(*)\nFROM clicks${where}\nGROUP BY country` : `SELECT *\nFROM clicks${where}`;
+    const gb = TOTAL_GB * (part ? days / DAYS : 1) * (fmt === "parquet" ? PARQUET * cols / COLS : 1);
+    const cost = gb / 1000 * USD_PER_TB;
+    $("scanGb").textContent = size(gb);
+    $("scanCost").textContent = money(cost);
+    $("scanMonth").textContent = money(cost * RUNS_PER_MONTH) + " a month";
+    $("scanFill").style.width = gb / TOTAL_GB * 100 + "%";
+    const why = [];
+    if (days === DAYS) why.push("The query asks for the whole year, so every day is read" + (part ? "; partitions cannot help here." : "."));
+    else if (part) why.push(`Partition folders let Athena open only ${days === 1 ? "1 folder" : "30 folders"} of 365 and skip the rest.`);
+    else why.push(`With no partitions Athena cannot tell which files hold ${days === 1 ? "that day" : "those 30 days"}, so it reads all 365 days to find them.`);
+    if (fmt === "json") why.push(cols === 2 ? "JSON stores each row whole, so all 20 columns are read to get 2." : "JSON is read in full.");
+    else why.push(cols === 2 ? "Parquet is a quarter of the size and stored by column, so only the 2 columns the query names are read." : "Parquet is a quarter of the size, but <code>SELECT *</code> still reads all 20 columns.");
+    $("scanMsg").innerHTML = `<b>${size(gb)} scanned.</b> ${why.join(" ")}`;
+  }
+  opts.forEach(([key, label, choices]) => {
+    const row = document.createElement("div");
+    row.className = "seg";
+    row.innerHTML = `<b>${label}</b>`;
+    choices.forEach(([value, text]) => {
+      const b = document.createElement("button");
+      b.textContent = text;
+      b.onclick = () => { pick[key] = value; paintScan(); };
+      row.appendChild(b);
+    });
+    $("scanOpts").appendChild(row);
+  });
+  paintScan();
+</script>
+</body>
+</html>
