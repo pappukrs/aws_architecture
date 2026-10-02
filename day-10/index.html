@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 10 — Classic 3-Tier Application</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .toB, #diagram .primX { display: none; }
+  #diagram.failover .toA { display: none; }
+  #diagram.failover .toB, #diagram.failover .primX { display: inline; }
+  #diagram .primIcon, #diagram .repl { transition: opacity .3s; }
+  #diagram.failover .primIcon { opacity: .3; }
+  #diagram.failover .repl { opacity: .2; }
+  ol.timeline li { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-09/index.html">← Day 9</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 10 of 30 · Week 2 — Compute, Load Balancing, High Availability</div>
+    <h1>Classic 3-Tier Application</h1>
+    <p class="lead">This is the most drawn architecture in AWS. The application is split into three layers, each in its own subnets with its own security group: a load balancer in front, application servers in the middle, and a database at the back that survives the loss of a zone.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 800" role="img" aria-label="Three-tier architecture across two Availability Zones: a load balancer in the public subnets, application servers in an Auto Scaling group in private subnets, and an RDS database with a primary in one zone and a standby in the other.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <marker id="arrowI" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--priv)"/>
+          </marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+          <symbol id="rds" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--priv)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5">
+              <ellipse cx="28" cy="17" rx="14" ry="6"/>
+              <path d="M14 17 V39 A14 6 0 0 0 42 39 V17"/>
+              <path d="M14 28 A14 6 0 0 0 42 28"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: network with six subnets -->
+        <g data-step="1">
+          <rect x="430" y="14" width="140" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="45" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="20" y="90" width="960" height="694" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+          <rect x="40" y="128" width="920" height="644" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="190" width="880" height="568" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="500" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+
+          <rect x="80" y="232" width="410" height="420" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+          <rect x="510" y="232" width="410" height="420" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="906" y="254" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+
+          <g stroke-width="2">
+            <rect x="100" y="268" width="370" height="100" rx="6" fill="var(--pub-fill)" stroke="var(--pub)"/>
+            <rect x="530" y="268" width="370" height="100" rx="6" fill="var(--pub-fill)" stroke="var(--pub)"/>
+            <rect x="100" y="390" width="370" height="110" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="530" y="390" width="370" height="110" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="100" y="522" width="370" height="118" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="530" y="522" width="370" height="118" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+          </g>
+          <g font-size="12.5" font-weight="700">
+            <text x="114" y="358" style="fill:var(--pub)">Public A — 10.0.1.0/24</text>
+            <text x="886" y="358" text-anchor="end" style="fill:var(--pub)">Public B — 10.0.3.0/24</text>
+            <text x="114" y="490" style="fill:var(--priv)">App A — 10.0.2.0/24</text>
+            <text x="886" y="490" text-anchor="end" style="fill:var(--priv)">App B — 10.0.4.0/24</text>
+            <text x="114" y="630" style="fill:var(--priv)">Data A — 10.0.5.0/24</text>
+            <text x="886" y="630" text-anchor="end" style="fill:var(--priv)">Data B — 10.0.6.0/24</text>
+          </g>
+          <use href="#nat" x="124" y="284" width="36" height="36"/>
+          <text x="142" y="336" font-size="11" font-weight="600" text-anchor="middle">nat-a</text>
+          <use href="#nat" x="840" y="284" width="36" height="36"/>
+          <text x="858" y="336" font-size="11" font-weight="600" text-anchor="middle">nat-b</text>
+        </g>
+
+        <!-- Step 2: web tier -->
+        <g data-step="2">
+          <rect x="300" y="288" width="400" height="50" rx="10" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="310" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+          <text x="500" y="328" font-size="11.5" text-anchor="middle" style="fill:#fff">web tier · alb-sg</text>
+        </g>
+
+        <!-- Step 3: app tier -->
+        <g data-step="3">
+          <rect x="120" y="404" width="760" height="64" rx="10" fill="none" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+          <rect x="350" y="457" width="300" height="22" rx="5" fill="var(--orange)"/>
+          <text x="500" y="472" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">Auto Scaling group · app tier · app-sg</text>
+          <use href="#ec2" x="190" y="414" width="44" height="44"/><use href="#ec2" x="290" y="414" width="44" height="44"/>
+          <use href="#ec2" x="666" y="414" width="44" height="44"/><use href="#ec2" x="766" y="414" width="44" height="44"/>
+        </g>
+
+        <!-- Step 4: data tier, primary -->
+        <g data-step="4">
+          <use class="primIcon" href="#rds" x="354" y="540" width="52" height="52"/>
+          <text class="primX" x="380" y="578" font-size="34" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text>
+          <text id="pLabel" x="344" y="560" font-size="13.5" font-weight="600" text-anchor="end">RDS primary</text>
+          <text id="pSub" x="344" y="578" font-size="12" text-anchor="end" style="fill:var(--muted)">MySQL · db-sg</text>
+        </g>
+
+        <!-- Step 5: Multi-AZ standby -->
+        <g data-step="5">
+          <use href="#rds" x="594" y="540" width="52" height="52"/>
+          <text id="sLabel" x="656" y="560" font-size="13.5" font-weight="600">RDS standby</text>
+          <text id="sSub" x="656" y="578" font-size="12" style="fill:var(--muted)">same data, no traffic</text>
+          <g class="repl">
+            <line x1="408" y1="566" x2="588" y2="566" stroke="var(--priv)" stroke-width="3" stroke-dasharray="6 4" marker-end="url(#arrowI)"/>
+            <rect x="423" y="555" width="154" height="22" rx="11" fill="var(--priv)"/>
+            <text x="500" y="570" font-size="11" font-weight="700" text-anchor="middle" style="fill:#fff">synchronous replication</text>
+          </g>
+        </g>
+
+        <!-- Step 6: security group chain -->
+        <g data-step="6">
+          <g fill="var(--card)" stroke="var(--bad)" stroke-width="2">
+            <rect x="80" y="676" width="250" height="68" rx="6"/><rect x="375" y="676" width="250" height="68" rx="6"/><rect x="670" y="676" width="250" height="68" rx="6"/>
+          </g>
+          <g font-size="13" font-weight="700">
+            <text x="92" y="698" style="fill:var(--bad)">alb-sg — inbound</text>
+            <text x="387" y="698" style="fill:var(--bad)">app-sg — inbound</text>
+            <text x="682" y="698" style="fill:var(--bad)">db-sg — inbound</text>
+          </g>
+          <text x="92" y="724" font-size="12" class="mono">HTTPS 443   from 0.0.0.0/0</text>
+          <text x="387" y="724" font-size="12" class="mono">HTTP 8080   from alb-sg</text>
+          <text x="682" y="724" font-size="12" class="mono">MySQL 3306  from app-sg</text>
+          <g stroke="var(--bad)" stroke-width="2.5" marker-end="url(#arrowR)">
+            <line x1="333" y1="710" x2="370" y2="710"/><line x1="628" y1="710" x2="665" y2="710"/>
+          </g>
+        </g>
+
+        <!-- Step 7: request path -->
+        <g data-step="7">
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="500" y1="66" x2="500" y2="161"/>
+            <line x1="500" y1="216" x2="500" y2="283"/>
+            <line x1="400" y1="341" x2="268" y2="399"/>
+            <line x1="600" y1="341" x2="732" y2="399"/>
+            <g class="toA"><line x1="300" y1="470" x2="368" y2="535"/><line x1="700" y1="470" x2="396" y2="536"/></g>
+            <g class="toB"><line x1="700" y1="470" x2="632" y2="535"/><line x1="300" y1="470" x2="604" y2="536"/></g>
+          </g>
+          <g font-size="12" font-weight="700">
+            <text x="522" y="256" style="fill:var(--orange)">HTTPS 443</text>
+            <text x="284" y="384" text-anchor="end" style="fill:var(--orange)">HTTP 8080</text>
+            <text class="toA" x="326" y="516" text-anchor="end" style="fill:var(--orange)">MySQL 3306</text>
+            <text class="toB" x="674" y="516" style="fill:var(--orange)">MySQL 3306</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: a request passes through three tiers. The <b>load balancer</b> in the public subnets receives it, an <b>application server</b> in the Auto Scaling group processes it, and the <b>RDS primary</b> stores the data. Every write is copied to a <b>standby</b> in the other zone before it is confirmed. Each tier accepts traffic only from the tier in front of it.</p>
+    <div class="legend">
+      <span style="--c:var(--vpc)">Web tier: load balancer</span>
+      <span style="--c:var(--orange)">App tier: Auto Scaling group, request path</span>
+      <span style="--c:var(--priv)">Data tier: RDS</span>
+      <span style="--c:var(--bad)">Security group chain</span>
+    </div>
+  </div>
+
+  <h2>Database failover</h2>
+  <div class="card">
+    <p>Break the primary database and watch the diagram above: the application's arrows move to the other zone without any change to the application.</p>
+    <div class="seg" id="segFo"><b>State</b>
+      <button data-v="ok" class="on">Normal operation</button>
+      <button data-v="fail">Primary fails (or AZ a is lost)</button>
+    </div>
+    <div class="result" id="foResult"></div>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Why three tiers</h3>
+      <ul>
+        <li><b>Security:</b> the database is two firewalls away from the internet. Breaking into the web tier does not give access to the data.</li>
+        <li><b>Scaling:</b> each tier grows independently. More app servers do not require a bigger database.</li>
+        <li><b>Change:</b> you can replace one tier without touching the others.</li>
+      </ul>
+      <p style="margin-top:10px">A common variant adds web servers as their own Auto Scaling group and a second, internal load balancer in front of the app tier.</p>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Amazon RDS</h3>
+      <p>A managed relational database: MySQL, PostgreSQL, MariaDB, Oracle, SQL Server, or Aurora.</p>
+      <ul>
+        <li>AWS handles installation, patching, backups and failover.</li>
+        <li>You never log in to the server; you connect to an <b>endpoint</b>, a DNS name.</li>
+        <li>You place it using a <b>DB subnet group</b>: a list of subnets in at least two AZs.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Multi-AZ</h3>
+      <p>RDS keeps a second copy of the database, the standby, in another AZ.</p>
+      <ul>
+        <li><b>Synchronous:</b> a write is confirmed only after both copies have it, so failover loses no committed data.</li>
+        <li><b>Automatic failover</b> in about one to two minutes. The endpoint name stays the same.</li>
+        <li>The standby serves <b>no traffic</b>. Multi-AZ is for availability, not for speed. Read scaling is tomorrow.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>The security group chain</h3>
+      <p>Each group's source is the group of the tier in front.</p>
+      <ul>
+        <li><code>alb-sg</code> ← the internet, on 443.</li>
+        <li><code>app-sg</code> ← <code>alb-sg</code>, on 8080.</li>
+        <li><code>db-sg</code> ← <code>app-sg</code>, on 3306.</li>
+      </ul>
+      <p style="margin-top:10px">The load balancer cannot reach the database, and nothing on the internet can reach the app servers. Draw this chain on every 3-tier diagram.</p>
+    </div>
+  </div>
+
+  <h2>The three tiers side by side</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Tier</th><th>Subnets</th><th>What runs there</th><th>Accepts traffic from</th><th>Default route</th></tr>
+      <tr><td><b>Web</b></td><td>Public A, B</td><td>Load balancer, NAT Gateways</td><td>Internet, 443</td><td>Internet Gateway</td></tr>
+      <tr><td><b>App</b></td><td>App A, B (private)</td><td>Auto Scaling group of app servers</td><td><code>alb-sg</code>, 8080</td><td>NAT Gateway of its zone</td></tr>
+      <tr><td><b>Data</b></td><td>Data A, B (private)</td><td>RDS primary and standby</td><td><code>app-sg</code>, 3306</td><td>None: local route only</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">The data subnets have no route to the internet at all, not even through a NAT Gateway. RDS is patched by AWS and never needs to reach out. Subnets like this are often called isolated subnets.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the VPC with two AZs and <b>three rows of subnets</b> in each: public, app, data. Six subnets, six CIDRs.</li>
+      <li>Add the Internet Gateway, and a NAT Gateway in each public subnet.</li>
+      <li><b>Web tier:</b> the load balancer across both public subnets.</li>
+      <li><b>App tier:</b> an Auto Scaling group box across both app subnets, with instances in each.</li>
+      <li><b>Data tier:</b> RDS primary in one data subnet, standby in the other, joined by a dashed arrow labelled “synchronous replication”.</li>
+      <li>Write the three security groups and what each one's source is.</li>
+      <li>Draw the request path top to bottom and label each hop with its port: 443, 8080, 3306.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Note that the app servers in both zones point at the one primary.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Which security group references which?</summary><p><code>app-sg</code> references <code>alb-sg</code> as its source, and <code>db-sg</code> references <code>app-sg</code>. <code>alb-sg</code> references nothing; its source is <code>0.0.0.0/0</code>. Each tier trusts only the tier directly in front of it.</p></details>
+  <details><summary>Can the load balancer connect straight to the database?</summary><p>No. <code>db-sg</code> allows 3306 only from <code>app-sg</code>, and the load balancer carries <code>alb-sg</code>.</p></details>
+  <details><summary>The app servers are slow on read-heavy pages. Can they read from the Multi-AZ standby?</summary><p>No. In this deployment the standby accepts no connections; it exists only to take over. For read scaling you add read replicas, which is tomorrow.</p></details>
+  <details><summary>The primary fails. What must change in the application's configuration?</summary><p>Nothing. The application connects to the RDS endpoint name, and RDS repoints that name to the standby. Open connections break, so the application must retry.</p></details>
+  <details><summary>Why can Multi-AZ fail over without losing committed data?</summary><p>Replication is synchronous: the primary confirms a write only after the standby has stored it too. Anything the application was told is saved exists in both zones.</p></details>
+  <details><summary>Someone runs <code>DELETE FROM orders</code> by mistake. Does the standby save you?</summary><p>No. The delete is replicated to the standby immediately. Multi-AZ protects against infrastructure failure, not against bad data. For that you need backups and point-in-time recovery.</p></details>
+  <details><summary>Why do the data subnets have no NAT route?</summary><p>The database never needs to start a connection to the internet, so there is no reason to give it a path. Removing the route means that even a mistake in a security group cannot expose it outward.</p></details>
+  <details><summary>The whole Mumbai Region becomes unavailable. Does this design survive?</summary><p>No. Multi-AZ covers the loss of a zone, not of a Region. Surviving that needs a copy in another Region, which is disaster recovery on Day 28.</p></details>
+
+  <div class="next">
+    <b>Next — Day 11: Read scaling and caching.</b> The single primary is now the bottleneck. You add RDS read replicas for read-heavy queries and ElastiCache between the application and the database to answer repeated requests from memory.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Network.</b> Two AZs, each with three subnets stacked top to bottom: public, app and data. The Internet Gateway and a NAT Gateway per zone are as before.",
+    "<b>Step 2 — Web tier.</b> The load balancer sits across the two public subnets. It is the only part of the application the internet can reach.",
+    "<b>Step 3 — App tier.</b> An Auto Scaling group spans the two app subnets and runs the application code. The servers have no public IPs.",
+    "<b>Step 4 — Data tier.</b> An RDS database in data subnet A. Application servers in both zones connect to it through one endpoint name.",
+    "<b>Step 5 — Multi-AZ.</b> RDS keeps a standby copy in data subnet B. Every write goes to both before it is confirmed. The standby takes no traffic.",
+    "<b>Step 6 — Security group chain.</b> Each tier accepts traffic only from the security group of the tier in front: internet → <code>alb-sg</code> → <code>app-sg</code> → <code>db-sg</code>.",
+    "<b>Step 7 — Request path.</b> Users → Internet Gateway → load balancer (443) → an app server in either zone (8080) → the RDS primary (3306)."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const svg = document.getElementById("diagram");
+  const set = (id, t) => document.getElementById(id).textContent = t;
+  function failover(on) {
+    svg.classList.toggle("failover", on);
+    set("pLabel", on ? "Failed" : "RDS primary");
+    set("pSub", on ? "being rebuilt as standby" : "MySQL · db-sg");
+    set("sLabel", on ? "New primary" : "RDS standby");
+    set("sSub", on ? "takes all traffic" : "same data, no traffic");
+    document.getElementById("foResult").innerHTML = on
+      ? `<b>Failover, about one to two minutes:</b>
+         <ol class="timeline">
+           <li>RDS detects that the primary is not responding.</li>
+           <li>It promotes the standby in AZ b to primary. No committed data is lost, because every write was already there.</li>
+           <li>It repoints the endpoint DNS name to the new primary.</li>
+           <li>Application servers in <b>both</b> zones reconnect to the same endpoint name and continue. Their open connections were dropped, so they must retry.</li>
+           <li>Afterwards RDS builds a fresh standby, so the database is protected again.</li>
+         </ol>`
+      : `<b>Normal.</b> All application servers, in both zones, read and write to the primary in AZ a. Every write is copied synchronously to the standby in AZ b, which serves no traffic.`;
+  }
+  const seg = document.getElementById("segFo");
+  seg.querySelectorAll("button").forEach(b => b.onclick = () => {
+    seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    failover(b.dataset.v === "fail");
+  });
+  failover(false);
+</script>
+</body>
+</html>
