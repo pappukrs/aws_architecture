@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 28 — Disaster Recovery</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .off { display: none; }
+  #diagram #mum { transition: opacity .25s; }
+  #diagram #mum.down { opacity: .22; }
+  #diagram .ghost { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 4; opacity: .75; }
+  #diagram .idle { opacity: .22; }
+  .dr .seg b { min-width: 104px; }
+  .dr.need .seg b { min-width: 150px; }
+  .dr .seg.unused { opacity: .45; }
+  .tline { position: relative; height: 18px; margin: 22px 0 6px; border-radius: 6px; background: var(--border); }
+  .tline i { position: absolute; top: 0; bottom: 0; min-width: 3px; transition: width .3s; }
+  .tline .lost { right: 25%; background: var(--bad); border-radius: 6px 0 0 6px; }
+  .tline .down { left: 75%; background: var(--orange); border-radius: 0 6px 6px 0; }
+  .tline u { position: absolute; left: 75%; top: -6px; bottom: -6px; width: 2px; margin-left: -1px; background: var(--text); }
+  .tline.calm i { display: none; }
+  .tkey { display: grid; grid-template-columns: 75% 25%; font-size: 13px; font-weight: 700; }
+  .tkey span:first-child { text-align: right; padding-right: 10px; color: var(--bad); }
+  .tkey span:last-child { padding-left: 10px; color: var(--orange); }
+  .dr .note { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+  .result ol { margin-top: 6px; }
+  tr.miss td { opacity: .45; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-27/index.html">← Day 27</a><a href="../README.md">30-day plan</a><a href="../day-29/index.html">Day 29 →</a></nav>
+  <header>
+    <div class="tag">Day 28 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Disaster Recovery</h1>
+    <p class="lead">The application from Day 14 survives a failed server and a failed Availability Zone. It does not survive the loss of the whole Region. Disaster recovery (DR) is the plan for that day. Two questions shape the plan: how much data can you afford to lose, and how long can you afford to be offline? Today you draw two Regions four times, from the cheapest plan to the fastest.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card dr" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="seg" id="segStrat"><b>DR Region</b></div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 592" role="img" aria-label="Users and Route 53 sit above two Regions. Left: the primary Region, Mumbai, with a load balancer, an Auto Scaling group of four servers, a database, an S3 bucket and a backup vault. Right: the recovery Region, Singapore, drawn four ways. Backup and restore: only copies of backups and of the bucket. Pilot light: also a live database replica, with the servers switched off. Warm standby: also one server running. Multi-site active-active: a full copy that serves users, with data replicated both ways.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--vpc)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/><line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/><line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="rds" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--priv)"/><g fill="none" stroke="#fff" stroke-width="2.5"><ellipse cx="28" cy="17" rx="14" ry="6"/><path d="M14 17 V39 A14 6 0 0 0 42 39 V17"/><path d="M14 28 A14 6 0 0 0 42 28"/></g></symbol>
+          <symbol id="ddb" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--priv)"/><g fill="none" stroke="#fff" stroke-width="2.5"><rect x="13" y="14" width="30" height="28" rx="3"/><line x1="13" y1="24" x2="43" y2="24"/><line x1="13" y1="33" x2="43" y2="33"/><line x1="25" y1="14" x2="25" y2="42"/></g></symbol>
+          <symbol id="s3" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g></symbol>
+          <symbol id="bak" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--az)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 29 A13 13 0 1 1 28 42"/><path d="M10 24 L15 30 L21 25"/><path d="M28 22 V29 L33 32"/></g></symbol>
+        </defs>
+
+        <rect x="20" y="68" width="960" height="510" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="90" font-size="15" font-weight="700">AWS Cloud</text>
+
+        <!-- Step 1: the primary Region -->
+        <g data-step="1" id="mum">
+          <rect x="40" y="156" width="400" height="406" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="178" font-size="13" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <text id="subM" x="54" y="194" font-size="11" style="fill:var(--muted)">primary: serves all users</text>
+          <rect x="54" y="204" width="372" height="232" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="66" y="222" font-size="12" font-weight="700" style="fill:var(--vpc)">VPC 10.0.0.0/16 · 2 AZs, as on Day 14</text>
+          <rect x="70" y="232" width="340" height="32" rx="8" fill="var(--vpc)"/>
+          <text x="240" y="253" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+          <rect x="70" y="280" width="340" height="70" rx="10" fill="none" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+          <use href="#ec2" x="95" y="288" width="34" height="34"/><use href="#ec2" x="175" y="288" width="34" height="34"/><use href="#ec2" x="255" y="288" width="34" height="34"/><use href="#ec2" x="335" y="288" width="34" height="34"/>
+          <rect x="130" y="340" width="220" height="20" rx="5" fill="var(--orange)"/>
+          <text x="240" y="354" font-size="11" font-weight="700" text-anchor="middle" style="fill:#fff">Auto Scaling group · 4 servers</text>
+          <g data-on="b0 p0 w0 b1 p1 w1">
+            <use href="#rds" x="366" y="376" width="44" height="44"/>
+            <text x="356" y="394" font-size="12.5" font-weight="700" text-anchor="end">RDS primary</text>
+            <text x="356" y="412" font-size="11" text-anchor="end" style="fill:var(--muted)">Multi-AZ: standby in a second AZ</text>
+          </g>
+          <g data-on="a0 a1">
+            <use href="#ddb" x="366" y="376" width="44" height="44"/>
+            <text x="356" y="394" font-size="12.5" font-weight="700" text-anchor="end">DynamoDB global table</text>
+            <text x="356" y="412" font-size="11" text-anchor="end" style="fill:var(--muted)">takes reads and writes</text>
+          </g>
+          <use href="#s3" x="368" y="450" width="40" height="40"/>
+          <text x="356" y="467" font-size="12.5" font-weight="700" text-anchor="end">S3 bucket</text>
+          <text x="356" y="484" font-size="11" text-anchor="end" style="fill:var(--muted)">user uploads · versioning on</text>
+          <use href="#bak" x="368" y="504" width="40" height="40"/>
+          <text x="356" y="521" font-size="12.5" font-weight="700" text-anchor="end">AWS Backup vault</text>
+          <text x="356" y="538" font-size="11" text-anchor="end" style="fill:var(--muted)">database snapshots and server images</text>
+        </g>
+
+        <!-- Step 2: users and Route 53 -->
+        <g data-step="2">
+          <rect x="420" y="6" width="160" height="36" rx="18" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="29" font-size="14" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="360" y="84" width="280" height="56" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="500" y="107" font-size="13.5" font-weight="700" text-anchor="middle" style="fill:var(--vpc)">Route 53 · app.example.com</text>
+          <text id="r53" x="500" y="126" font-size="11" text-anchor="middle" style="fill:var(--muted)">one record → Mumbai load balancer</text>
+          <line x1="500" y1="46" x2="500" y2="80" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-start="url(#arrowD)" marker-end="url(#arrowD)"/>
+          <text x="510" y="62" font-size="11.5" font-weight="700" style="fill:var(--dc)">1 · DNS</text>
+          <g data-on="b0 p0 w0 a0">
+            <polyline points="420,24 330,24 330,228" fill="none" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="322" y="54" font-size="11.5" font-weight="700" text-anchor="end" style="fill:var(--orange)">2 · requests</text>
+            <line x1="385" y1="142" x2="397" y2="227" stroke="var(--vpc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowP)"/>
+          </g>
+        </g>
+
+        <!-- Step 3: the second Region, still empty -->
+        <g data-step="3">
+          <rect x="560" y="156" width="400" height="406" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="946" y="178" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--region)">Region — ap-southeast-1 (Singapore)</text>
+        </g>
+
+        <!-- Steps 4 to 7: what is in the second Region. data-on lists the states that show a part:
+             b/p/w/a = strategy, 0 = normal, 1 = after failover, f = after failover with any strategy -->
+        <g data-step="4">
+          <text id="subS" x="946" y="194" font-size="11" text-anchor="end" style="fill:var(--muted)">DR Region: only copies of data</text>
+
+          <!-- network and load balancer -->
+          <g data-on="b0">
+            <rect class="ghost" x="574" y="204" width="372" height="232" rx="8"/>
+            <text x="934" y="222" font-size="12" font-weight="700" text-anchor="end" style="fill:var(--muted)">VPC 10.1.0.0/16 · not created yet</text>
+            <rect class="ghost" x="590" y="232" width="340" height="32" rx="8"/>
+            <text x="760" y="252" font-size="11" text-anchor="middle" style="fill:var(--muted)">load balancer: not created yet</text>
+            <rect class="ghost" x="590" y="280" width="340" height="70" rx="10"/>
+            <g class="ghost"><rect x="615" y="286" width="34" height="34" rx="5"/><rect x="695" y="286" width="34" height="34" rx="5"/><rect x="775" y="286" width="34" height="34" rx="5"/><rect x="855" y="286" width="34" height="34" rx="5"/></g>
+            <text x="760" y="340" font-size="11" text-anchor="middle" style="fill:var(--muted)">no servers: built from templates after a disaster</text>
+            <rect class="ghost" x="590" y="376" width="44" height="44" rx="6"/>
+            <text x="644" y="394" font-size="12.5" font-weight="700" style="fill:var(--muted)">No database running</text>
+            <text x="644" y="412" font-size="11" style="fill:var(--muted)">restored from a snapshot after a disaster</text>
+          </g>
+          <g data-on="p0 w0 a0 f">
+            <rect x="574" y="204" width="372" height="232" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+            <text x="934" y="222" font-size="12" font-weight="700" text-anchor="end" style="fill:var(--vpc)">VPC 10.1.0.0/16</text>
+            <rect x="590" y="232" width="340" height="32" rx="8" fill="var(--vpc)"/>
+            <text x="760" y="253" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+            <rect x="590" y="280" width="340" height="70" rx="10" fill="none" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+            <rect x="635" y="340" width="250" height="20" rx="5" fill="var(--orange)"/>
+          </g>
+
+          <!-- servers: switched off (pale) or running -->
+          <use class="idle" data-on="p0" href="#ec2" x="615" y="288" width="34" height="34"/>
+          <g class="idle" data-on="p0 w0"><use href="#ec2" x="695" y="288" width="34" height="34"/><use href="#ec2" x="775" y="288" width="34" height="34"/><use href="#ec2" x="855" y="288" width="34" height="34"/></g>
+          <use data-on="w0 a0 f" href="#ec2" x="615" y="288" width="34" height="34"/>
+          <g data-on="a0 f"><use href="#ec2" x="695" y="288" width="34" height="34"/><use href="#ec2" x="775" y="288" width="34" height="34"/><use href="#ec2" x="855" y="288" width="34" height="34"/></g>
+          <g font-size="11" font-weight="700" text-anchor="middle">
+            <text data-on="p0" x="760" y="354" style="fill:#fff">Auto Scaling group · 0 of 4 running</text>
+            <text data-on="w0" x="760" y="354" style="fill:#fff">Auto Scaling group · 1 of 4 running</text>
+            <text data-on="a0 f" x="760" y="354" style="fill:#fff">Auto Scaling group · 4 servers</text>
+          </g>
+
+          <!-- database -->
+          <g data-on="p0 w0">
+            <use href="#rds" x="590" y="376" width="44" height="44"/>
+            <text x="644" y="394" font-size="12.5" font-weight="700">RDS read replica</text>
+            <text x="644" y="412" font-size="11" style="fill:var(--muted)">live copy · read-only until promoted</text>
+          </g>
+          <g data-on="a0 a1">
+            <use href="#ddb" x="590" y="376" width="44" height="44"/>
+            <text x="644" y="394" font-size="12.5" font-weight="700">DynamoDB global table</text>
+            <text x="644" y="412" font-size="11" style="fill:var(--muted)">takes reads and writes here too</text>
+          </g>
+          <g data-on="b1">
+            <use href="#rds" x="590" y="376" width="44" height="44"/>
+            <text x="644" y="394" font-size="12.5" font-weight="700">RDS primary</text>
+            <text x="644" y="412" font-size="11" style="fill:var(--muted)">restored from the newest backup copy</text>
+          </g>
+          <g data-on="p1 w1">
+            <use href="#rds" x="590" y="376" width="44" height="44"/>
+            <text x="644" y="394" font-size="12.5" font-weight="700">RDS primary</text>
+            <text x="644" y="412" font-size="11" style="fill:var(--muted)">the replica, promoted: it takes writes now</text>
+          </g>
+
+          <!-- copies that exist in every strategy -->
+          <use href="#s3" x="592" y="450" width="40" height="40"/>
+          <text x="644" y="467" font-size="12.5" font-weight="700">S3 bucket</text>
+          <text x="644" y="484" font-size="11" style="fill:var(--muted)">a copy of the uploads</text>
+          <use href="#bak" x="592" y="504" width="40" height="40"/>
+          <text x="644" y="521" font-size="12.5" font-weight="700">AWS Backup vault</text>
+          <text x="644" y="538" font-size="11" style="fill:var(--muted)">copies of the snapshots and images</text>
+
+          <!-- data crossing between Regions -->
+          <g stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4">
+            <line data-on="p0 w0" x1="414" y1="398" x2="585" y2="398" marker-end="url(#arrowD)"/>
+            <line data-on="a0" x1="416" y1="398" x2="585" y2="398" marker-start="url(#arrowD)" marker-end="url(#arrowD)"/>
+            <line data-on="b0 p0 w0" x1="412" y1="470" x2="587" y2="470" marker-end="url(#arrowD)"/>
+            <line data-on="a0" x1="414" y1="470" x2="587" y2="470" marker-start="url(#arrowD)" marker-end="url(#arrowD)"/>
+            <line data-on="b0 p0 w0 a0" x1="412" y1="524" x2="587" y2="524" marker-end="url(#arrowD)"/>
+          </g>
+          <g font-size="10.5" font-weight="700" text-anchor="middle">
+            <text data-on="p0 w0" x="500" y="390" style="fill:var(--dc)">async replication</text>
+            <text data-on="a0" x="500" y="390" style="fill:var(--dc)">replication, 2 ways</text>
+            <text data-on="b0 p0 w0" x="500" y="462" style="fill:var(--dc)">S3 replication</text>
+            <text data-on="a0" x="500" y="462" style="fill:var(--dc)">replication, 2 ways</text>
+            <text data-on="b0 p0 w0 a0" x="500" y="516" style="fill:var(--dc)">backup copies</text>
+          </g>
+
+          <!-- Route 53 record for Singapore, and requests that reach it -->
+          <line data-on="p0 w0 a0 f" x1="615" y1="142" x2="603" y2="227" stroke="var(--vpc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowP)"/>
+          <g data-on="a0 f">
+            <polyline points="580,24 670,24 670,228" fill="none" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="678" y="54" font-size="11.5" font-weight="700" style="fill:var(--orange)">2 · requests</text>
+          </g>
+          <g data-on="f">
+            <rect x="130" y="296" width="220" height="40" rx="8" fill="var(--bad)"/>
+            <text x="240" y="322" font-size="17" font-weight="700" text-anchor="middle" style="fill:#fff">REGION DOWN</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the application runs in <b>Mumbai</b>, the primary Region. <b>Singapore</b> is the recovery Region, far enough away that one disaster cannot hit both. The left side stays the same, except for the database in drawing 4. The right side is drawn four ways: press <b>1</b> to <b>4</b> above the drawing and watch what is already there before anything fails. Solid arrows are requests. Dashed arrows are copies of data crossing between the Regions.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Requests (solid) · servers</span>
+      <span style="--c:var(--dc)">Replication and backup copies (dashed)</span>
+      <span style="--c:var(--vpc)">Route 53 records · load balancer · VPC</span>
+      <span style="--c:var(--priv)">Database</span>
+      <span style="--c:var(--pub)">S3</span>
+      <span style="--c:var(--az)">Backups</span>
+      <span style="--c:var(--region)">Region</span>
+    </div>
+  </div>
+
+  <h2>Mumbai goes dark at 14:00</h2>
+  <div class="card dr">
+    <p>A normal working day. At 14:00 the whole Mumbai Region stops answering. Choose a strategy. Say how much data will be gone and how long users will wait. Then fail the Region. The diagram above follows you.</p>
+    <div class="seg" id="simStrat"><b>Strategy</b></div>
+    <div class="seg" id="simEvery"><b>Backups run</b>
+      <button data-v="24">every 24 hours</button>
+      <button data-v="6">every 6 hours</button>
+      <button data-v="1">every hour</button>
+    </div>
+    <div class="seg" id="simState"><b>Mumbai</b>
+      <button data-v="0">Healthy</button>
+      <button data-v="1">Region fails</button>
+    </div>
+    <div class="calc" style="margin-top:16px">
+      <div><div class="lbl">Data lost</div><div class="big" id="oLost"></div></div>
+      <div><div class="lbl">Time offline</div><div class="big" id="oDown"></div></div>
+      <div><div class="lbl">DR Region, every month</div><div class="big" id="oCost"></div></div>
+    </div>
+    <div class="tline calm" id="tline" aria-hidden="true"><i class="lost" id="tLost"></i><i class="down" id="tDown"></i><u></u></div>
+    <div class="tkey" aria-hidden="true"><span>◀ data lost</span><span>offline ▶</span></div>
+    <p class="note">The vertical line is 14:00. To its left are the 24 hours before the failure, to its right the 8 hours after it, on the same scale.</p>
+    <div class="result" id="simMsg"></div>
+    <p class="note">Illustrative numbers. The Mumbai side costs $10,000 a month. How often backups run changes the result only for backup and restore. Real recovery times depend on how much data there is, how much is automated and how fast people decide.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>RPO and RTO</h3>
+      <ul>
+        <li><b>RPO</b>, recovery point objective: how much data you may lose, measured as time. “RPO 1 hour” means that after recovery, at most the last hour of data is missing. It looks <b>back</b> from the disaster.</li>
+        <li><b>RTO</b>, recovery time objective: how long the service may be offline. It looks <b>forward</b> from the disaster.</li>
+        <li>The business sets both numbers. The architect finds the cheapest design that meets them.</li>
+        <li>RPO depends on how the data is copied. RTO depends on how much is already running.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Getting the data across</h3>
+      <ul>
+        <li><b>Backups</b> are copies made on a schedule. AWS Backup can copy each one to a vault in another Region. The RPO is the time between two backups.</li>
+        <li><b>Replication</b> sends every change as it happens: an RDS cross-Region read replica, S3 Cross-Region Replication (it needs versioning on both buckets), a DynamoDB global table.</li>
+        <li>Between Regions, replication is normally <b>asynchronous</b>: the copy is a little behind, usually by seconds for a database. S3 replication usually takes minutes, and has no time limit unless you turn on Replication Time Control. That delay is the RPO.</li>
+        <li>The Multi-AZ standby from Day 10 is in the same Region. It is no help when the Region is lost.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Failing over</h3>
+      <p>To <b>fail over</b> is to move the users to the other Region. Three things must be true first.</p>
+      <ul>
+        <li><b>The data accepts writes.</b> A read replica must be <b>promoted</b>, which turns it into a normal database of its own.</li>
+        <li><b>There are enough servers.</b> Switched on, or scaled up.</li>
+        <li><b>The traffic moves.</b> Route 53 failover routing with a health check does this (Day 13). Keep the TTL short.</li>
+      </ul>
+      <p style="margin:10px 0 0">Going back later is <b>failback</b>. Data written in Singapore during the outage must be copied back to Mumbai first.</p>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>What makes it work on the day</h3>
+      <ul>
+        <li><b>Infrastructure as code:</b> a template file (CloudFormation or Terraform) that describes the VPC, load balancer and servers, so the same setup can be created in the second Region without relying on memory.</li>
+        <li><b>Everything the servers need to start</b> must be in the second Region too: server images (AMIs), secrets, encryption keys. Each of these belongs to one Region, so it must be copied or created again in the other.</li>
+        <li><b>Service quotas</b> are per Region. Check that Singapore allows as many servers as Mumbai uses.</li>
+        <li><b>Practice.</b> Run a real failover on a planned day. A plan that was never tested usually fails.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>The four strategies, ranked</h2>
+  <div class="card dr need">
+    <p>Read down the table: more is already running, recovery is faster, and the bill is higher. Then set the two targets the business gives you. The cheapest row that meets both is marked.</p>
+    <div class="seg" id="needRto"><b>Offline for at most</b>
+      <button data-v="1440">24 hours</button>
+      <button data-v="60">1 hour</button>
+      <button data-v="10">10 minutes</button>
+      <button data-v="2">almost no time</button>
+    </div>
+    <div class="seg" id="needRpo"><b>Lose at most</b>
+      <button data-v="1440">24 hours of data</button>
+      <button data-v="60">1 hour of data</button>
+      <button data-v="0.5">a few seconds of data</button>
+    </div>
+    <div class="table-wrap">
+      <table id="rank">
+        <tr><th>Strategy</th><th>In the DR Region before the disaster</th><th>Data lost (RPO)</th><th>Time offline (RTO)</th><th>Cost</th></tr>
+        <tr><td><b>1 · Backup and restore</b></td><td>Copies of backups. Nothing is running.</td><td>Hours: everything since the last backup</td><td>Hours, often many</td><td>Lowest: storage only</td></tr>
+        <tr><td><b>2 · Pilot light</b></td><td>A live copy of the data. Servers switched off.</td><td>Seconds to minutes</td><td>Tens of minutes</td><td>Low: plus a database copy and an idle load balancer</td></tr>
+        <tr><td><b>3 · Warm standby</b></td><td>A small working copy of the whole application.</td><td>Seconds to minutes</td><td>Minutes</td><td>Medium: plus servers that are always on</td></tr>
+        <tr><td><b>4 · Multi-site active-active</b></td><td>A full copy that serves users all the time.</td><td>Near zero</td><td>Near zero</td><td>Highest: everything twice</td></tr>
+      </table>
+    </div>
+    <p class="result" id="needMsg"></p>
+    <p class="note">The first three are <b>active-passive</b>: one Region serves users and the other waits. Only the fourth is active-active. A warm standby kept at full size is called a hot standby.</p>
+  </div>
+
+  <h2>Three things that are not the same</h2>
+  <div class="card">
+    <ul>
+      <li><b>High availability</b> keeps the application running through small failures: a server, an Availability Zone. Multi-AZ and Auto Scaling do it automatically, inside one Region.</li>
+      <li><b>Disaster recovery</b> brings the application back after a large failure, such as the loss of a Region. It needs a second Region and a plan.</li>
+      <li><b>Backup</b> lets you go back in time. If someone deletes a table, replication copies the deletion to Singapore within seconds. Only a backup from before the mistake brings the data back. So every one of the four strategies still keeps backups.</li>
+    </ul>
+    <p style="margin-top:10px"><b>Choosing the second Region:</b> far enough away that one flood, earthquake or power failure cannot reach both. Check that it offers the services you use. Check the law too: if the data must stay in India, Hyderabad (ap-south-2) is the second Region inside the country.</p>
+    <p style="margin-top:10px">Names you will meet around this drawing: <b>AWS Elastic Disaster Recovery</b> copies whole servers continuously to a low-cost staging area in the second Region and starts them when needed, a ready-made pilot light. <b>Aurora Global Database</b> is a relational database that replicates to other Regions, usually less than a second behind. <b>Global Accelerator</b> can move traffic between Regions without waiting for DNS answers to expire.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw <b>users</b> and <b>Route 53</b> at the top, outside every Region.</li>
+      <li>Draw two Region boxes side by side: <b>Mumbai</b> and <b>Singapore</b>. Give each a VPC with a different range, <code>10.0.0.0/16</code> and <code>10.1.0.0/16</code>.</li>
+      <li>Fill Mumbai: load balancer, Auto Scaling group with four servers, RDS primary, S3 bucket, backup vault. A solid arrow from the users to the load balancer.</li>
+      <li>Copy this frame four times. On each copy, only the Singapore side changes.</li>
+      <li><b>Backup and restore:</b> in Singapore, only a backup vault and a bucket, with dashed arrows from Mumbai. Draw the rest as empty dashed outlines and write “not created yet”.</li>
+      <li><b>Pilot light:</b> add an RDS read replica with a dashed arrow from the primary. Draw the load balancer and the Auto Scaling group, and write “0 of 4 running”.</li>
+      <li><b>Warm standby:</b> the same, with one server running. Write “1 of 4 running”.</li>
+      <li><b>Multi-site active-active:</b> four servers on both sides, a solid arrow from the users to both load balancers, and dashed arrows with two heads between the databases. This is the one drawing where Mumbai changes too: write “DynamoDB global table” on the database on both sides.</li>
+      <li>Under each drawing write three things: data lost, time offline, cost.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw all four from memory. If the frame is right, each new drawing is only a few more boxes filled in.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Rank the four strategies by RTO/RPO and cost.</summary><p>From slowest and cheapest to fastest and most expensive: backup and restore (hours of downtime, hours of data lost, storage cost only), pilot light (tens of minutes; seconds to minutes of data), warm standby (minutes), multi-site active-active (near zero for both, about double the cost). The order is the same for all three measures: the more that is already running in the second Region, the faster the recovery and the higher the bill.</p></details>
+  <details><summary>RPO and RTO: what does each one measure?</summary><p>RPO is how much data you may lose, measured as time looking back from the disaster. RTO is how long the service may be offline, looking forward from the disaster. They are separate: a design can lose almost no data and still take hours to come back.</p></details>
+  <details><summary>Pilot light and warm standby both keep a live copy of the data. What is the difference?</summary><p>Whether the second Region can serve a request right now. In pilot light the servers are switched off, so nothing works until you start them. In warm standby a small copy of the whole application is running, so it can take traffic at once and then scale up.</p></details>
+  <details><summary>The database is Multi-AZ. Is that a disaster recovery plan?</summary><p>No. The standby is in another Availability Zone of the same Region. It covers the loss of a zone, which is high availability. When the Region is lost, the primary and the standby are lost together.</p></details>
+  <details><summary>Backups run every 24 hours and are copied to Singapore. What is the RPO, and how do you make it smaller without changing strategy?</summary><p>Up to 24 hours: everything written since the last backup. Run the backups more often and the RPO shrinks to that interval. The RTO does not change, because you still have to rebuild everything and restore the database.</p></details>
+  <details><summary>At 10:00 someone deletes the orders table by mistake. There is a read replica in Singapore. Does it save you?</summary><p>No. Replication copies the deletion within seconds, so both Regions now have no orders table. You need a backup from before 10:00, or point-in-time recovery. This is why every strategy keeps backups as well.</p></details>
+  <details><summary>The business says: offline for at most one hour, lose at most a few seconds of data, and keep the bill as low as possible. Which strategy?</summary><p>Pilot light. A few seconds of data loss needs continuous replication, which rules out backup and restore. One hour is enough time to promote the replica and start the servers, so there is no reason to pay for servers that run all year.</p></details>
+  <details><summary>In active-active, why is an RDS primary in Mumbai with a read replica in Singapore not enough?</summary><p>Only the primary accepts writes. Users served from Singapore would have to send every write to Mumbai, and if Mumbai fails nobody can write until the replica is promoted. Active-active needs data that both Regions can write to, such as a DynamoDB global table.</p></details>
+  <details><summary>The DR plan was written two years ago and has never been run. What is likely to go wrong?</summary><p>The templates no longer match what runs in Mumbai, the copied server images are old, the quotas in Singapore are too low, a secret or an encryption key was never copied, and nobody remembers the steps. Only a practice failover finds these before a real disaster does.</p></details>
+  <details><summary>You failed over to Singapore. A day later Mumbai is healthy again. Can you simply switch the users back?</summary><p>Not yet. Singapore has taken a day of writes that Mumbai does not have. First replicate that data back to Mumbai, then move the users at a quiet time, and set up the replication towards Singapore again.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-29/index.html">Day 29: Multi-account setup</a>.</b> One AWS account is not enough for a company. You draw AWS Organizations with its organizational units, service control policies and Control Tower, and you give security, logging and each workload an account of its own.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The primary Region.</b> The application from Day 14 in Mumbai, drawn small: a load balancer, an Auto Scaling group with four servers, a database, an S3 bucket and a backup vault. It survives the loss of an Availability Zone. It does not survive the loss of the Region.",
+    "<b>Step 2 — Users and Route 53.</b> Route 53 is global, so it sits outside every Region. It answers the DNS lookup (1), and the requests go straight to the Mumbai load balancer (2). Moving the users to another Region will mean changing this answer.",
+    "<b>Step 3 — A second Region.</b> Draw Singapore beside Mumbai. It is empty for now. What you put in it, and how much of it is running, is the disaster recovery strategy. There are four.",
+    "<b>Step 4 — Backup and restore.</b> Only copies of data cross over: backups and server images go to a vault in Singapore, and S3 replicates the uploads. Nothing runs there. After a disaster you build everything from templates and restore the database. The cheapest and the slowest, and you lose everything since the last backup.",
+    "<b>Step 5 — Pilot light.</b> The database now has a live read replica in Singapore, so the data is only seconds behind. The network, the load balancer and the Auto Scaling group exist, but no server is running. Nothing can answer a request until you switch the servers on.",
+    "<b>Step 6 — Warm standby.</b> The same, with one server running. Singapore is now a small, complete, working copy of the application. It can take traffic at once, slowly, while Auto Scaling grows it to full size.",
+    "<b>Step 7 — Multi-site active-active.</b> Both Regions run at full size and both serve users all the time. Route 53 latency routing sends each user to the Region that answers fastest. Both must accept writes, so the database becomes a DynamoDB global table that replicates in two directions. If one Region fails, the other is already working."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  const MAX = window.CAPTIONS.length - 1, FIRST = 4;   // steps 4 to 7 are the four strategies
+  const NEAREST = "active: serves the users nearest to it";
+  const FULL = $("caption").innerHTML;
+  const AFTER = "<b>After the move to Singapore (the failover).</b> Mumbai is not answering, so nothing is replicated any more. Singapore now runs at full size and takes every request. All four strategies end in this same picture. They differ in how long it took to get here, and in how much data is missing.";
+
+  // steps: [what has to happen, minutes it adds to the time offline]. All times are illustrative.
+  const S = [
+    { k: "b", name: "Backup and restore", cost: 500, sub: "DR Region: only copies of data",
+      r53: ["one record → Mumbai load balancer", "record changed → Singapore load balancer"],
+      calm: "Singapore holds copies of the backups and of the uploads, and nothing else. You pay only for that storage.",
+      steps: [["People confirm that the Region is down and decide to move to Singapore.", 30],
+              ["Build the VPC, the load balancer and the Auto Scaling group from templates.", 30],
+              ["Restore the database from the newest snapshot copy.", 180],
+              ["Start servers from the copied images and test the site.", 45],
+              ["Point the Route 53 record at the new load balancer.", 5]],
+      after: "Everything written since the last backup is gone for good." },
+    { k: "p", name: "Pilot light", cost: 2000, sub: "DR Region: data live, servers off",
+      r53: ["failover routing · health check on Mumbai", "health check failed → answers Singapore"],
+      calm: "Singapore has a live copy of the database and of the uploads. The servers are switched off. You pay for the database copy, the storage and an idle load balancer.",
+      steps: [["The health check fails and Route 53 answers with Singapore, where no server is running yet. People decide to start it.", 15],
+              ["Promote the read replica, so that it accepts writes.", 10],
+              ["Raise the Auto Scaling group from 0 to 4. The servers start and pass their health checks.", 10],
+              ["The site is tested. The last cached DNS answers expire.", 5]],
+      after: "Only the changes that had not reached the replica yet are lost." },
+    { k: "w", name: "Warm standby", cost: 4000, sub: "DR Region: a small copy, running",
+      r53: ["failover routing · health check on Mumbai", "health check failed → answers Singapore"],
+      calm: "Singapore runs a small copy of the whole application: one server instead of four, and a live copy of the database. You pay for all of it, every hour.",
+      steps: [["The health check fails and Route 53 answers with Singapore, automatically.", 2],
+              ["A script, started by the on-call engineer, promotes the read replica, so that it accepts writes.", 5],
+              ["The one running server takes the traffic at once. Auto Scaling adds three more; the site is slow until they arrive.", 0]],
+      after: "Only the changes that had not reached the replica yet are lost." },
+    { k: "a", name: "Multi-site active-active", cost: 10000, sub: NEAREST,
+      r53: ["latency routing · health checks on both", "Mumbai unhealthy → answers Singapore only"],
+      calm: "Singapore is a second full site and serves the users nearest to it. You pay for the application twice.",
+      steps: [["The health check on Mumbai fails. Route 53 stops answering with Mumbai.", 2],
+              ["Users from India now reach Singapore, which was already serving and already accepting writes. Users near Singapore notice nothing.", 0],
+              ["Auto Scaling adds servers for the extra load.", 0]],
+      after: "Only writes from the last second or so, not yet replicated, can be lost." }
+  ];
+  let step = 0, strat = 0, failed = false, every = 24;   // step mirrors the counter inside steps.js
+
+  const mark = (id, test) => $(id).querySelectorAll("button").forEach((b, i) => b.classList.toggle("on", test(b, i)));
+  const span = min => min >= 90 ? "about " + Math.round(min / 60) + " h" : "about " + min + " min";
+
+  function paint() {
+    const early = step >= 1 && step < FIRST;            // Singapore is not filled in yet
+    const s = S[strat], shown = early ? S[0] : s;
+    const key = shown.k + (failed ? 1 : 0);
+    svg.querySelectorAll("[data-on]").forEach(el => {
+      const on = el.dataset.on.split(" ");
+      el.classList.toggle("off", !(on.includes(key) || (failed && on.includes("f"))));
+    });
+    $("mum").classList.toggle("down", failed);
+    $("caption").innerHTML = failed ? AFTER : step ? window.CAPTIONS[step] : FULL;
+    $("r53").textContent = shown.r53[+failed];
+    $("subM").textContent = failed ? "not answering" : shown.k === "a" ? NEAREST : "primary: serves all users";
+    $("subS").textContent = failed ? "now serves all users" : shown.sub;
+    mark("segStrat", (b, i) => !early && i === strat);
+
+    // simulator
+    mark("simStrat", (b, i) => i === strat);
+    mark("simEvery", b => +b.dataset.v === every);
+    mark("simState", b => +b.dataset.v === +failed);
+    $("simEvery").classList.toggle("unused", s.k !== "b");
+    const lostMin = s.k === "b" ? every * 60 : s.k === "a" ? 0.02 : 0.2;
+    const downMin = s.steps.reduce((sum, x) => sum + x[1], 0);
+    const lost = s.k === "b" ? (every === 1 ? "up to 1 hour" : "up to " + every + " hours") : s.k === "a" ? "near zero" : "seconds";
+    $("oCost").textContent = "$" + s.cost.toLocaleString("en-US");
+    $("oLost").textContent = failed ? lost : "?";
+    $("oDown").textContent = failed ? span(downMin) : "?";
+    $("tline").classList.toggle("calm", !failed);
+    $("tLost").style.width = lostMin / 1440 * 75 + "%";
+    $("tDown").style.width = downMin / 480 * 25 + "%";
+    $("simMsg").innerHTML = failed
+      ? `<b>${s.name}: offline for ${span(downMin)}, data lost: ${lost}.</b> What has to happen:<ol>` +
+        s.steps.map(x => `<li>${x[0]}${x[1] ? ` <b>${x[1]} min</b>` : ""}</li>`).join("") + `</ol>${s.after}`
+      : `<b>All is well.</b> ${s.calm}`;
+  }
+
+  // Keep our copy of the step counter in line with steps.js, which owns the five buttons.
+  const moves = { btnBuild: () => 1, btnNext: () => (step > 0 && step < MAX ? step + 1 : step), btnPrev: () => (step > 1 ? step - 1 : step), btnAll: () => 0 };
+  for (const id in moves) $(id).addEventListener("click", () => {
+    step = moves[id]();
+    if (step >= FIRST) strat = step - FIRST;
+    failed = false;
+    paint();
+  });
+  // Show strategy i by walking the step builder to its step, so the caption matches the drawing.
+  function show(i, keepFailed) {
+    const f = keepFailed && failed;
+    $("btnBuild").click();
+    for (let n = 1; n < FIRST + i; n++) $("btnNext").click();
+    failed = f;
+    paint();
+  }
+  for (const [id, keep] of [["segStrat", false], ["simStrat", true]]) S.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.textContent = (i + 1) + " · " + s.name;
+    b.onclick = () => show(i, keep);
+    $(id).appendChild(b);
+  });
+  $("simEvery").querySelectorAll("button").forEach(b => b.onclick = () => { every = +b.dataset.v; paint(); });
+  $("simState").querySelectorAll("button").forEach(b => b.onclick = () => {
+    const f = b.dataset.v === "1";
+    if (f && step >= 1 && step < FIRST) show(strat);
+    failed = f;
+    paint();
+  });
+  paint();
+
+  // ---- Cheapest strategy that meets both targets (minutes). Rows are already in order of cost. ----
+  const CAN = [
+    { rto: 300, rpo: 60, slow: "needs hours to rebuild and restore", lossy: "loses everything since the last backup" },
+    { rto: 40, rpo: 0.5, slow: "needs tens of minutes to start its servers" },
+    { rto: 7, rpo: 0.5, slow: "needs a few minutes to promote the database and move the traffic" },
+    { rto: 2, rpo: 0.5 }
+  ];
+  const need = { needRto: 1440, needRpo: 1440 };
+  function choose() {
+    for (const id in need) mark(id, b => +b.dataset.v === need[id]);
+    const ok = CAN.map(c => c.rto <= need.needRto && c.rpo <= need.needRpo);
+    const pick = ok.indexOf(true);
+    [...$("rank").rows].slice(1).forEach((tr, i) => { tr.classList.toggle("hit", i === pick); tr.classList.toggle("miss", !ok[i]); });
+    const why = CAN.slice(0, pick).map((c, i) => {
+      const r = [c.rpo > need.needRpo && c.lossy, c.rto > need.needRto && c.slow].filter(Boolean);
+      return ` ${S[i].name} is cheaper, but it ${r.join(" and ")}.`;
+    }).join("");
+    $("needMsg").innerHTML = `<b>Choose ${S[pick].name.toLowerCase()}.</b>` +
+      (pick === 3 ? " It is the only row that meets both targets." : " It is the cheapest row that meets both targets.") + why +
+      (pick === 0 && need.needRpo === 60 ? " Run the backups every hour, not once a day." : "") +
+      (pick < 3 ? " The rows below it are faster, but you would pay for speed that nobody asked for." : "");
+  }
+  for (const id in need) $(id).querySelectorAll("button").forEach(b => b.onclick = () => { need[id] = +b.dataset.v; choose(); });
+  choose();
+</script>
+</body>
+</html>

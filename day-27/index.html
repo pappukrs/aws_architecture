@@ -23,7 +23,7 @@
 </head>
 <body>
 <main>
-  <nav class="nav"><a href="../day-26/index.html">← Day 26</a><a href="../README.md">30-day plan</a></nav>
+  <nav class="nav"><a href="../day-26/index.html">← Day 26</a><a href="../README.md">30-day plan</a><a href="../day-28/index.html">Day 28 →</a></nav>
   <header>
     <div class="tag">Day 27 of 30 · Week 4 — Enterprise Architecture</div>
     <h1>Data Pipeline</h1>
@@ -313,7 +313,7 @@
   <details><summary>The business wants a fraud alert within one second. Can Athena on the data lake do it?</summary><p>No. The data reaches S3 minutes after the event, and Athena is built for analysis, not instant reaction. Read from the stream instead, with Lambda or Managed Service for Apache Flink.</p></details>
 
   <div class="next">
-    <b>Next — Day 28: Disaster recovery.</b> A whole Region goes dark. You draw two Regions and four ways to survive it: backup and restore, pilot light, warm standby and multi-site active-active, then rank them by recovery time, data loss and cost.
+    <b>Next — <a href="../day-28/index.html">Day 28: Disaster recovery</a>.</b> A whole Region goes dark. You draw two Regions and four ways to survive it: backup and restore, pilot light, warm standby and multi-site active-active, then rank them by recovery time, data loss and cost.
   </div>
 </main>
 
@@ -353,11 +353,17 @@
     b.onclick = () => {
       [...$("tBtns").children].forEach((x, j) => x.classList.toggle("on", j === i));
       $("tMsg").innerHTML = `<span class="state ${s[2] ? "move" : "rest"}">${s[2] ? "In motion" : "At rest"}</span> <b>Age of the event: ${s[3]}.</b> ${s[4]}`;
+      $("btnAll").click();   // lighting needs the whole diagram, not a half-built one
       svg.classList.add("lit");
       svg.querySelectorAll(".tool").forEach(g => g.classList.toggle("on", g.id === s[1]));
     };
     $("tBtns").appendChild(b);
   });
+  ["btnBuild", "btnPrev", "btnNext"].forEach(id => $(id).addEventListener("click", () => {
+    svg.classList.remove("lit");
+    [...$("tBtns").children].forEach(b => b.classList.remove("on"));
+    $("tMsg").innerHTML = "Pick a stage.";
+  }));
 
   // ---- Athena scan cost: partitions cut days, Parquet cuts size and columns ----
   const DAYS = 365, TOTAL_GB = 10 * DAYS, COLS = 20, PARQUET = 0.25, USD_PER_TB = 5, RUNS_PER_MONTH = 50 * 30;
