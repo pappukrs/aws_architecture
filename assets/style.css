@@ -64,3 +64,24 @@ button.on { background: var(--orange); border-color: var(--orange); color: #fff;
 tr.hit td { background: var(--pub-fill); font-weight: 600; }
 .result { margin: 12px 0 0; padding: 10px 14px; border-left: 4px solid var(--orange); background: var(--bg); border-radius: 0 8px 8px 0; }
 svg text.mono { font-family: ui-monospace, Menlo, Consolas, monospace; white-space: pre; }
+
+/* Review days: timer, checklist, exercises */
+.timer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 16px; }
+.timer .clock { font-size: 44px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; min-width: 132px; }
+.timer .clock.over { color: var(--bad); }
+.timer .meta { color: var(--muted); font-size: 14px; }
+.checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 20px; margin: 0; padding: 0; list-style: none; }
+.checklist label, .mistakes label { display: flex; gap: 10px; align-items: flex-start; padding: 5px 0; cursor: pointer; }
+input[type=checkbox] { width: 18px; height: 18px; margin-top: 4px; accent-color: var(--orange); flex: none; }
+.fill { display: grid; grid-template-columns: 1fr auto; gap: 10px 16px; align-items: center; }
+.fill select { font: inherit; font-size: 15px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); max-width: 100%; }
+.fill select.ok { border-color: var(--pub); background: var(--pub-fill); }
+.fill select.no { border-color: var(--bad); }
+@media (max-width: 640px) { .fill { grid-template-columns: 1fr; } }
+.mistakes { list-style: none; margin: 0; padding: 0; }
+.mistakes li { border-bottom: 1px solid var(--border); padding: 4px 0; }
+.mistakes .why { display: none; margin: 0 0 8px 28px; font-size: 14.5px; color: var(--muted); }
+.mistakes.checked .why { display: block; }
+.mistakes.checked li.right label { color: var(--pub); }
+.mistakes.checked li.miss label { color: var(--bad); }
+.row-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }

@@ -42,7 +42,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | 11 | **[Read scaling and caching](day-11/index.html)** | RDS read replicas, ElastiCache (Redis) between app and DB | Multi-AZ standby vs read replica — what is each for? |
 | 12 | **[Static website](day-12/index.html)** | S3 bucket (private), CloudFront with Origin Access Control, ACM certificate | Why keep the bucket private behind CloudFront? |
 | 13 | **[DNS and routing](day-13/index.html)** | Route 53 hosted zone, alias record → ALB/CloudFront, failover + latency routing, health checks | Alias record vs CNAME? |
-| 14 | **Review: HA web application** | Route 53 → CloudFront → ALB → ASG → RDS Multi-AZ + ElastiCache + S3 | Point to every single point of failure — are there any? |
+| 14 | **[Review: HA web application](day-14/index.html)** | Route 53 → CloudFront → ALB → ASG → RDS Multi-AZ + ElastiCache + S3 | Point to every single point of failure — are there any? |
 
 ## Week 3 — Serverless, Decoupling, Containers
 

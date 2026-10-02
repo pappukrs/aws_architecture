@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 14 — Week 2 Review: Highly Available Web Application</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  :root { --cache: #c2255c; }
+  @media (prefers-color-scheme: dark) { :root { --cache: #f783ac; } }
+  .spof { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-13/index.html">← Day 13</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 14 of 30 · Week 2 — Compute, Load Balancing, High Availability</div>
+    <h1>Week 2 Review: Highly Available Web Application</h1>
+    <p class="lead">No new services. Today you join everything from Days 8 to 13 into one drawing: DNS, a content delivery network, a load balancer, an Auto Scaling group, a cache and a Multi-AZ database. Then you attack it, one component at a time, to see whether anything can take the site down by failing alone.</p>
+  </header>
+
+  <h2>1. Timed challenge</h2>
+  <div class="card">
+    <p>Open draw.io, Excalidraw or a sheet of paper. Press <b>Start</b>, draw the architecture described below without looking at anything, then press <b>Done</b>.</p>
+    <p style="color:var(--muted)"><b>The brief:</b> an online shop at <code>example.com</code>, hosted in Mumbai. Product pages and images are static; the cart and checkout are dynamic and need a relational database. It must stay up if one Availability Zone fails, handle traffic that grows tenfold during a sale, and stay fast for repeated reads. Show every component, which subnet it lives in, and the path of a request.</p>
+    <div class="timer">
+      <div class="clock" id="clock">00:00</div>
+      <button class="primary" id="tStart">Start</button>
+      <button id="tDone" disabled>Done</button>
+      <button id="tReset">Reset</button>
+      <span class="meta" id="tMeta"></span>
+    </div>
+    <p style="margin-bottom:6px"><b>Mark what your drawing contains.</b> Be strict; a box without its label does not count.</p>
+    <ul class="checklist" id="checklist"></ul>
+    <p class="result" id="score"></p>
+  </div>
+
+  <h2>2. Reference diagram</h2>
+  <div class="card practice" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Reveal diagram</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 720" role="img" aria-label="Reference: Route 53 points to CloudFront, which serves static files from a private S3 bucket and forwards dynamic requests to a load balancer. Behind it, an Auto Scaling group spans two Availability Zones and uses ElastiCache and an RDS database with a standby and a read replica.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--vpc)"/></marker>
+          <marker id="arrowI" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--priv)"/></marker>
+          <marker id="arrowC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--cache)"/></marker>
+          <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--pub)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+          <symbol id="rds" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--priv)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5">
+              <ellipse cx="28" cy="17" rx="14" ry="6"/><path d="M14 17 V39 A14 6 0 0 0 42 39 V17"/><path d="M14 28 A14 6 0 0 0 42 28"/>
+            </g>
+          </symbol>
+          <symbol id="redis" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--cache)"/>
+            <g fill="#fff"><rect x="13" y="13" width="30" height="8" rx="3"/><rect x="13" y="24" width="30" height="8" rx="3"/><rect x="13" y="35" width="30" height="8" rx="3"/></g>
+          </symbol>
+          <symbol id="s3" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--pub)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g>
+          </symbol>
+        </defs>
+
+        <rect x="20" y="84" width="960" height="622" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="966" y="106" font-size="15" font-weight="700" text-anchor="end">AWS Cloud</text>
+
+        <!-- Step 1: network -->
+        <g data-step="1">
+          <rect x="40" y="180" width="920" height="512" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="203" font-size="14" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="226" width="700" height="452" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="250" font-size="14" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="410" cy="226" r="22" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="410" y="231" font-size="12" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <g fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4">
+            <rect x="76" y="264" width="324" height="402" rx="6"/><rect x="420" y="264" width="324" height="402" rx="6"/>
+          </g>
+          <text x="88" y="284" font-size="12.5" font-weight="600" style="fill:var(--az)">AZ ap-south-1a</text>
+          <text x="732" y="284" font-size="12.5" font-weight="600" text-anchor="end" style="fill:var(--az)">AZ ap-south-1b</text>
+          <g stroke-width="2">
+            <rect x="90" y="294" width="296" height="70" rx="6" fill="var(--pub-fill)" stroke="var(--pub)"/>
+            <rect x="434" y="294" width="296" height="70" rx="6" fill="var(--pub-fill)" stroke="var(--pub)"/>
+            <rect x="90" y="382" width="296" height="92" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="434" y="382" width="296" height="92" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="90" y="492" width="296" height="162" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="434" y="492" width="296" height="162" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+          </g>
+          <g font-size="11.5" font-weight="700">
+            <text x="104" y="356" style="fill:var(--pub)">Public A · 10.0.1.0/24</text>
+            <text x="716" y="356" text-anchor="end" style="fill:var(--pub)">Public B · 10.0.3.0/24</text>
+            <text x="104" y="398" style="fill:var(--priv)">App A · 10.0.2.0/24</text>
+            <text x="716" y="398" text-anchor="end" style="fill:var(--priv)">App B · 10.0.4.0/24</text>
+            <text x="104" y="645" style="fill:var(--priv)">Data A · 10.0.5.0/24</text>
+            <text x="716" y="645" text-anchor="end" style="fill:var(--priv)">Data B · 10.0.6.0/24</text>
+          </g>
+          <use href="#nat" x="104" y="300" width="28" height="28"/><use href="#nat" x="688" y="300" width="28" height="28"/>
+        </g>
+
+        <!-- Step 2: load balancer -->
+        <g data-step="2">
+          <rect x="250" y="308" width="320" height="40" rx="10" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="410" y="333" font-size="13.5" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+        </g>
+
+        <!-- Step 3: Auto Scaling group -->
+        <g data-step="3">
+          <rect x="106" y="406" width="608" height="52" rx="10" fill="none" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+          <rect x="290" y="447" width="240" height="20" rx="5" fill="var(--orange)"/>
+          <text x="410" y="461" font-size="11" font-weight="700" text-anchor="middle" style="fill:#fff">Auto Scaling group · min 2 · max 6</text>
+          <use href="#ec2" x="170" y="413" width="36" height="36"/><use href="#ec2" x="250" y="413" width="36" height="36"/>
+          <use href="#ec2" x="534" y="413" width="36" height="36"/><use href="#ec2" x="614" y="413" width="36" height="36"/>
+        </g>
+
+        <!-- Step 4: database -->
+        <g data-step="4">
+          <use href="#rds" x="114" y="568" width="44" height="44"/><use href="#rds" x="240" y="568" width="44" height="44"/><use href="#rds" x="500" y="568" width="44" height="44"/>
+          <g font-size="11.5" font-weight="700" text-anchor="middle">
+            <text x="136" y="627">Read replica</text><text x="262" y="627">RDS primary</text><text x="522" y="627">RDS standby</text>
+          </g>
+          <g stroke="var(--priv)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowI)">
+            <line x1="286" y1="590" x2="496" y2="590"/><line x1="238" y1="590" x2="163" y2="590"/>
+          </g>
+          <rect x="384" y="580" width="52" height="20" rx="10" fill="var(--priv)"/>
+          <text x="410" y="594" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">sync</text>
+          <rect x="178" y="580" width="44" height="20" rx="10" fill="var(--priv)"/>
+          <text x="200" y="594" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">async</text>
+        </g>
+
+        <!-- Step 5: cache -->
+        <g data-step="5">
+          <use href="#redis" x="312" y="502" width="36" height="36"/><use href="#redis" x="504" y="502" width="36" height="36"/>
+          <g font-size="11.5" font-weight="700" text-anchor="middle">
+            <text x="330" y="553">Redis primary</text><text x="522" y="553">Redis replica</text>
+          </g>
+        </g>
+
+        <!-- Step 6: S3 and CloudFront -->
+        <g data-step="6">
+          <use href="#s3" x="836" y="240" width="48" height="48"/>
+          <text x="860" y="306" font-size="12.5" font-weight="700" text-anchor="middle">S3 bucket</text>
+          <text x="860" y="322" font-size="11.5" text-anchor="middle" style="fill:var(--muted)">private · static files</text>
+          <text x="860" y="337" font-size="11.5" text-anchor="middle" style="fill:var(--muted)">and user uploads</text>
+          <rect x="340" y="105" width="300" height="56" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="490" y="129" font-size="13.5" font-weight="700" text-anchor="middle" style="fill:var(--vpc)">CloudFront</text>
+          <text x="490" y="147" font-size="11" text-anchor="middle" style="fill:var(--muted)">edge cache · HTTPS with ACM certificate</text>
+        </g>
+
+        <!-- Step 7: DNS -->
+        <g data-step="7">
+          <rect x="40" y="14" width="160" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="120" y="45" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="60" y="105" width="220" height="56" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="170" y="129" font-size="13.5" font-weight="700" text-anchor="middle" style="fill:var(--vpc)">Route 53</text>
+          <text x="170" y="147" font-size="11" text-anchor="middle" style="fill:var(--muted)">alias: example.com → CloudFront</text>
+          <line x1="282" y1="133" x2="335" y2="133" stroke="var(--vpc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowP)"/>
+          <line x1="120" y1="68" x2="120" y2="101" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-start="url(#arrowD)" marker-end="url(#arrowD)"/>
+          <text x="132" y="80" font-size="11.5" font-weight="700" style="fill:var(--dc)">1 · DNS</text>
+        </g>
+
+        <!-- Step 8: request paths -->
+        <g data-step="8">
+          <g fill="none" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)">
+            <polyline points="202,39 490,39 490,100"/>
+            <polyline points="642,133 860,133 860,235"/>
+            <line x1="474" y1="163" x2="427" y2="205"/>
+            <line x1="410" y1="250" x2="410" y2="303"/>
+            <line x1="350" y1="350" x2="264" y2="402"/>
+            <line x1="470" y1="350" x2="556" y2="402"/>
+            <line x1="262" y1="460" x2="262" y2="563"/>
+          </g>
+          <line x1="330" y1="469" x2="330" y2="497" stroke="var(--cache)" stroke-width="3" marker-end="url(#arrowC)"/>
+          <line x1="136" y1="460" x2="136" y2="563" stroke="var(--pub)" stroke-width="3" marker-end="url(#arrowG)"/>
+          <g font-size="11.5" font-weight="700">
+            <text x="346" y="31" text-anchor="middle" style="fill:var(--orange)">2 · HTTPS</text>
+            <text x="750" y="125" text-anchor="middle" style="fill:var(--orange)">static files · OAC</text>
+            <text x="488" y="197" style="fill:var(--orange)">dynamic requests</text>
+            <text x="252" y="524" text-anchor="end" style="fill:var(--orange)">writes</text>
+            <text x="148" y="524" style="fill:var(--pub)">reads</text>
+            <text x="342" y="486" style="fill:var(--cache)">cache</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Compare your drawing with this one. Users look up the name in Route 53 (1), then connect to CloudFront (2). Static files come from the private S3 bucket; dynamic requests go on to the load balancer and an app server, which checks the cache, reads from the replica and writes to the primary. Press “Build step by step” to see the order to draw it in.</p>
+    <div class="legend">
+      <span style="--c:var(--dc)">DNS lookup</span>
+      <span style="--c:var(--orange)">Requests and writes</span>
+      <span style="--c:var(--cache)">Cache lookup</span>
+      <span style="--c:var(--pub)">Reads from the replica</span>
+      <span style="--c:var(--priv)">Database replication</span>
+      <span style="--c:var(--vpc)">Route 53, CloudFront, load balancer</span>
+    </div>
+  </div>
+
+  <h2>3. Hunt for single points of failure</h2>
+  <div class="card">
+    <p>A single point of failure is a component whose failure alone takes the site down. Pick something to break. Decide first whether the site survives, then read the answer.</p>
+    <div class="spof" id="spof"></div>
+    <p class="result" id="spofResult">Choose a component to fail.</p>
+  </div>
+
+  <h2>4. Complete the design</h2>
+  <div class="card">
+    <p>Choose the right value for each blank, then check.</p>
+    <div class="fill" id="fill"></div>
+    <div class="row-actions"><button class="primary" id="fillCheck">Check answers</button><span id="fillScore"></span></div>
+  </div>
+
+  <h2>5. Spot the mistakes</h2>
+  <div class="card">
+    <p>A colleague sends you this design for review. Tick every line that is <b>wrong</b>, then check.</p>
+    <ul class="mistakes" id="mistakes"></ul>
+    <div class="row-actions"><button class="primary" id="mistCheck">Check</button><span id="mistScore"></span></div>
+  </div>
+
+  <h2>Week 2 in one table</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Day</th><th>You added</th><th>The one idea to keep</th></tr>
+      <tr><td><a href="../day-08/index.html">8</a></td><td>Application Load Balancer</td><td>One address, nodes in two AZs, traffic only to healthy targets. Servers move to private subnets.</td></tr>
+      <tr><td><a href="../day-09/index.html">9</a></td><td>Auto Scaling group</td><td>Min, desired, max. It replaces failed servers and follows load, so servers must be stateless.</td></tr>
+      <tr><td><a href="../day-10/index.html">10</a></td><td>Three tiers, RDS Multi-AZ</td><td>Each tier trusts only the security group in front of it. The standby is synchronous and serves no traffic.</td></tr>
+      <tr><td><a href="../day-11/index.html">11</a></td><td>Read replica, ElastiCache</td><td>Cache first, replica for reads, primary for writes. Replicas are asynchronous.</td></tr>
+      <tr><td><a href="../day-12/index.html">12</a></td><td>S3 and CloudFront</td><td>Private bucket, read only through CloudFront. Certificate in us-east-1.</td></tr>
+      <tr><td><a href="../day-13/index.html">13</a></td><td>Route 53</td><td>Alias records for AWS targets. DNS answers the lookup; it does not carry the request.</td></tr>
+    </table>
+  </div>
+
+  <h2>6. Explain it out loud</h2>
+  <p class="lead">Answer each one aloud in a few sentences before opening it.</p>
+  <details><summary>Trace a request for a product image from a user in Delhi.</summary><p>The resolver asks Route 53 for <code>example.com</code> and gets CloudFront addresses. The browser connects over HTTPS to the Delhi edge. On a hit, the edge returns the image at once. On a miss, it fetches it from the private S3 bucket using origin access control, caches it, and returns it. No server in the VPC is involved.</p></details>
+  <details><summary>Trace “add to cart”, a dynamic request that writes data.</summary><p>Route 53 → CloudFront, which does not cache it and forwards it to the load balancer through the Internet Gateway → a healthy app server in either AZ (8080, allowed by <code>app-sg</code> from <code>alb-sg</code>) → a write to the RDS primary (3306, <code>db-sg</code> from <code>app-sg</code>), copied synchronously to the standby. The app server then deletes the cached cart so the next read is fresh.</p></details>
+  <details><summary>AZ a is lost completely. Walk through what each layer does.</summary><p>The load balancer keeps serving from its node in AZ b and stops sending to targets in AZ a. The Auto Scaling group launches replacements in AZ b to restore desired capacity. RDS promotes the standby in AZ b within a minute or two, and ElastiCache promotes its replica node. NAT Gateway B and private route table B were always independent. Users see a short interruption on writes, then normal service.</p></details>
+  <details><summary>Where is the weakest point of this design?</summary><p>Inside the Region, the single read replica: if the app has no fallback to the primary, read queries fail when it is lost. Beyond that, the Region itself: nothing here survives the loss of Mumbai. And no design protects against a bad deployment or bad data.</p></details>
+  <details><summary>Traffic grows tenfold during a sale. Which component struggles first, and what do you do?</summary><p>Not the stateless parts: CloudFront, the load balancer and the Auto Scaling group all grow by themselves. The database primary is the limit, because all writes go to one instance. Raise the cache hit rate, add read replicas, and scale the primary up before the sale.</p></details>
+  <details><summary>How would you release a new version of the app with no downtime?</summary><p>Create a new launch template version and let the Auto Scaling group replace instances a few at a time, an instance refresh, while the load balancer only sends traffic to those passing health checks. For more caution, run the new version behind a second target group and shift a small weighted share of traffic to it first.</p></details>
+  <details><summary>Which parts of this drawing cost money even with zero visitors?</summary><p>The two NAT Gateways, the load balancer, the minimum two app servers, the RDS primary plus standby plus read replica, and the two Redis nodes, all billed per hour. S3, CloudFront and Route 53 queries cost almost nothing without traffic.</p></details>
+
+  <div class="next">
+    <b>Next — Day 15: Serverless API.</b> Week 3 starts with the opposite approach: no VPC, no servers to patch, nothing running when nobody calls. API Gateway receives the request, Lambda runs the code, DynamoDB stores the data.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Network.</b> Region, VPC, two AZs, three rows of subnets, the Internet Gateway and a NAT Gateway per AZ. Leave room on the right of the VPC and above the Region.",
+    "<b>Step 2 — Load balancer</b> across both public subnets.",
+    "<b>Step 3 — Auto Scaling group</b> across both app subnets, with its min and max.",
+    "<b>Step 4 — Database.</b> RDS primary, a synchronous standby in the other AZ, and an asynchronous read replica.",
+    "<b>Step 5 — Cache.</b> ElastiCache Redis with a node in each AZ.",
+    "<b>Step 6 — Static content.</b> A private S3 bucket inside the Region but outside the VPC, and CloudFront outside the Region.",
+    "<b>Step 7 — DNS.</b> Route 53, also outside the Region, with an alias record pointing at CloudFront. The user's lookup is arrow 1.",
+    "<b>Step 8 — Request paths.</b> Users connect to CloudFront. Static files come from S3; dynamic requests continue to the load balancer, an app server, and then the cache, the replica or the primary."
+  ];
+  window.REVIEW = {
+    target: 900,
+    items: [
+      "Route 53 outside the Region, with an alias record",
+      "CloudFront outside the Region",
+      "S3 bucket inside the Region but outside the VPC, marked private",
+      "CloudFront → S3 arrow labelled static or OAC",
+      "VPC with two Availability Zones",
+      "Three rows of subnets: public, app, data, with six CIDRs",
+      "Internet Gateway, and a NAT Gateway in each public subnet",
+      "Load balancer drawn across both public subnets",
+      "Auto Scaling group box crossing the AZ boundary, with min and max",
+      "RDS primary and standby in different AZs, labelled sync",
+      "Read replica, labelled async",
+      "ElastiCache with a node in each AZ",
+      "Security group chain written: <code>alb-sg</code> → <code>app-sg</code> → <code>db-sg</code>",
+      "DNS lookup arrow drawn separately from the request arrow",
+      "Request path labelled with ports: 443, 8080, 3306",
+      "Cache, read and write arrows told apart",
+      "ACM certificate noted on CloudFront",
+      "Health checks noted on the load balancer"
+    ],
+    blanks: [
+      ["Subnets the load balancer is created in", ["One public subnet", "The public subnets of two AZs", "The app subnets"], 1],
+      ["Source of the inbound rule in <code>app-sg</code>", ["0.0.0.0/0", "The VPC CIDR", "alb-sg"], 2],
+      ["What replaces an app server that has crashed", ["The load balancer", "The Auto Scaling group", "CloudWatch"], 1],
+      ["Replication from the RDS primary to the Multi-AZ standby", ["Synchronous", "Asynchronous", "Nightly snapshot"], 0],
+      ["Where read queries are sent to take load off the primary", ["The standby", "The read replica", "The NAT Gateway"], 1],
+      ["Region of the ACM certificate used by CloudFront", ["ap-south-1", "Any Region", "us-east-1"], 2],
+      ["Record that points <code>example.com</code> at CloudFront", ["CNAME", "Alias A record", "A record with fixed IPs"], 1],
+      ["What lets CloudFront read the private bucket", ["A public bucket policy", "Origin access control and a bucket policy", "A NAT Gateway"], 1],
+      ["Where user sessions are kept", ["On each app server", "In ElastiCache", "In CloudFront"], 1],
+      ["Smallest sensible min for the Auto Scaling group across two AZs", ["0", "1", "2"], 2]
+    ],
+    lines: [
+      ["The load balancer is placed in a single public subnet to save cost.", true, "Wrong. It needs subnets in at least two AZs; with one, the load balancer itself would be a single point of failure, and AWS will not create it."],
+      ["App servers are in private subnets, and <code>app-sg</code> allows 8080 from <code>alb-sg</code>.", false, "Correct. Only the load balancer can reach them."],
+      ["The Auto Scaling group has min 1 and max 6, and the design is called highly available.", true, "Wrong. With one instance, its failure or its AZ's failure means zero capacity until a replacement boots. Use min 2."],
+      ["Files uploaded by users are saved on the app server's local disk.", true, "Wrong. Instances are replaced and scaled in at any time, and other instances cannot see the file. Uploads belong in S3."],
+      ["RDS is Multi-AZ, and the application reads from the standby to reduce load on the primary.", true, "Wrong. The standby accepts no connections. Reads are offloaded with a read replica."],
+      ["Sessions are stored in ElastiCache Redis, which has a replica node in the second AZ.", false, "Correct. Servers stay stateless and the session store survives an AZ failure."],
+      ["The S3 bucket is public so that CloudFront can read it.", true, "Wrong. Keep it private and let CloudFront in with origin access control. A public bucket can be read by anyone, bypassing CloudFront."],
+      ["The ACM certificate for CloudFront was requested in ap-south-1, next to the bucket.", true, "Wrong. CloudFront only uses certificates from us-east-1."],
+      ["<code>example.com</code> is an alias A record pointing at the CloudFront distribution.", false, "Correct. An alias works at the zone apex, where a CNAME is not allowed."],
+      ["The data subnets have no route to the internet, not even through a NAT Gateway.", false, "Correct. RDS and ElastiCache never need to reach out, so the route is left out on purpose."]
+    ]
+  };
+</script>
+<script src="../assets/steps.js"></script>
+<script src="../assets/review.js"></script>
+<script>
+  const OK = `<b style="color:var(--pub)">Survives.</b> `;
+  const SLOW = `<b style="color:var(--orange)">Survives after a short failover.</b> `;
+  const WEAK = `<b style="color:var(--orange)">Weak spot.</b> `;
+  const DOWN = `<b style="color:var(--bad)">The site goes down.</b> `;
+  const parts = [
+    ["Route 53", OK + "It runs on a worldwide network of DNS servers and is designed never to be fully unavailable. There is nothing for you to duplicate."],
+    ["One CloudFront edge location", OK + "Users are sent to the next nearest edge. They may see slightly slower pages."],
+    ["The S3 bucket's storage in one AZ", OK + "S3 keeps every object in at least three AZs of the Region. You do nothing."],
+    ["Internet Gateway", OK + "It is a regional service that AWS runs redundantly across AZs. One per VPC is not a single point of failure."],
+    ["Load balancer node in AZ a", OK + "The node in AZ b keeps serving, and AWS removes the failed node from the load balancer's DNS. This is why it needs two AZs."],
+    ["NAT Gateway A", OK + "User traffic does not use NAT Gateways at all. App servers in AZ a lose outbound internet access until it is fixed; those in AZ b use NAT Gateway B and are unaffected."],
+    ["One app server", OK + "The load balancer's health check stops sending it traffic, and the Auto Scaling group launches a replacement."],
+    ["RDS primary", SLOW + "RDS promotes the standby and repoints the endpoint. Writes fail for about one to two minutes, then resume with no data lost."],
+    ["Redis primary node", SLOW + "The replica node is promoted. For a moment lookups fail and the app reads from the database instead, which is slower but correct."],
+    ["The read replica", WEAK + "There is only one. If the application sends reads to it with no fallback, those queries fail. Add a second replica in AZ b, or make the app fall back to the primary."],
+    ["All of AZ a", SLOW + "Every layer has a copy in AZ b: load balancer node, app servers (the group launches more), RDS standby, Redis replica, NAT Gateway. Expect a minute or two of failed writes during the database failover."],
+    ["The whole Mumbai Region", DOWN + "Everything in the drawing except Route 53 and CloudFront lives in one Region. CloudFront can serve cached static pages for a while, but nothing dynamic works. Surviving this needs a second Region: disaster recovery, Day 28."],
+    ["A bad deployment or bad data", DOWN + "This is not an infrastructure failure, so redundancy does not help: a bug is deployed to every server and a wrong <code>DELETE</code> is replicated to every copy. The defences are staged rollouts, backups and point-in-time recovery."]
+  ];
+  const box = document.getElementById("spof");
+  parts.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.textContent = p[0];
+    b.onclick = () => {
+      [...box.children].forEach((x, j) => x.classList.toggle("on", j === i));
+      document.getElementById("spofResult").innerHTML = `<b>${p[0]} fails.</b> ` + p[1];
+    };
+    box.appendChild(b);
+  });
+</script>
+</body>
+</html>
