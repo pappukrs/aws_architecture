@@ -18,7 +18,7 @@
 </head>
 <body>
 <main>
-  <nav class="nav"><a href="../day-10/index.html">← Day 10</a><a href="../README.md">30-day plan</a></nav>
+  <nav class="nav"><a href="../day-10/index.html">← Day 10</a><a href="../README.md">30-day plan</a><a href="../day-12/index.html">Day 12 →</a></nav>
   <header>
     <div class="tag">Day 11 of 30 · Week 2 — Compute, Load Balancing, High Availability</div>
     <h1>Read Scaling and Caching</h1>
@@ -287,7 +287,7 @@
   <details><summary>The database is slow. In what order would you try these: bigger instance, read replica, cache?</summary><p>Usually cache first, since it removes repeated reads entirely and is cheap. Then read replicas for the reads that remain. A bigger instance is the simplest change but the least scalable, and it is the only one of the three that helps writes.</p></details>
 
   <div class="next">
-    <b>Next — Day 12: Static website.</b> A different kind of architecture with no servers at all: a private S3 bucket holds the files, CloudFront serves them from edge locations near the user, and ACM provides the HTTPS certificate.
+    <b>Next — <a href="../day-12/index.html">Day 12: Static website</a>.</b> A different kind of architecture with no servers at all: a private S3 bucket holds the files, CloudFront serves them from edge locations near the user, and ACM provides the HTTPS certificate.
   </div>
 </main>
 
