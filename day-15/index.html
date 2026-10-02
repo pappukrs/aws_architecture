@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 15 — Serverless API</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .stats { display: flex; flex-wrap: wrap; gap: 10px 32px; margin: 14px 0 4px; }
+  .stats .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stats .lbl { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-14/index.html">← Day 14</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 15 of 30 · Week 3 — Serverless, Decoupling, Containers</div>
+    <h1>Serverless API</h1>
+    <p class="lead">Week 2 needed a VPC, six subnets, a load balancer and servers that run all night. Today's API has none of that. API Gateway receives the request, a Lambda function runs your code for a few milliseconds, and DynamoDB stores the data. Nothing runs, and nothing is billed, when nobody calls.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 560" role="img" aria-label="A client calls API Gateway over HTTPS. API Gateway invokes a Lambda function, which reads and writes a DynamoDB table. An IAM execution role defines what the function may do, and its output goes to CloudWatch Logs. There is no VPC.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <symbol id="apigw" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="36" font-size="20" font-weight="700" text-anchor="middle" style="fill:#fff">&lt;/&gt;</text>
+          </symbol>
+          <symbol id="lambda" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <text x="28" y="40" font-size="32" font-weight="700" text-anchor="middle" style="fill:#fff">λ</text>
+          </symbol>
+          <symbol id="ddb" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--priv)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5">
+              <rect x="13" y="14" width="30" height="28" rx="3"/><line x1="13" y1="24" x2="43" y2="24"/><line x1="13" y1="33" x2="43" y2="33"/><line x1="25" y1="14" x2="25" y2="42"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <rect x="195" y="20" width="785" height="525" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="209" y="44" font-size="15" font-weight="700">AWS Cloud</text>
+
+        <!-- Step 1: Region and the table -->
+        <g data-step="1">
+          <rect x="215" y="60" width="745" height="470" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="229" y="84" font-size="14" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <text x="946" y="84" font-size="12.5" font-weight="700" text-anchor="end" style="fill:var(--dc)">No VPC · no subnets · no servers to manage</text>
+          <text x="587" y="490" font-size="12.5" text-anchor="middle" style="fill:var(--muted)">AWS runs each of these services across several Availability Zones for you.</text>
+
+          <rect x="745" y="120" width="195" height="160" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2.5"/>
+          <use href="#ddb" x="761" y="136" width="48" height="48"/>
+          <text x="821" y="157" font-size="14" font-weight="700">DynamoDB</text>
+          <text x="821" y="175" font-size="12" style="fill:var(--muted)">table</text>
+          <text x="761" y="214" font-size="12.5" font-weight="700" class="mono">Notes</text>
+          <text x="761" y="234" font-size="11.5">partition key: id</text>
+          <text x="761" y="262" font-size="11.5" style="fill:var(--muted)">on-demand capacity</text>
+        </g>
+
+        <!-- Step 2: the function -->
+        <g data-step="2">
+          <rect x="495" y="120" width="190" height="160" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <use href="#lambda" x="511" y="136" width="48" height="48"/>
+          <text x="571" y="157" font-size="14" font-weight="700">Lambda</text>
+          <text x="571" y="175" font-size="12" style="fill:var(--muted)">function</text>
+          <text x="511" y="214" font-size="12.5" font-weight="700" class="mono">notes-handler</text>
+          <text id="envs" x="511" y="234" font-size="11.5">environments running: 0</text>
+          <text x="511" y="262" font-size="11.5" style="fill:var(--muted)">runs only when invoked</text>
+        </g>
+
+        <!-- Step 3: execution role and logs -->
+        <g data-step="3">
+          <line x1="590" y1="326" x2="590" y2="285" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowR)"/>
+          <rect x="465" y="330" width="250" height="100" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+          <text x="477" y="352" font-size="13" font-weight="700" style="fill:var(--bad)">Execution role (IAM)</text>
+          <text x="477" y="374" font-size="11.5" class="mono">Allow dynamodb:PutItem, Query</text>
+          <text x="477" y="392" font-size="11.5" class="mono">  on table Notes only</text>
+          <text x="477" y="414" font-size="11.5" class="mono">Allow logs: write</text>
+
+          <line x1="668" y1="284" x2="768" y2="327" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+          <rect x="745" y="330" width="195" height="100" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <text x="757" y="352" font-size="13" font-weight="700" style="fill:var(--dc)">CloudWatch Logs</text>
+          <text x="757" y="374" font-size="11.5">Every invocation writes</text>
+          <text x="757" y="392" font-size="11.5">its output and duration here.</text>
+        </g>
+
+        <!-- Step 4: API Gateway -->
+        <g data-step="4">
+          <rect x="235" y="120" width="200" height="160" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <use href="#apigw" x="251" y="136" width="48" height="48"/>
+          <text x="311" y="157" font-size="14" font-weight="700">API Gateway</text>
+          <text x="311" y="175" font-size="12" style="fill:var(--muted)">HTTP API</text>
+          <text x="251" y="214" font-size="12.5" class="mono">GET   /notes</text>
+          <text x="251" y="234" font-size="12.5" class="mono">POST  /notes</text>
+          <text x="251" y="262" font-size="11.5" style="fill:var(--muted)">both routes → notes-handler</text>
+
+          <rect x="235" y="330" width="200" height="100" rx="6" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+          <text x="247" y="352" font-size="13" font-weight="700" style="fill:var(--vpc)">It also handles</text>
+          <text x="247" y="374" font-size="11.5">Public HTTPS endpoint</text>
+          <text x="247" y="392" font-size="11.5">Authorisation and CORS</text>
+          <text x="247" y="410" font-size="11.5">Throttling: requests per second</text>
+        </g>
+
+        <!-- Step 5: the request -->
+        <g data-step="5">
+          <rect x="20" y="170" width="150" height="60" rx="30" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="95" y="196" font-size="14" font-weight="700" text-anchor="middle">Client</text>
+          <text x="95" y="214" font-size="11" text-anchor="middle" style="fill:var(--muted)">browser or mobile app</text>
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="172" y1="200" x2="230" y2="200"/><line x1="437" y1="200" x2="490" y2="200"/><line x1="687" y1="200" x2="740" y2="200"/>
+          </g>
+          <g font-size="12" font-weight="700" text-anchor="middle">
+            <circle cx="199" cy="200" r="10" fill="var(--orange)"/><text x="199" y="204" style="fill:#fff">1</text>
+            <circle cx="461" cy="200" r="10" fill="var(--orange)"/><text x="461" y="204" style="fill:#fff">2</text>
+            <circle cx="711" cy="200" r="10" fill="var(--orange)"/><text x="711" y="204" style="fill:#fff">3</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: (1) the client sends an HTTPS request to <b>API Gateway</b>. (2) API Gateway invokes the <b>Lambda function</b>, passing the request as an event. (3) The function reads or writes items in the <b>DynamoDB table</b>, which its <b>execution role</b> permits. The response returns the same way. None of this is inside a VPC.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">1 HTTPS request · 2 invoke · 3 read or write items</span>
+      <span style="--c:var(--vpc)">API Gateway</span>
+      <span style="--c:var(--priv)">DynamoDB</span>
+      <span style="--c:var(--bad)">IAM permissions</span>
+      <span style="--c:var(--dc)">Logs</span>
+    </div>
+  </div>
+
+  <h2>Invocation simulator</h2>
+  <div class="card">
+    <p>Lambda creates an <b>execution environment</b> to run your code, keeps it warm for a while, and removes it when idle. Send requests and watch how many environments exist; the number also appears in the Lambda box above.</p>
+    <div class="seg" id="simBtns">
+      <button data-a="one" class="primary">Send 1 request</button>
+      <button data-a="burst" class="primary">Send 100 at the same instant</button>
+      <button data-a="idle">Wait 15 minutes with no traffic</button>
+      <button data-a="reset">Reset</button>
+    </div>
+    <p class="result" id="simMsg">Nothing is running and nothing is being billed. Send a request.</p>
+    <div class="stats">
+      <div><div class="lbl">Environments running</div><div class="big" id="stEnv">0</div></div>
+      <div><div class="lbl">Invocations</div><div class="big" id="stInv">0</div></div>
+      <div><div class="lbl">Cold starts</div><div class="big" id="stCold">0</div></div>
+      <div><div class="lbl">Compute billed</div><div class="big" id="stMs">0 ms</div></div>
+    </div>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>API Gateway</h3>
+      <p>The front door for an API. It gives you a public HTTPS endpoint and sends each route to a backend.</p>
+      <ul>
+        <li>Plays the part the load balancer played in Week 2, with no subnets to place it in.</li>
+        <li>Checks who is calling (IAM, Cognito or a token) before your code runs.</li>
+        <li>Throttles: a limit on requests per second protects the backend.</li>
+        <li>Two main kinds: <b>HTTP API</b>, simpler and cheaper, and <b>REST API</b>, with extras such as API keys and usage plans.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Lambda</h3>
+      <p>You upload a function; AWS runs it when an event arrives. You never see a server.</p>
+      <ul>
+        <li>Each request runs in its own environment. A hundred at once means a hundred environments, created for you.</li>
+        <li><b>Cold start:</b> the extra delay when a new environment must be created.</li>
+        <li>Billed per request and per millisecond of run time. Idle costs nothing.</li>
+        <li>Limits: 15 minutes per invocation, and no state kept between invocations.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>DynamoDB</h3>
+      <p>A managed key-value database. No instance to size, no standby to configure.</p>
+      <ul>
+        <li>A <b>table</b> holds <b>items</b>; each item is found by its <b>partition key</b>.</li>
+        <li>Data is stored across three AZs automatically.</li>
+        <li><b>On-demand</b> capacity: pay per read and write, scaling with the traffic.</li>
+        <li>Calls are plain HTTPS requests, so thousands of Lambda environments cause no connection-limit problem, unlike a relational database.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>IAM replaces the security group</h3>
+      <p>With no network of your own, there are no security groups. Access is decided by <b>permissions</b>.</p>
+      <ul>
+        <li>The function's <b>execution role</b> lists exactly what it may call.</li>
+        <li>Least privilege: this role can write to one table and nothing else.</li>
+        <li>API Gateway is allowed to invoke this function by a permission on the function itself.</li>
+        <li>On a serverless diagram, draw the role beside the function.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Where is the VPC?</h2>
+  <div class="card">
+    <p><b>There is none.</b> API Gateway, Lambda and DynamoDB are regional services that AWS runs on its own network. You draw them inside the Region box and stop there: no VPC, no AZ boxes, no subnets.</p>
+    <p>A function can be <i>attached</i> to your VPC when it must reach something that lives there, such as an RDS database or ElastiCache. It then gets network interfaces in your private subnets and a security group, and needs a NAT Gateway or VPC endpoints to reach the internet and other AWS services. Do this only when you have to.</p>
+  </div>
+
+  <h2>Week 2 servers vs today's serverless</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>3-tier on EC2 (Day 10)</th><th>Serverless API (today)</th></tr>
+      <tr><td><b>Entry point</b></td><td>Application Load Balancer</td><td>API Gateway</td></tr>
+      <tr><td><b>Compute</b></td><td>EC2 in an Auto Scaling group</td><td>Lambda functions</td></tr>
+      <tr><td><b>Database</b></td><td>RDS Multi-AZ</td><td>DynamoDB</td></tr>
+      <tr><td><b>Network to design</b></td><td>VPC, subnets, route tables, NAT</td><td>None</td></tr>
+      <tr><td><b>Access control</b></td><td>Security group chain</td><td>IAM roles and permissions</td></tr>
+      <tr><td><b>Scaling</b></td><td>Scaling policies, minutes to react</td><td>Per request, immediate</td></tr>
+      <tr><td><b>High availability</b></td><td>You build it across two AZs</td><td>Built in</td></tr>
+      <tr><td><b>Cost when idle</b></td><td>Servers, load balancer, NAT all billed</td><td>Close to zero</td></tr>
+      <tr><td><b>Watch out for</b></td><td>Patching, capacity planning</td><td>Cold starts, 15-minute limit, cost at steady high load</td></tr>
+    </table>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the AWS Cloud and a Region box. Do <b>not</b> draw a VPC.</li>
+      <li>Place three boxes in a row, left to right: <b>API Gateway</b>, <b>Lambda</b>, <b>DynamoDB</b>.</li>
+      <li>Write the routes on API Gateway and the table name and partition key on DynamoDB.</li>
+      <li>Draw the <b>execution role</b> under the function and write what it allows.</li>
+      <li>Draw <b>CloudWatch Logs</b> with a dashed arrow from the function.</li>
+      <li>Draw the client outside the cloud, and number the arrows 1, 2, 3.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. It should take two minutes; the simplicity is the point.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Which parts of this architecture live inside a VPC?</summary><p>None. All three are regional services outside your network. A Lambda function is attached to a VPC only when it needs to reach resources there, such as RDS.</p></details>
+  <details><summary>What stops the function from deleting a different table?</summary><p>Its execution role. The role allows only <code>PutItem</code> and <code>Query</code> on the <code>Notes</code> table, so any other call is denied by IAM. There is no security group involved.</p></details>
+  <details><summary>What is a cold start, and when does it happen?</summary><p>The extra time to create a new execution environment and load your code. It happens on the first request after idle, and whenever concurrent requests exceed the warm environments. Smaller packages and lighter runtimes shorten it; provisioned concurrency keeps environments warm for a price.</p></details>
+  <details><summary>Five thousand requests arrive in the same second. What happens?</summary><p>Lambda creates environments up to the account's concurrency limit, 1,000 per Region by default. Requests beyond that are throttled and the client gets an error to retry. Raise the limit, or set API Gateway throttling so the excess is rejected cleanly.</p></details>
+  <details><summary>The function saves a counter in a global variable. Is that safe?</summary><p>No. Each environment has its own copy, and environments appear and disappear. State must live outside the function, in DynamoDB or S3.</p></details>
+  <details><summary>A report takes 40 minutes to generate. Can a Lambda function behind this API do it?</summary><p>No. A function stops at 15 minutes, and API Gateway stops waiting after about 30 seconds. Start the work asynchronously and run it in a container (Day 18) or split it into steps.</p></details>
+  <details><summary>Is this API highly available? What did you do to make it so?</summary><p>Yes, and you did nothing. Each service runs across several AZs in the Region by design. It is still a single-Region architecture.</p></details>
+  <details><summary>When would the EC2 design be the cheaper choice?</summary><p>With steady, heavy traffic around the clock. Paying per request then costs more than servers that are busy all the time. Serverless wins when traffic is low, spiky or unpredictable.</p></details>
+
+  <div class="next">
+    <b>Next — Day 16: Decoupling with queues.</b> Some work should not make the user wait. You put an SQS queue between the part that receives requests and the part that processes them, add a dead-letter queue for failures, and use SNS to fan one message out to several queues.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Region and table.</b> Draw the Region and stop: no VPC. Create a DynamoDB table called <code>Notes</code> with <code>id</code> as its partition key.",
+    "<b>Step 2 — Lambda function.</b> Upload the code as a function. Nothing runs yet; it waits for an event.",
+    "<b>Step 3 — Execution role and logs.</b> Give the function a role that allows exactly the calls it needs: two actions on one table, and writing logs.",
+    "<b>Step 4 — API Gateway.</b> Create an HTTP API with two routes, both integrated with the function. It supplies the public HTTPS address.",
+    "<b>Step 5 — A request.</b> (1) Client to API Gateway over HTTPS. (2) API Gateway invokes the function. (3) The function reads or writes the table. The answer travels back the same way."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const RUN = 20;                                  // ms of billed run time per invocation
+  const st = { warm: 0, inv: 0, cold: 0, ms: 0 };
+
+  function send(n) {
+    const reused = Math.min(n, st.warm), cold = n - reused;
+    st.warm = Math.max(st.warm, n);
+    st.inv += n; st.cold += cold; st.ms += n * RUN;
+    return { reused, cold };
+  }
+  function paint() {
+    $("stEnv").textContent = st.warm;
+    $("stInv").textContent = st.inv;
+    $("stCold").textContent = st.cold;
+    $("stMs").textContent = st.ms.toLocaleString("en-US") + " ms";
+    $("envs").textContent = "environments running: " + st.warm;
+  }
+  const actions = {
+    one() {
+      const r = send(1);
+      return r.cold
+        ? "<b>Cold start.</b> No environment existed, so Lambda created one, loaded the code, then ran it. This request took a few hundred milliseconds instead of about 20. The environment now stays warm."
+        : `<b>Warm.</b> An existing environment handled it in about ${RUN} ms. Only that run time is billed.`;
+    },
+    burst() {
+      const r = send(100);
+      return r.cold
+        ? `<b>Scaled out instantly.</b> One environment handles one request at a time, so 100 simultaneous requests need 100 environments. ${r.reused} were warm; Lambda created the other ${r.cold}, each with a cold start. No scaling policy, no waiting for servers to boot. DynamoDB on-demand absorbed the writes.`
+        : "<b>All warm.</b> 100 environments already existed, so every request was served without a cold start.";
+    },
+    idle() {
+      const had = st.warm; st.warm = 0;
+      return had
+        ? `<b>Scaled to zero.</b> Lambda removed all ${had} idle environments. Nothing is running and nothing is billed. The next request will be a cold start.`
+        : "Nothing was running, so nothing changed. The bill for this period is zero.";
+    },
+    reset() {
+      Object.assign(st, { warm: 0, inv: 0, cold: 0, ms: 0 });
+      return "Nothing is running and nothing is being billed. Send a request.";
+    }
+  };
+  $("simBtns").querySelectorAll("button").forEach(b => b.onclick = () => { $("simMsg").innerHTML = actions[b.dataset.a](); paint(); });
+</script>
+</body>
+</html>
