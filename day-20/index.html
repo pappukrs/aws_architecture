@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 20 — Microservices</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  :root { --msg: #c2255c; --msg-fill: #fdf0f5; }
+  @media (prefers-color-scheme: dark) { :root { --msg: #f783ac; --msg-fill: #2e1722; } }
+  #diagram .svc, #diagram .dbc { transition: opacity .3s; }
+  #diagram .svc.down, #diagram .dbc.down { opacity: .22; }
+  #diagram .busy-tag { opacity: 0; transition: opacity .3s; }
+  #diagram .busy-tag.show { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-19/index.html">← Day 19</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 20 of 30 · Week 3 — Serverless, Decoupling, Containers</div>
+    <h1>Microservices</h1>
+    <p class="lead">So far one application did everything. Today you split it into small services, each owning one job, its own code and its own database. They use every building block from this week: an API Gateway in front, Lambda or containers inside, and a queue wherever one service does not need another's answer straight away.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 640" role="img" aria-label="A client calls API Gateway, which routes to three services: Users on Lambda with DynamoDB, Catalog on ECS with its own RDS database, and Orders on ECS with its own RDS database. Orders calls the Catalog API directly and must not read its database. Orders also puts messages on an SQS queue that a Notifications service reads to send email.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--az)"/></marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <symbol id="lambda" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <text x="28" y="40" font-size="32" font-weight="700" text-anchor="middle" style="fill:#fff">λ</text>
+          </symbol>
+          <symbol id="task" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><rect x="11" y="17" width="34" height="22" rx="2"/><line x1="20" y1="17" x2="20" y2="39"/><line x1="28" y1="17" x2="28" y2="39"/><line x1="36" y1="17" x2="36" y2="39"/></g>
+          </symbol>
+          <symbol id="rds" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--priv)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5"><ellipse cx="28" cy="17" rx="14" ry="6"/><path d="M14 17 V39 A14 6 0 0 0 42 39 V17"/><path d="M14 28 A14 6 0 0 0 42 28"/></g>
+          </symbol>
+          <symbol id="ddb" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--priv)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5"><rect x="13" y="14" width="30" height="28" rx="3"/><line x1="13" y1="24" x2="43" y2="24"/><line x1="13" y1="33" x2="43" y2="33"/><line x1="25" y1="14" x2="25" y2="42"/></g>
+          </symbol>
+          <symbol id="mail" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--dc)"/>
+            <g fill="none" stroke="var(--card)" stroke-width="2.5" stroke-linejoin="round"><rect x="12" y="17" width="32" height="22" rx="3"/><path d="M12 19 L28 31 L44 19"/></g>
+          </symbol>
+        </defs>
+
+        <rect x="20" y="70" width="960" height="555" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="93" font-size="15" font-weight="700">AWS Cloud · Region ap-south-1</text>
+
+        <!-- Step 1: one front door -->
+        <g data-step="1">
+          <rect x="420" y="10" width="160" height="44" rx="22" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="38" font-size="15" font-weight="700" text-anchor="middle">Client</text>
+          <line x1="500" y1="56" x2="500" y2="101" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <rect x="60" y="106" width="880" height="54" rx="10" fill="var(--vpc)"/>
+          <text x="500" y="129" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:#fff">API Gateway</text>
+          <text x="500" y="148" font-size="11.5" text-anchor="middle" style="fill:#fff">one public address · checks who is calling · routes each path to a service</text>
+        </g>
+
+        <!-- Step 2: Users service -->
+        <g data-step="2">
+          <g class="svc" id="svcUsers">
+            <rect x="60" y="200" width="270" height="235" rx="10" fill="none" stroke="var(--dc)" stroke-width="2" stroke-dasharray="8 5"/>
+            <text x="74" y="222" font-size="13.5" font-weight="700">Users service</text>
+            <text x="316" y="222" font-size="11" text-anchor="end" style="fill:var(--muted)">team A</text>
+            <rect x="75" y="236" width="240" height="64" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <use href="#lambda" x="85" y="250" width="36" height="36"/>
+            <text x="131" y="266" font-size="12.5" font-weight="700">Lambda</text>
+            <text x="131" y="283" font-size="11" style="fill:var(--muted)">sign-up, login, profile</text>
+            <rect x="75" y="345" width="240" height="64" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+            <use href="#ddb" x="85" y="359" width="36" height="36"/>
+            <text x="131" y="375" font-size="12.5" font-weight="700">DynamoDB</text>
+            <text x="131" y="392" font-size="11" style="fill:var(--muted)">table: Users</text>
+            <line x1="195" y1="302" x2="195" y2="340" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+          </g>
+          <text class="busy-tag" id="busyUsers" x="316" y="326" font-size="11" font-weight="700" text-anchor="end" style="fill:var(--pub)">scaled out ×10</text>
+          <line x1="195" y1="162" x2="195" y2="195" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <text x="206" y="184" font-size="11" class="mono">/users/*</text>
+        </g>
+
+        <!-- Step 3: Catalog and Orders services -->
+        <g data-step="3">
+          <g class="svc" id="svcCatalog">
+            <rect x="365" y="200" width="270" height="235" rx="10" fill="none" stroke="var(--dc)" stroke-width="2" stroke-dasharray="8 5"/>
+            <text x="379" y="222" font-size="13.5" font-weight="700">Catalog service</text>
+            <text x="621" y="222" font-size="11" text-anchor="end" style="fill:var(--muted)">team B</text>
+            <rect x="380" y="236" width="240" height="64" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <use href="#task" x="390" y="250" width="36" height="36"/>
+            <text x="436" y="266" font-size="12.5" font-weight="700">ECS Fargate</text>
+            <text x="436" y="283" font-size="11" style="fill:var(--muted)">products, prices, stock</text>
+            <rect x="380" y="345" width="240" height="64" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+            <use href="#rds" x="390" y="359" width="36" height="36"/>
+            <text x="436" y="375" font-size="12.5" font-weight="700">RDS</text>
+            <text x="436" y="392" font-size="11" style="fill:var(--muted)">database: catalog</text>
+            <line x1="500" y1="302" x2="500" y2="340" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+          </g>
+          <g class="svc" id="svcOrders">
+            <rect x="670" y="200" width="270" height="235" rx="10" fill="none" stroke="var(--dc)" stroke-width="2" stroke-dasharray="8 5"/>
+            <text x="684" y="222" font-size="13.5" font-weight="700">Orders service</text>
+            <text x="926" y="222" font-size="11" text-anchor="end" style="fill:var(--muted)">team C</text>
+            <rect x="685" y="236" width="240" height="64" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <use href="#task" x="695" y="250" width="36" height="36"/>
+            <text x="741" y="266" font-size="12.5" font-weight="700">ECS Fargate</text>
+            <text x="741" y="283" font-size="11" style="fill:var(--muted)">cart, checkout</text>
+            <g class="dbc" id="dbOrders">
+              <rect x="685" y="345" width="240" height="64" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+              <use href="#rds" x="695" y="359" width="36" height="36"/>
+              <text x="741" y="375" font-size="12.5" font-weight="700">RDS</text>
+              <text x="741" y="392" font-size="11" style="fill:var(--muted)">database: orders</text>
+            </g>
+            <line x1="805" y1="302" x2="805" y2="340" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+          </g>
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="500" y1="162" x2="500" y2="195"/><line x1="805" y1="162" x2="805" y2="195"/>
+          </g>
+          <text x="511" y="184" font-size="11" class="mono">/products/*</text>
+          <text x="816" y="184" font-size="11" class="mono">/orders/*</text>
+        </g>
+
+        <!-- Step 4: service-to-service call, and what is forbidden -->
+        <g data-step="4">
+          <line x1="683" y1="262" x2="625" y2="262" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <line x1="700" y1="303" x2="626" y2="366" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowR)"/>
+          <circle cx="661" cy="336" r="11" fill="var(--bad)"/>
+          <text x="661" y="341" font-size="14" font-weight="700" text-anchor="middle" style="fill:#fff">✕</text>
+        </g>
+
+        <!-- Step 5: asynchronous path through a queue -->
+        <g data-step="5">
+          <line x1="805" y1="437" x2="805" y2="475" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <rect x="670" y="480" width="270" height="72" rx="8" fill="var(--msg-fill)" stroke="var(--msg)" stroke-width="2.5"/>
+          <text x="684" y="502" font-size="12.5" font-weight="700" style="fill:var(--msg)">SQS queue · order-events</text>
+          <text x="684" y="521" font-size="11" class="mono">OrderPlaced</text>
+          <text id="qText" x="684" y="540" font-size="11" style="fill:var(--muted)">0 messages waiting</text>
+
+          <line x1="668" y1="516" x2="640" y2="516" stroke="var(--az)" stroke-width="3.5" marker-end="url(#arrowB)"/>
+          <g class="svc" id="svcNotif">
+            <rect x="365" y="470" width="270" height="92" rx="10" fill="none" stroke="var(--dc)" stroke-width="2" stroke-dasharray="8 5"/>
+            <text x="379" y="490" font-size="13.5" font-weight="700">Notifications service</text>
+            <text x="621" y="490" font-size="11" text-anchor="end" style="fill:var(--muted)">team D</text>
+            <rect x="380" y="498" width="240" height="52" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <use href="#lambda" x="388" y="508" width="32" height="32"/>
+            <text x="430" y="521" font-size="12.5" font-weight="700">Lambda</text>
+            <text x="430" y="537" font-size="11" style="fill:var(--muted)">polls the queue</text>
+          </g>
+          <line x1="363" y1="516" x2="335" y2="516" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <rect x="60" y="480" width="270" height="72" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <use href="#mail" x="72" y="498" width="36" height="36"/>
+          <text x="118" y="513" font-size="12.5" font-weight="700">Amazon SES</text>
+          <text x="118" y="530" font-size="11" style="fill:var(--muted)">email to the customer</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the client talks only to <b>API Gateway</b>, which routes each path to the service that owns it. Every service is a dashed box with its <b>own compute and its own database</b>. When Orders needs a price it <b>calls the Catalog service's API</b>; reading Catalog's database directly is forbidden. Confirmation emails are not urgent, so Orders drops a message on a <b>queue</b> and the Notifications service handles it later.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Synchronous call: the caller waits</span>
+      <span style="--c:var(--az)">Asynchronous: polled from a queue</span>
+      <span style="--c:var(--dc)">Service boundary: one team, one deployable unit</span>
+      <span style="--c:var(--priv)">A database owned by one service</span>
+      <span style="--c:var(--bad)">Not allowed</span>
+    </div>
+  </div>
+
+  <h2>Failure simulator</h2>
+  <div class="card">
+    <p>The promise of microservices is that one part can fail without taking the rest down. Break something and check which features still work. The diagram above fades the failed part.</p>
+    <div class="seg" id="simBtns">
+      <button data-a="ok" class="on">All healthy</button>
+      <button data-a="catalog">Catalog service down</button>
+      <button data-a="notif">Notifications service down</button>
+      <button data-a="odb">Orders database down</button>
+      <button data-a="busy">Users service gets 10× traffic</button>
+    </div>
+    <div class="table-wrap"><table id="simTable"></table></div>
+    <p class="result" id="simMsg"></p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>What a microservice is</h3>
+      <p>A small application that does one business job and can be changed and released by itself.</p>
+      <ul>
+        <li>Owned by <b>one team</b>, with its own code and release schedule.</li>
+        <li>Reached only through its <b>API</b> or its messages.</li>
+        <li>Free to use whatever fits: here one service is Lambda with DynamoDB, another is containers with a relational database.</li>
+        <li>Scales alone: a busy Users service does not force Orders to grow.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>One database per service</h3>
+      <p>The rule that makes the rest possible. A service's data is private to it.</p>
+      <ul>
+        <li><b>Independent change:</b> a team can alter its tables without asking anyone.</li>
+        <li><b>Failure isolation:</b> one overloaded database slows one service, not all.</li>
+        <li><b>Right tool:</b> key-value for one, relational for another.</li>
+        <li>If two services share tables, they are really one application deployed in two pieces, with all the coupling and none of the simplicity.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Synchronous or asynchronous</h3>
+      <p>Two ways for services to talk, with very different failure behaviour.</p>
+      <ul>
+        <li><b>Synchronous:</b> an API call; the caller waits for the answer. If the other service is down, so is the caller's feature.</li>
+        <li><b>Asynchronous:</b> a message on a queue or an event; the caller carries on. The other service can be down for an hour.</li>
+        <li>Use synchronous only when the answer is needed now. Everything else goes on a queue.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>The API Gateway's job</h3>
+      <p>Clients should not know how many services exist or where they are.</p>
+      <ul>
+        <li><b>One address</b> for everything; paths decide the service.</li>
+        <li>Authentication and throttling done once, not in every service.</li>
+        <li>You can split, merge or move services behind it without changing the client.</li>
+        <li>Services that only consume messages, like Notifications, are not exposed at all.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>What you give up</h2>
+  <div class="card">
+    <p>Separate databases remove two things a single database gives you for free.</p>
+    <ul>
+      <li><b>No joins across services.</b> “Orders with customer names” cannot be one query. Either the Orders service asks the Users service, or it keeps its own copy of the few fields it needs, or reports are built in a separate analytics store fed by events (Day 27).</li>
+      <li><b>No transaction across services.</b> “Create the order and reduce the stock” cannot be one atomic step. Each service commits its own part, and if a later step fails, earlier ones are undone by compensating actions. This is the <b>saga</b> pattern, and the result is <b>eventual consistency</b>.</li>
+      <li><b>More moving parts.</b> A request may cross several services, so you need tracing and central logs to find where it went wrong (Day 26).</li>
+    </ul>
+  </div>
+
+  <h2>Monolith or microservices?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Monolith (Day 10)</th><th>Microservices (today)</th></tr>
+      <tr><td><b>Deployment</b></td><td>The whole application at once</td><td>Each service by itself</td></tr>
+      <tr><td><b>Scaling</b></td><td>All of it together</td><td>Only the busy service</td></tr>
+      <tr><td><b>A failure</b></td><td>Can take everything down</td><td>Contained, if calls are asynchronous</td></tr>
+      <tr><td><b>Data</b></td><td>One database, joins and transactions</td><td>One per service, eventual consistency</td></tr>
+      <tr><td><b>Operations</b></td><td>One thing to run and debug</td><td>Many things, plus the network between them</td></tr>
+      <tr><td><b>Fits</b></td><td>Small teams, new products</td><td>Many teams working on one large product</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">Microservices solve an organisational problem: many teams stepping on each other in one codebase. A small team usually moves faster with a well-structured monolith, and can split it later.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the client and one wide <b>API Gateway</b> bar.</li>
+      <li>Under it, draw three dashed <b>service boxes</b> side by side. In each, put a compute card on top and a database card below, with an arrow between them.</li>
+      <li>Draw an arrow from the gateway to each service and label it with its path.</li>
+      <li>Draw one <b>synchronous</b> arrow from Orders to Catalog, compute to compute.</li>
+      <li>Draw a crossed-out arrow from Orders to Catalog's <b>database</b>.</li>
+      <li>Below, draw Orders → <b>queue</b> → a fourth service → email. Use a different arrow style for the queue.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. No database may sit outside a service box, and no arrow may enter a database from another service.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Why one database per service?</summary><p>So each service can change, scale and fail independently. With a shared database, a schema change by one team breaks another, one heavy query slows everyone, and no service can be released alone. Private data is what makes the services truly separate.</p></details>
+  <details><summary>The Orders service needs a product's price. How does it get it?</summary><p>By calling the Catalog service's API, or by keeping its own copy of prices that it updates from Catalog's events. Never by querying the catalog database.</p></details>
+  <details><summary>Catalog is down and now nobody can place an order. What went wrong in the design, and how do you soften it?</summary><p>Orders depends on Catalog synchronously, so Catalog's outage became Orders' outage. Soften it with a short timeout and a fallback, a cached or locally copied price, or by receiving price changes as events so no live call is needed.</p></details>
+  <details><summary>Notifications is down for an hour. What do customers experience?</summary><p>Ordering works normally. Messages wait in the queue, and the emails go out when the service returns. That is the benefit of the asynchronous path.</p></details>
+  <details><summary>Management wants a report joining orders with customer details. Where does it run?</summary><p>Not against the services' databases. Services publish events, and a separate analytics store collects them for reporting. Day 27 builds that pipeline.</p></details>
+  <details><summary>An order must reserve stock, take payment and create the order record. One fails halfway. What now?</summary><p>There is no cross-service transaction to roll back. Use a saga: each step has a compensating action, such as releasing the stock, which runs if a later step fails. Step Functions is a common way to orchestrate it.</p></details>
+  <details><summary>Why may the Users service use Lambda while Orders uses containers?</summary><p>Each service is independent, so each team picks what suits its workload. Other services see only the API, not what runs behind it.</p></details>
+  <details><summary>A four-person startup is building its first product. Microservices?</summary><p>Usually not. They would pay the cost of many deployments, networks and databases without having the problem microservices solve, which is many teams in one codebase. Start with a clean monolith.</p></details>
+
+  <div class="next">
+    <b>Next — Day 21: Review, a serverless web application.</b> Week 3 comes together: a static front end on S3 and CloudFront, sign-in with Cognito, and an API on API Gateway, Lambda and DynamoDB. You trace a login request from end to end.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — One front door.</b> Clients talk to API Gateway and nothing else. It will route each path to the service that owns it.",
+    "<b>Step 2 — The first service.</b> Users is a Lambda function with its own DynamoDB table. The dashed box is the service boundary: everything inside belongs to one team.",
+    "<b>Step 3 — Two more services.</b> Catalog and Orders each run in containers and each have their own RDS database. Three services, three databases, three teams.",
+    "<b>Step 4 — Talking to each other.</b> Orders needs prices, so it calls Catalog's API. It must not read Catalog's database, however convenient that looks.",
+    "<b>Step 5 — The asynchronous path.</b> Sending the confirmation email need not delay the customer. Orders puts a message on a queue; the Notifications service picks it up and sends the email through SES."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const Y = t => `<span style="color:var(--pub)">✓</span> ${t}`;
+  const N = t => `<span style="color:var(--bad)">✕</span> ${t}`;
+  const W = t => `<span style="color:var(--orange)">…</span> ${t}`;
+  const scenarios = {
+    ok: { down: [], q: 0,
+      rows: [Y("Works"), Y("Works"), Y("Works"), Y("Sent within seconds")],
+      msg: "Everything is up. Every feature works, and the queue is empty because Notifications keeps up." },
+    catalog: { down: ["svcCatalog"], q: 0,
+      rows: [Y("Works"), N("Fails: this is Catalog's own feature"), N("Fails: Orders calls Catalog for the price and gets no answer"), Y("Nothing new to send")],
+      msg: "<b>Two features down, not one.</b> Browsing fails as expected. But ordering fails too, because Orders depends on Catalog <b>synchronously</b>. This is the weak point of the design. Login still works, since Users depends on nobody." },
+    notif: { down: ["svcNotif"], q: 12,
+      rows: [Y("Works"), Y("Works"), Y("Works"), W("Delayed: messages wait in the queue")],
+      msg: "<b>Customers notice almost nothing.</b> Orders are placed normally. The messages pile up in the queue and the emails are sent when Notifications recovers. An <b>asynchronous</b> dependency does not pass its failure on." },
+    odb: { down: ["dbOrders"], q: 0,
+      rows: [Y("Works"), Y("Works"), N("Fails: Orders cannot save anything"), Y("Nothing new to send")],
+      msg: "<b>Contained.</b> Only ordering is affected. Because each service has its own database, Users and Catalog are untouched. With one shared database, login and browsing would be down as well." },
+    busy: { down: [], q: 0, busy: true,
+      rows: [Y("Works: Lambda scaled out"), Y("Works"), Y("Works"), Y("Sent within seconds")],
+      msg: "<b>Only Users scaled.</b> A marketing campaign sent ten times the sign-ups. The Users service's functions and table scaled; Catalog and Orders did not need to grow, and their databases never saw the load." }
+  };
+  const features = ["Log in / view profile", "Browse products", "Place an order", "Confirmation email"];
+  function run(key) {
+    const s = scenarios[key];
+    $("simBtns").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.a === key));
+    document.querySelectorAll("#diagram .svc, #diagram .dbc").forEach(el => el.classList.toggle("down", s.down.includes(el.id)));
+    $("busyUsers").classList.toggle("show", !!s.busy);
+    $("qText").textContent = s.q + " messages waiting";
+    $("simTable").innerHTML = "<tr><th>Feature</th><th>Status</th></tr>" + features.map((f, i) => `<tr><td>${f}</td><td>${s.rows[i]}</td></tr>`).join("");
+    $("simMsg").innerHTML = s.msg;
+  }
+  $("simBtns").querySelectorAll("button").forEach(b => b.onclick = () => run(b.dataset.a));
+  run("ok");
+</script>
+</body>
+</html>
