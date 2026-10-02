@@ -17,7 +17,7 @@
 </head>
 <body>
 <main>
-  <nav class="nav"><a href="../day-09/index.html">← Day 9</a><a href="../README.md">30-day plan</a></nav>
+  <nav class="nav"><a href="../day-09/index.html">← Day 9</a><a href="../README.md">30-day plan</a><a href="../day-11/index.html">Day 11 →</a></nav>
   <header>
     <div class="tag">Day 10 of 30 · Week 2 — Compute, Load Balancing, High Availability</div>
     <h1>Classic 3-Tier Application</h1>
@@ -278,7 +278,7 @@
   <details><summary>The whole Mumbai Region becomes unavailable. Does this design survive?</summary><p>No. Multi-AZ covers the loss of a zone, not of a Region. Surviving that needs a copy in another Region, which is disaster recovery on Day 28.</p></details>
 
   <div class="next">
-    <b>Next — Day 11: Read scaling and caching.</b> The single primary is now the bottleneck. You add RDS read replicas for read-heavy queries and ElastiCache between the application and the database to answer repeated requests from memory.
+    <b>Next — <a href="../day-11/index.html">Day 11: Read scaling and caching</a>.</b> The single primary is now the bottleneck. You add RDS read replicas for read-heavy queries and ElastiCache between the application and the database to answer repeated requests from memory.
   </div>
 </main>
 
