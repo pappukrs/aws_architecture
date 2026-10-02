@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 18 — Containers on ECS Fargate</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .slot use, #diagram .slot .ghost, #diagram .slot .ver { transition: opacity .3s; }
+  #diagram .slot .ghost { opacity: 0; }
+  #diagram .slot.off use, #diagram .slot.off .ver { opacity: 0; }
+  #diagram .slot.off .ghost { opacity: 1; }
+  #diagram .slot.starting use { opacity: .35; }
+  #diagram .slot.new { --task: var(--pub); }
+  #diagram .slot .cross { opacity: 0; }
+  #diagram .slot.dead .cross { opacity: 1; }
+  #diagram .slot.dead use { opacity: .25; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-17/index.html">← Day 17</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 18 of 30 · Week 3 — Serverless, Decoupling, Containers</div>
+    <h1>Containers on ECS Fargate</h1>
+    <p class="lead">Lambda is perfect for short bursts of work, but some services need to run continuously, for longer than 15 minutes, or in a runtime of your choosing. Containers give you that, and Fargate runs them without any servers for you to manage. The network is the one you know from Week 2; only the boxes in the private subnets change.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 732" role="img" aria-label="An ECS service runs Fargate tasks in the private subnets of two Availability Zones behind an Application Load Balancer. Tasks are created from a task definition, pull their image from an ECR repository, and carry an execution role and a task role.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <symbol id="task" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--task, var(--orange))"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round">
+              <rect x="11" y="17" width="34" height="22" rx="2"/><line x1="20" y1="17" x2="20" y2="39"/><line x1="28" y1="17" x2="28" y2="39"/><line x1="36" y1="17" x2="36" y2="39"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: the Week 2 network with a load balancer -->
+        <g data-step="1">
+          <rect x="430" y="14" width="140" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="45" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="20" y="90" width="960" height="627" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+          <rect x="40" y="128" width="920" height="577" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="190" width="880" height="400" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="500" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <rect x="80" y="232" width="410" height="345" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+          <rect x="510" y="232" width="410" height="345" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="906" y="254" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+          <rect x="100" y="272" width="370" height="120" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="380" font-size="13" font-weight="700" style="fill:var(--pub)">Public A — 10.0.1.0/24</text>
+          <rect x="530" y="272" width="370" height="120" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="886" y="380" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--pub)">Public B — 10.0.3.0/24</text>
+          <rect x="100" y="420" width="370" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="550" font-size="13" font-weight="700" style="fill:var(--priv)">Private A — 10.0.2.0/24</text>
+          <rect x="530" y="420" width="370" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="886" y="550" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--priv)">Private B — 10.0.4.0/24</text>
+          <use href="#nat" x="124" y="296" width="40" height="40"/>
+          <text x="144" y="352" font-size="12" font-weight="600" text-anchor="middle">nat-a</text>
+          <use href="#nat" x="836" y="296" width="40" height="40"/>
+          <text x="856" y="352" font-size="12" font-weight="600" text-anchor="middle">nat-b</text>
+          <rect x="300" y="300" width="400" height="54" rx="10" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="324" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+          <text x="500" y="343" font-size="11.5" text-anchor="middle" style="fill:#fff">target group of task IP addresses</text>
+        </g>
+
+        <!-- Step 2: image repository -->
+        <g data-step="2">
+          <rect x="80" y="612" width="250" height="80" rx="6" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+          <text x="92" y="633" font-size="13" font-weight="700" style="fill:var(--orange)">ECR repository</text>
+          <text id="ecrTag" x="92" y="654" font-size="12" class="mono">shop-api:v1</text>
+          <text x="92" y="673" font-size="12" style="fill:var(--muted)">Container images, kept privately</text>
+        </g>
+
+        <!-- Step 3: task definition -->
+        <g data-step="3">
+          <rect x="375" y="612" width="250" height="80" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <text x="387" y="633" font-size="13" font-weight="700" style="fill:var(--dc)">Task definition</text>
+          <text x="387" y="654" font-size="11.5">image · 0.5 vCPU · 1 GB · port 8080</text>
+          <text id="tdRev" x="387" y="673" font-size="12" style="fill:var(--muted)">revision 1 → image shop-api:v1</text>
+        </g>
+
+        <!-- Step 4: ECS service and its tasks -->
+        <g data-step="4">
+          <rect x="120" y="440" width="760" height="88" rx="10" fill="none" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+          <rect x="325" y="517" width="350" height="22" rx="5" fill="var(--orange)"/>
+          <text id="svcTab" x="500" y="532" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">ECS service shop-api · desired 4 tasks · Fargate</text>
+          <g id="slots" font-size="10.5" font-weight="700" text-anchor="middle">
+            <g class="slot" transform="translate(150 450)"><use href="#task" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="ver" x="22" y="57">v1</text><text class="cross" x="22" y="31" font-size="26" style="fill:var(--bad)">✕</text></g>
+            <g class="slot" transform="translate(806 450)"><use href="#task" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="ver" x="22" y="57">v1</text><text class="cross" x="22" y="31" font-size="26" style="fill:var(--bad)">✕</text></g>
+            <g class="slot" transform="translate(230 450)"><use href="#task" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="ver" x="22" y="57">v1</text><text class="cross" x="22" y="31" font-size="26" style="fill:var(--bad)">✕</text></g>
+            <g class="slot" transform="translate(726 450)"><use href="#task" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="ver" x="22" y="57">v1</text><text class="cross" x="22" y="31" font-size="26" style="fill:var(--bad)">✕</text></g>
+            <g class="slot off" transform="translate(310 450)"><use href="#task" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="ver" x="22" y="57">v1</text><text class="cross" x="22" y="31" font-size="26" style="fill:var(--bad)">✕</text></g>
+            <g class="slot off" transform="translate(646 450)"><use href="#task" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="ver" x="22" y="57">v1</text><text class="cross" x="22" y="31" font-size="26" style="fill:var(--bad)">✕</text></g>
+          </g>
+          <g stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)">
+            <line x1="300" y1="610" x2="300" y2="533"/><line x1="500" y1="610" x2="500" y2="544"/>
+          </g>
+          <text x="290" y="605" font-size="11.5" font-weight="600" text-anchor="end" style="fill:var(--dc)">pull image</text>
+          <text x="510" y="605" font-size="11.5" font-weight="600" style="fill:var(--dc)">tasks are created from</text>
+        </g>
+
+        <!-- Step 5: the two IAM roles -->
+        <g data-step="5">
+          <rect x="670" y="612" width="250" height="80" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+          <text x="682" y="633" font-size="13" font-weight="700" style="fill:var(--bad)">Two IAM roles per task</text>
+          <text x="682" y="654" font-size="11.5"><tspan font-weight="700">Execution role:</tspan> pull image, write logs</text>
+          <text x="682" y="673" font-size="11.5"><tspan font-weight="700">Task role:</tspan> what your code may call</text>
+          <line x1="700" y1="610" x2="700" y2="533" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowR)"/>
+        </g>
+
+        <!-- Step 6: user traffic -->
+        <g data-step="6">
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="500" y1="66" x2="500" y2="161"/><line x1="500" y1="216" x2="500" y2="295"/>
+            <line x1="400" y1="357" x2="270" y2="436"/><line x1="600" y1="357" x2="730" y2="436"/>
+          </g>
+          <g font-size="12" font-weight="700">
+            <text x="522" y="258" style="fill:var(--orange)">HTTPS 443</text>
+            <text x="288" y="412" text-anchor="end" style="fill:var(--orange)">HTTP 8080</text>
+            <text x="712" y="412" style="fill:var(--orange)">HTTP 8080</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the <b>ECS service</b> keeps four <b>tasks</b> running across the private subnets of both zones and registers each task's IP with the load balancer. Every task is created from the <b>task definition</b>, pulls its image from <b>ECR</b>, and carries two IAM roles. With <b>Fargate</b> there are no EC2 instances in the picture at all.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">ECS service, tasks, user traffic</span>
+      <span style="--c:var(--vpc)">Load balancer</span>
+      <span style="--c:var(--dc)">Task definition, image pull</span>
+      <span style="--c:var(--bad)">IAM roles</span>
+      <span style="--c:var(--pub)">Tasks on the new version (simulator)</span>
+    </div>
+  </div>
+
+  <h2>Service simulator</h2>
+  <div class="card">
+    <p>The service's one job is to keep the desired number of healthy tasks running. Change something and watch the tasks in the diagram above.</p>
+    <div class="seg" id="segCount"><b>Desired</b>
+      <button data-v="2">2 tasks</button>
+      <button data-v="4" class="on">4 tasks</button>
+      <button data-v="6">6 tasks</button>
+    </div>
+    <div class="seg" id="simBtns">
+      <button data-a="deploy" class="primary">Deploy a new version</button>
+      <button data-a="kill">Crash one task</button>
+      <button data-a="reset">Reset</button>
+    </div>
+    <p class="result" id="simMsg">Four tasks are running version 1, two in each zone.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Container and image</h3>
+      <p>A container packages your code with everything it needs to run, so it behaves the same on a laptop and in production.</p>
+      <ul>
+        <li>An <b>image</b> is the packaged file; a <b>container</b> is a running copy of it.</li>
+        <li><b>ECR</b>, Elastic Container Registry, is where you store images privately in AWS.</li>
+        <li>Each build gets a tag, such as <code>shop-api:v2</code>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>The four ECS words</h3>
+      <ul>
+        <li><b>Task definition:</b> the recipe: which image, how much CPU and memory, which port, which roles. Versioned as revisions.</li>
+        <li><b>Task:</b> one running copy of that recipe.</li>
+        <li><b>Service:</b> keeps N tasks running, replaces failed ones, registers them with the load balancer, rolls out new revisions.</li>
+        <li><b>Cluster:</b> a named group that services and tasks belong to.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Fargate</h3>
+      <p>The way the tasks are run. You choose between two launch types.</p>
+      <ul>
+        <li><b>Fargate:</b> AWS finds the capacity. No instances to patch or scale; you pay per task for its CPU and memory per second.</li>
+        <li><b>EC2:</b> tasks run on instances you manage in an Auto Scaling group. More work, more control, cheaper at large steady scale.</li>
+        <li>Each Fargate task gets <b>its own private IP</b> in your subnet and its own security group.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Networking is unchanged</h3>
+      <ul>
+        <li>Load balancer in public subnets, tasks in private subnets.</li>
+        <li><code>task-sg</code> allows port 8080 only from <code>alb-sg</code>.</li>
+        <li>The target group holds <b>IP addresses</b>, not instances. The service adds and removes them as tasks come and go.</li>
+        <li>To pull the image, tasks need a way out: the NAT Gateway, or VPC endpoints for ECR and S3.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Task role vs execution role</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Execution role</th><th>Task role</th></tr>
+      <tr><td><b>Used by</b></td><td>ECS itself, to start the task</td><td>Your application code, while running</td></tr>
+      <tr><td><b>Typical permissions</b></td><td>Pull the image from ECR, write to CloudWatch Logs, read secrets to inject</td><td>Read an S3 bucket, write a DynamoDB table, send to an SQS queue</td></tr>
+      <tr><td><b>If it is missing</b></td><td>The task never starts</td><td>The task starts, then gets “access denied” on AWS calls</td></tr>
+      <tr><td><b>Same for every service?</b></td><td>Often, yes</td><td>No: one per service, least privilege</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">A way to remember it: the execution role gets the container <i>running</i>; the task role is what the container may <i>do</i>.</p>
+  </div>
+
+  <h2>Three ways to run code</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>EC2 Auto Scaling (Day 9)</th><th>ECS on Fargate (today)</th><th>Lambda (Day 15)</th></tr>
+      <tr><td><b>Unit</b></td><td>Instance</td><td>Task</td><td>Invocation</td></tr>
+      <tr><td><b>Recipe</b></td><td>Launch template + AMI</td><td>Task definition + image</td><td>Function code</td></tr>
+      <tr><td><b>Kept running by</b></td><td>Auto Scaling group</td><td>ECS service</td><td>Nothing; it runs per event</td></tr>
+      <tr><td><b>You manage</b></td><td>Operating system and up</td><td>The container only</td><td>The function only</td></tr>
+      <tr><td><b>Start time</b></td><td>Minutes</td><td>Tens of seconds</td><td>Milliseconds to a second</td></tr>
+      <tr><td><b>Longest run</b></td><td>Unlimited</td><td>Unlimited</td><td>15 minutes</td></tr>
+      <tr><td><b>Cost when idle</b></td><td>Full</td><td>Full, for running tasks</td><td>Zero</td></tr>
+    </table>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the multi-AZ network with the load balancer across the public subnets, as on Day 8.</li>
+      <li>Outside the VPC, draw the <b>ECR repository</b> and the <b>task definition</b>.</li>
+      <li>Draw a dashed <b>ECS service</b> box across both private subnets and put <b>tasks</b> in it, the same number in each AZ. Write “Fargate”.</li>
+      <li>Draw arrows: ECR → service (“pull image”), task definition → service (“created from”).</li>
+      <li>Draw the <b>two roles</b> and write one line for each.</li>
+      <li>Draw the user traffic: Users → Internet Gateway → load balancer → tasks.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. There should be no EC2 instance icons anywhere.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Task role and execution role: what is each for?</summary><p>The execution role is used by ECS to start the task: pulling the image from ECR and sending logs to CloudWatch. The task role is used by your code while it runs, for its own calls to AWS services such as S3 or DynamoDB.</p></details>
+  <details><summary>Tasks in private subnets fail to start with “cannot pull container image”. The NAT Gateways were deleted to save money. Why?</summary><p>A task must reach ECR to download its image, and ECR is outside the VPC. With no NAT Gateway and no VPC endpoints there is no path. Add interface endpoints for ECR and a gateway endpoint for S3, or restore the NAT Gateways.</p></details>
+  <details><summary>A task crashes. Who notices and what happens?</summary><p>The ECS service. It sees fewer running tasks than desired and starts a replacement from the task definition, then registers the new task's IP with the load balancer.</p></details>
+  <details><summary>Task IP addresses change on every restart. How does the load balancer keep up?</summary><p>The target group uses IP targets, and the service registers each new task and deregisters each stopped one automatically.</p></details>
+  <details><summary>How do you release a new version with no downtime?</summary><p>Push the new image to ECR, register a new task definition revision that points to it, and update the service. The service starts new tasks, waits until they pass the load balancer's health check, then stops old ones, a few at a time.</p></details>
+  <details><summary>The application must read from an S3 bucket. Which role do you change?</summary><p>The task role. Add permission to read that one bucket. The execution role is not involved in what the application does.</p></details>
+  <details><summary>When would you choose the EC2 launch type over Fargate?</summary><p>For large, steady workloads where managing your own instances is cheaper, or when you need something Fargate does not offer, such as GPUs or special instance types.</p></details>
+  <details><summary>Why run this API in containers rather than Lambda?</summary><p>It may hold long connections, run tasks longer than 15 minutes, need a custom runtime, or have steady traffic where always-on tasks are cheaper and have no cold starts. If traffic were spiky and short, Lambda would be the better fit.</p></details>
+
+  <div class="next">
+    <b>Next — Day 19: Kubernetes on EKS.</b> The same idea with the industry-standard orchestrator: a control plane that AWS manages, node groups in your private subnets, and a load balancer created for you by an ingress.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The familiar network.</b> Two AZs, public and private subnets, NAT Gateways and a load balancer. Nothing here is new; containers reuse it as it is.",
+    "<b>Step 2 — ECR repository.</b> Build the application into a container image and push it to ECR. It is a regional service, so draw it outside the VPC.",
+    "<b>Step 3 — Task definition.</b> Describe how to run the image: CPU, memory, port and roles. Each change creates a new revision.",
+    "<b>Step 4 — ECS service on Fargate.</b> The service runs four tasks from the task definition, spread over both private subnets. Each task pulls the image from ECR as it starts. No EC2 instances appear.",
+    "<b>Step 5 — Two IAM roles.</b> The execution role lets ECS start the task. The task role is what your code is allowed to call.",
+    "<b>Step 6 — Traffic.</b> The service registers each task's IP with the load balancer, so requests are spread over whichever tasks are running."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const slots = [...document.querySelectorAll("#slots .slot")];   // start order: A, B, A, B, A, B
+  let desired = 4, version = 1, busy = false;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  function setVer(slot, v) {
+    slot.querySelector(".ver").textContent = "v" + v;
+    slot.classList.toggle("new", v > 1 && v === version);
+  }
+  function paint() {
+    slots.forEach((s, i) => s.classList.toggle("off", i >= desired));
+    $("svcTab").textContent = `ECS service shop-api · desired ${desired} tasks · Fargate`;
+    $("ecrTag").textContent = "shop-api:v" + version;
+    $("tdRev").textContent = `revision ${version} → image shop-api:v${version}`;
+  }
+  function lock(on) {
+    busy = on;
+    document.querySelectorAll("#segCount button, #simBtns button").forEach(b => b.disabled = on);
+  }
+
+  $("segCount").querySelectorAll("button").forEach(b => b.onclick = () => {
+    const before = desired; desired = +b.dataset.v;
+    $("segCount").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    slots.forEach((s, i) => { if (i >= before && i < desired) setVer(s, version); });
+    paint();
+    $("simMsg").innerHTML = desired > before
+      ? `<b>Scaled out to ${desired}.</b> The service started ${desired - before} more tasks, balanced across the two zones, and registered them with the load balancer. Fargate found the capacity; there were no servers to add.`
+      : desired < before
+      ? `<b>Scaled in to ${desired}.</b> The service deregistered ${before - desired} tasks from the load balancer, let their requests finish, and stopped them.`
+      : `Desired count is already ${desired}.`;
+  });
+
+  const actions = {
+    async deploy() {
+      lock(true);
+      version++;
+      $("ecrTag").textContent = "shop-api:v" + version;
+      $("tdRev").textContent = `revision ${version} → image shop-api:v${version}`;
+      for (let i = 0; i < desired; i++) {
+        $("simMsg").innerHTML = `<b>Rolling update, ${i} of ${desired} done.</b> The service starts a task from revision ${version}, which pulls the new image and must pass the load balancer's health check…`;
+        slots[i].classList.add("starting"); setVer(slots[i], version);
+        await wait(900);
+        slots[i].classList.remove("starting");
+        await wait(250);
+      }
+      $("simMsg").innerHTML = `<b>Deployment complete.</b> All ${desired} tasks run version ${version}. Old tasks were stopped only after their replacements were healthy, so users saw no interruption.`;
+      lock(false);
+    },
+    async kill() {
+      lock(true);
+      const victim = slots[desired - 1];
+      victim.classList.add("dead");
+      $("simMsg").innerHTML = `<b>One task crashed.</b> The load balancer stops sending it requests. The service counts ${desired - 1} running tasks against a desired ${desired}…`;
+      await wait(1600);
+      victim.classList.remove("dead");
+      $("simMsg").innerHTML = `<b>Replaced.</b> The service started a new task from the task definition in the same zone and registered its new IP address. ${desired} tasks are running again.`;
+      lock(false);
+    },
+    reset() {
+      desired = 4; version = 1;
+      slots.forEach(s => { s.classList.remove("new", "starting", "dead"); setVer(s, 1); });
+      $("segCount").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.v === "4"));
+      paint();
+      $("simMsg").innerHTML = "Four tasks are running version 1, two in each zone.";
+    }
+  };
+  $("simBtns").querySelectorAll("button").forEach(b => b.onclick = () => { if (!busy) actions[b.dataset.a](); });
+  paint();
+</script>
+</body>
+</html>

@@ -51,7 +51,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | 15 | **[Serverless API](day-15/index.html)** | API Gateway → Lambda → DynamoDB | Which parts live inside a VPC? (none by default) |
 | 16 | **[Decoupling with queues](day-16/index.html)** | Producer → SQS → consumer ASG, dead-letter queue, SNS → multiple SQS (fan-out) | SQS vs SNS — pull vs push? |
 | 17 | **[Event-driven processing](day-17/index.html)** | S3 upload event → Lambda → DynamoDB, EventBridge rules → targets | When to use EventBridge over SNS? |
-| 18 | **Containers on ECS Fargate** | ECR, ECS cluster, service + tasks in private subnets, ALB | Task role vs execution role? |
+| 18 | **[Containers on ECS Fargate](day-18/index.html)** | ECR, ECS cluster, service + tasks in private subnets, ALB | Task role vs execution role? |
 | 19 | **Kubernetes on EKS** | EKS control plane (AWS-managed), managed node groups in private subnets, ALB ingress | What does AWS manage vs what do you manage? |
 | 20 | **Microservices** | API Gateway → multiple services (Lambda / ECS), each with its own database, SQS between services | Why one database per service? |
 | 21 | **Review: serverless web app** | CloudFront + S3 (frontend), Cognito (auth), API Gateway, Lambda, DynamoDB | Trace a login request end to end. |
