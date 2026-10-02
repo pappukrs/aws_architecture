@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 24 — Private Access to AWS Services</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .fl, #diagram #natG { transition: opacity .25s; }
+  #diagram.lit .fl { opacity: .1; }
+  #diagram.lit .fl.on { opacity: 1; }
+  #diagram.no-nat #natG { opacity: .2; }
+  #diagram .natx { opacity: 0; transition: opacity .25s; }
+  #diagram.no-nat .natx { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-23/index.html">← Day 23</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 24 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Private Access to AWS Services</h1>
+    <p class="lead">S3, DynamoDB and SQS are not inside your VPC. Until now, a server in a private subnet reached them the long way: out through the NAT Gateway and across public addresses. VPC endpoints give it a private door instead, so the traffic never leaves the AWS network and the NAT Gateway bill shrinks. There are two kinds, and they work quite differently.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 640" role="img" aria-label="An app server in a private subnet reaches AWS services in four ways: the old way through a NAT Gateway and the internet; a gateway endpoint on the VPC border for S3 and DynamoDB, chosen by a route table entry; an interface endpoint inside the subnet for other AWS services; and a second interface endpoint to a partner's service through PrivateLink.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/><line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/><line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--vpc)"/><text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text></symbol>
+          <symbol id="s3" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g></symbol>
+          <symbol id="ddb" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--priv)"/><g fill="none" stroke="#fff" stroke-width="2.5"><rect x="13" y="14" width="30" height="28" rx="3"/><line x1="13" y1="24" x2="43" y2="24"/><line x1="13" y1="33" x2="43" y2="33"/><line x1="25" y1="14" x2="25" y2="42"/></g></symbol>
+        </defs>
+
+        <rect x="20" y="60" width="960" height="565" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="83" font-size="15" font-weight="700">AWS Cloud</text>
+        <rect x="35" y="95" width="930" height="518" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+        <text x="49" y="117" font-size="13.5" font-weight="700" style="fill:var(--region)">Region — ap-south-1</text>
+
+        <!-- Step 1: a private server and services outside the VPC -->
+        <g data-step="1">
+          <rect x="50" y="130" width="560" height="470" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="64" y="153" font-size="13.5" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <rect x="70" y="280" width="520" height="305" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="576" y="301" font-size="12.5" font-weight="700" text-anchor="end" style="fill:var(--priv)">Private subnet — 10.0.2.0/24</text>
+          <use href="#ec2" x="96" y="318" width="44" height="44"/>
+          <text x="150" y="336" font-size="12.5" font-weight="700">App server</text>
+          <text x="150" y="353" font-size="11" class="mono">10.0.2.10</text>
+          <rect x="85" y="425" width="262" height="146" rx="6" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="97" y="446" font-size="12.5" font-weight="700" style="fill:var(--priv)">Private route table</text>
+          <text x="97" y="467" font-size="11" class="mono">10.0.0.0/16      local</text>
+
+          <rect x="680" y="268" width="255" height="52" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+          <use href="#s3" x="690" y="278" width="32" height="32"/>
+          <text x="732" y="291" font-size="12.5" font-weight="700">Amazon S3</text>
+          <text x="732" y="308" font-size="11" style="fill:var(--muted)">outside your VPC</text>
+          <rect x="680" y="330" width="255" height="52" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2.5"/>
+          <use href="#ddb" x="690" y="340" width="32" height="32"/>
+          <text x="732" y="353" font-size="12.5" font-weight="700">DynamoDB</text>
+          <text x="732" y="370" font-size="11" style="fill:var(--muted)">outside your VPC</text>
+        </g>
+
+        <!-- Step 2: the old way, through NAT and the internet -->
+        <g data-step="2">
+          <rect x="250" y="8" width="160" height="40" rx="20" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="330" y="33" font-size="14" font-weight="700" text-anchor="middle">Internet</text>
+          <circle cx="330" cy="130" r="22" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="330" y="135" font-size="12" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <rect x="70" y="172" width="520" height="78" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="84" y="193" font-size="12.5" font-weight="700" style="fill:var(--pub)">Public subnet — 10.0.1.0/24</text>
+          <g id="natG">
+            <use href="#nat" x="310" y="184" width="40" height="40"/>
+            <text x="362" y="201" font-size="12" font-weight="700">NAT Gateway</text>
+            <text x="362" y="217" font-size="11" style="fill:var(--muted)">charged per hour and per GB</text>
+          </g>
+          <text class="natx" x="330" y="216" font-size="34" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text>
+          <text x="97" y="486" font-size="11" class="mono">0.0.0.0/0        nat</text>
+          <g class="fl" id="fNat" fill="none" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arrowD)">
+            <line x1="128" y1="314" x2="304" y2="228"/>
+            <line x1="330" y1="181" x2="330" y2="157"/>
+            <line x1="330" y1="106" x2="330" y2="53"/>
+          </g>
+          <g class="fl" id="fNatS3">
+            <polyline points="412,28 806,28 806,263" fill="none" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arrowD)"/>
+            <text x="610" y="20" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:var(--dc)">the old way: to the service's public address</text>
+          </g>
+        </g>
+
+        <!-- Step 3: gateway endpoint -->
+        <g data-step="3">
+          <rect x="91" y="494" width="250" height="40" rx="4" fill="var(--priv-fill)"/>
+          <text x="97" y="509" font-size="11" font-weight="700" class="mono">S3 prefix list   vpce-gw</text>
+          <text x="97" y="526" font-size="11" font-weight="700" class="mono">DynamoDB list    vpce-gw</text>
+          <text x="97" y="556" font-size="10.5" style="fill:var(--muted)">the most specific route wins</text>
+          <line class="fl" id="fGw" x1="262" y1="336" x2="582" y2="331" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <line class="fl" id="fGwS3" x1="634" y1="322" x2="675" y2="298" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <line class="fl" id="fGwDdb" x1="634" y1="340" x2="675" y2="356" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+          <circle cx="610" cy="331" r="24" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="610" y="335" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">VPCE</text>
+          <text x="598" y="374" font-size="11.5" font-weight="700" text-anchor="end" style="fill:var(--vpc)">Gateway endpoint</text>
+        </g>
+
+        <!-- Step 4: interface endpoint -->
+        <g data-step="4">
+          <rect x="680" y="396" width="255" height="52" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2.5"/>
+          <text x="692" y="418" font-size="12" font-weight="700">SQS · ECR · Secrets Manager</text>
+          <text x="692" y="435" font-size="11" style="fill:var(--muted)">and most other AWS services</text>
+          <rect x="385" y="390" width="192" height="64" rx="6" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+          <text x="397" y="410" font-size="12" font-weight="700" style="fill:var(--vpc)">Interface endpoint</text>
+          <text x="397" y="427" font-size="11" class="mono">ENI 10.0.2.50</text>
+          <text x="397" y="444" font-size="10.5" style="fill:var(--muted)">security group: 443 from app</text>
+          <g class="fl" id="fIf" fill="none" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <polyline points="262,352 368,352 368,422 381,422"/>
+            <line x1="579" y1="422" x2="675" y2="422"/>
+          </g>
+        </g>
+
+        <!-- Step 5: PrivateLink to someone else's service -->
+        <g data-step="5">
+          <rect x="680" y="476" width="255" height="112" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="692" y="497" font-size="12.5" font-weight="700" style="fill:var(--vpc)">Partner's VPC</text>
+          <text x="692" y="513" font-size="10.5" style="fill:var(--muted)">another account or company</text>
+          <rect x="692" y="524" width="105" height="34" rx="6" fill="var(--vpc)"/>
+          <text x="744.5" y="545" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">Network LB</text>
+          <rect x="815" y="524" width="108" height="34" rx="6" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+          <text x="869" y="545" font-size="11" font-weight="700" text-anchor="middle">Their service</text>
+          <line x1="799" y1="541" x2="811" y2="541" stroke="var(--orange)" stroke-width="3"/>
+          <text x="692" y="577" font-size="10.5" style="fill:var(--muted)">published as an endpoint service</text>
+          <rect x="385" y="490" width="192" height="64" rx="6" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+          <text x="397" y="510" font-size="12" font-weight="700" style="fill:var(--vpc)">Interface endpoint</text>
+          <text x="397" y="527" font-size="11" class="mono">ENI 10.0.2.60</text>
+          <text x="397" y="544" font-size="10.5" style="fill:var(--muted)">PrivateLink to the partner</text>
+          <g class="fl" id="fPl" fill="none" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <polyline points="262,352 368,352 368,522 381,522"/>
+            <line x1="579" y1="528" x2="687" y2="540"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: four ways out of a private subnet. The grey dashed path is the old way, through the NAT Gateway to a public address. A <b>gateway endpoint</b> sits on the VPC border and is chosen by <b>route table entries</b>; it serves S3 and DynamoDB. An <b>interface endpoint</b> is a network interface with a private IP <b>inside your subnet</b>; it serves most other AWS services, and through PrivateLink it can also reach a service in someone else's VPC.</p>
+    <div class="legend">
+      <span style="--c:var(--dc)">The old way: NAT Gateway and public addresses</span>
+      <span style="--c:var(--orange)">Private path through an endpoint</span>
+      <span style="--c:var(--vpc)">Endpoints, gateways</span>
+    </div>
+  </div>
+
+  <h2>Which path does the request take?</h2>
+  <div class="card">
+    <p>The app server calls something. Predict the path and whether it works, then check. Try each destination with and without the NAT Gateway.</p>
+    <div class="seg" id="segNat"><b>NAT Gateway</b>
+      <button data-v="yes" class="on">Kept</button>
+      <button data-v="no">Deleted to save money</button>
+    </div>
+    <div class="seg" id="segDest"><b>Call to</b>
+      <button data-v="s3" class="on">S3</button>
+      <button data-v="ddb">DynamoDB</button>
+      <button data-v="sqs">SQS</button>
+      <button data-v="partner">Partner's service</button>
+      <button data-v="web">A public website</button>
+    </div>
+    <p class="result" id="simMsg"></p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>The problem</h3>
+      <p>AWS services are reached at public addresses. A private instance has no public IP, so it needs a NAT Gateway just to talk to S3.</p>
+      <ul>
+        <li><b>Cost:</b> the NAT Gateway charges for every GB, and S3 traffic is often the bulk of it.</li>
+        <li><b>Dependency:</b> no NAT Gateway, no access to AWS APIs.</li>
+        <li><b>Policy:</b> many organisations do not want private workloads to have any path to the internet.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Gateway endpoint</h3>
+      <p>A target you put in a <b>route table</b>. Traffic for the service is sent to it instead of to the NAT Gateway.</p>
+      <ul>
+        <li>Only two services: <b>S3</b> and <b>DynamoDB</b>.</li>
+        <li><b>Free.</b> No hourly charge, no per-GB charge.</li>
+        <li>Not a network interface: no IP address, no security group.</li>
+        <li>Works only for traffic that starts inside the VPC. Not reachable from on-premises or a peered VPC.</li>
+        <li>Draw it on the VPC border.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Interface endpoint</h3>
+      <p>A <b>network interface</b> placed in your subnet, with a private IP, that leads to one service.</p>
+      <ul>
+        <li>Available for most AWS services: SQS, ECR, Secrets Manager, CloudWatch and well over a hundred more.</li>
+        <li>Has a <b>security group</b>; it must allow 443 from your instances.</li>
+        <li><b>Private DNS</b> makes the service's normal name resolve to the private IP, so code does not change.</li>
+        <li>Charged per hour per AZ and per GB. Put one in each AZ you use.</li>
+        <li>Reachable from on-premises over VPN or Direct Connect.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>PrivateLink</h3>
+      <p>The technology behind interface endpoints, and something you can use for your own services.</p>
+      <ul>
+        <li>The provider puts a service behind a <b>Network Load Balancer</b> and publishes it as an endpoint service.</li>
+        <li>The consumer creates an interface endpoint to it in their own VPC.</li>
+        <li>Only that one service is exposed, in one direction. The two networks are not joined.</li>
+        <li>Overlapping CIDRs are not a problem, unlike peering.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Gateway endpoint vs interface endpoint</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Gateway endpoint</th><th>Interface endpoint</th></tr>
+      <tr><td><b>Services</b></td><td>S3 and DynamoDB only</td><td>Most AWS services, and PrivateLink services</td></tr>
+      <tr><td><b>How traffic gets there</b></td><td>A route table entry</td><td>DNS resolves to a private IP in your subnet</td></tr>
+      <tr><td><b>What it is</b></td><td>A route target on the VPC</td><td>A network interface (ENI)</td></tr>
+      <tr><td><b>Security group</b></td><td>No</td><td>Yes</td></tr>
+      <tr><td><b>Cost</b></td><td>Free</td><td>Hourly per AZ, plus per GB</td></tr>
+      <tr><td><b>From on-premises or peered VPCs</b></td><td>No</td><td>Yes</td></tr>
+      <tr><td><b>Where you draw it</b></td><td>On the VPC border</td><td>Inside the subnet</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">S3 has both kinds. Use the free gateway endpoint from inside the VPC, and an S3 interface endpoint only when the traffic comes from on-premises.</p>
+  </div>
+
+  <h2>Locking it down</h2>
+  <div class="card">
+    <ul>
+      <li><b>Endpoint policy:</b> attached to the endpoint, it limits what can be done through it, for example only these two buckets.</li>
+      <li><b>Bucket policy:</b> on the S3 side, deny every request that does not arrive through your endpoint, using the condition <code>aws:sourceVpce</code>. The bucket then cannot be read from anywhere outside your VPC, even with valid credentials.</li>
+      <li><b>No NAT at all:</b> with endpoints for every service a workload needs, a private subnet can have no route to the internet. Day 18's Fargate tasks need four: ECR API, ECR Docker, CloudWatch Logs (all interface) and S3 (gateway).</li>
+    </ul>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw a VPC with a private subnet and an app server. Draw S3 and DynamoDB <b>outside</b> the VPC but inside the Region.</li>
+      <li>Draw the old path as a dashed line: server → NAT Gateway → Internet Gateway → internet → S3.</li>
+      <li>Draw a <b>gateway endpoint</b> on the VPC border with arrows to S3 and DynamoDB. Add the two rows to the route table.</li>
+      <li>Draw an <b>interface endpoint</b> as a box <b>inside</b> the subnet with a private IP, and an arrow from it to “other AWS services”.</li>
+      <li>Draw a second interface endpoint leading to a <b>partner's VPC</b>, ending at a Network Load Balancer.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Border for gateway, inside the subnet for interface: getting that placement right shows you know the difference.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Which endpoint type uses a route table entry?</summary><p>The gateway endpoint. You add it to a route table, and traffic for S3 or DynamoDB follows that route. An interface endpoint uses no route; it is reached through DNS resolving to a private IP in your subnet.</p></details>
+  <details><summary>Which services have gateway endpoints?</summary><p>Only S3 and DynamoDB. Everything else uses interface endpoints.</p></details>
+  <details><summary>A private subnet has no NAT Gateway. The application must read a secret from Secrets Manager. What do you add?</summary><p>An interface endpoint for Secrets Manager in that subnet, with private DNS on and a security group that allows 443 from the application.</p></details>
+  <details><summary>You created the interface endpoint, but calls to the service still time out. What do you check?</summary><p>The endpoint's security group must allow inbound 443 from your instances. Then check that private DNS is enabled, so the service's name resolves to the endpoint's private IP rather than the public address.</p></details>
+  <details><summary>Both a NAT Gateway and an S3 gateway endpoint exist. Which does S3 traffic use, and why?</summary><p>The gateway endpoint. Its route is for S3's specific address ranges, which is more specific than <code>0.0.0.0/0</code>, and the most specific route wins. That S3 traffic stops being charged by the NAT Gateway.</p></details>
+  <details><summary>A server in the data centre, connected by Direct Connect, must reach S3 privately. Will the gateway endpoint work?</summary><p>No. Gateway endpoints serve only traffic that originates in the VPC. Create an S3 interface endpoint, which has a private IP that on-premises systems can route to.</p></details>
+  <details><summary>How do you make a bucket readable only from inside your VPC?</summary><p>A bucket policy that denies requests unless <code>aws:sourceVpce</code> matches your endpoint. Even someone with stolen credentials cannot read it from elsewhere.</p></details>
+  <details><summary>A partner must offer you an API privately. Both of you use <code>10.0.0.0/16</code>. Peering or PrivateLink?</summary><p>PrivateLink. Peering cannot connect overlapping ranges and would expose whole networks to each other. PrivateLink exposes one service through an interface endpoint and does not care about the provider's addressing.</p></details>
+
+  <div class="next">
+    <b>Next — Day 25: Security architecture.</b> One drawing that layers every protection: WAF and Shield at the edge, IAM roles for access, KMS for encryption, Secrets Manager for credentials, and GuardDuty watching for threats.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The situation.</b> An app server in a private subnet needs S3 and DynamoDB. Both services live outside the VPC, and the route table has only the local route.",
+    "<b>Step 2 — The old way.</b> Add a NAT Gateway and a default route to it. Requests leave through the Internet Gateway and reach the service at its public address. It works, and every GB is charged by the NAT Gateway.",
+    "<b>Step 3 — Gateway endpoint.</b> Create a gateway endpoint for S3 and one for DynamoDB. Each adds a route. Those routes are more specific than <code>0.0.0.0/0</code>, so the traffic now goes straight to the service, free of charge.",
+    "<b>Step 4 — Interface endpoint.</b> Other services have no gateway endpoint. An interface endpoint puts a network interface with a private IP in the subnet; the service's DNS name resolves to it.",
+    "<b>Step 5 — PrivateLink.</b> The same mechanism reaches a service in another VPC. The provider fronts it with a Network Load Balancer; you connect with an interface endpoint. The two networks stay separate."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  const sel = { nat: "yes", dest: "s3" };
+  const ok = t => `<b style="color:var(--pub)">Works.</b> ${t}`;
+  const no = t => `<b style="color:var(--bad)">Fails.</b> ${t}`;
+
+  function run() {
+    const nat = sel.nat === "yes";
+    let lit, msg;
+    if (sel.dest === "s3" || sel.dest === "ddb") {
+      const name = sel.dest === "s3" ? "S3" : "DynamoDB";
+      lit = ["fGw", sel.dest === "s3" ? "fGwS3" : "fGwDdb"];
+      msg = ok(`${name} traffic matches the gateway endpoint's route, which is more specific than the default route, so it goes through the <b>gateway endpoint</b>. No charge, and it never touches the NAT Gateway` + (nat ? ", even though one exists." : ", so deleting it changed nothing."));
+    } else if (sel.dest === "sqs") {
+      lit = ["fIf"];
+      msg = ok(`The name <code>sqs.ap-south-1.amazonaws.com</code> resolves to <code>10.0.2.50</code>, the <b>interface endpoint</b> in the subnet. The request goes there over the local route and on to SQS through PrivateLink. ` + (nat ? "The NAT Gateway is not used." : "No NAT Gateway is needed."));
+    } else if (sel.dest === "partner") {
+      lit = ["fPl"];
+      msg = ok(`The request goes to <code>10.0.2.60</code>, the second <b>interface endpoint</b>, and PrivateLink delivers it to the partner's Network Load Balancer. Neither side can reach anything else in the other's VPC.`);
+    } else {
+      lit = nat ? ["fNat"] : [];
+      msg = nat
+        ? ok("A public website is not an AWS service, so no endpoint covers it. The default route sends the request to the <b>NAT Gateway</b>, and it leaves through the Internet Gateway. This is what the NAT Gateway is still needed for.")
+        : no("There is no endpoint for a website, and with the NAT Gateway deleted the default route leads nowhere. Endpoints replace NAT only for the services they cover. If the workload needs the general internet, keep the NAT Gateway.");
+    }
+    $("simMsg").innerHTML = msg;
+    svg.classList.add("lit");
+    svg.classList.toggle("no-nat", !nat);
+    svg.querySelectorAll(".fl").forEach(g => g.classList.toggle("on", lit.includes(g.id)));
+  }
+  for (const [id, key] of [["segNat", "nat"], ["segDest", "dest"]]) {
+    const seg = $(id);
+    seg.querySelectorAll("button").forEach(b => b.onclick = () => {
+      seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      sel[key] = b.dataset.v;
+      run();
+    });
+  }
+  $("simMsg").innerHTML = "Choose a destination to see the path.";
+</script>
+</body>
+</html>
