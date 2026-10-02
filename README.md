@@ -61,7 +61,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | Day | Architecture | Components to draw | Check yourself |
 |-----|--------------|--------------------|----------------|
 | 22 | **[Connecting VPCs](day-22/index.html)** | VPC Peering (2 VPCs), then Transit Gateway hub with 3+ VPCs | Why doesn't peering scale? (not transitive) |
-| 23 | **Hybrid cloud** | On-premises data center, Site-to-Site VPN (Customer Gateway ↔ Virtual Private Gateway), Direct Connect | VPN vs Direct Connect trade-offs? |
+| 23 | **[Hybrid cloud](day-23/index.html)** | On-premises data center, Site-to-Site VPN (Customer Gateway ↔ Virtual Private Gateway), Direct Connect | VPN vs Direct Connect trade-offs? |
 | 24 | **Private access to AWS services** | Gateway endpoint (S3, DynamoDB), interface endpoint / PrivateLink | Which endpoint type uses a route table entry? |
 | 25 | **Security architecture** | WAF + Shield on CloudFront/ALB, IAM roles, KMS encryption, Secrets Manager, GuardDuty | Where is data encrypted in transit and at rest? |
 | 26 | **Monitoring and logging** | CloudWatch metrics/logs/alarms, CloudTrail, VPC Flow Logs, AWS Config → central S3 bucket | CloudWatch vs CloudTrail? |

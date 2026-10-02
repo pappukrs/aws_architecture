@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 23 — Hybrid Cloud</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .fl { transition: opacity .25s; }
+  #diagram.lit .fl { opacity: .13; }
+  #diagram.lit .fl.on { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-22/index.html">← Day 22</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 23 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Hybrid Cloud</h1>
+    <p class="lead">Most companies do not start in the cloud. They have a data centre full of systems that cannot move overnight, so for years the two must work as one network. Today you join a corporate data centre to a VPC in two ways: an encrypted VPN over the internet, and Direct Connect, a private line that never touches the internet.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 600" role="img" aria-label="A corporate data centre on the left is connected to a VPC on the right by two paths that both end at a virtual private gateway: a Site-to-Site VPN of two encrypted tunnels across the internet, and a Direct Connect private line through a Direct Connect location.">
+        <defs>
+          <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--az)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/><line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/><line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="server" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--dc)"/>
+            <g fill="none" stroke="var(--card)" stroke-width="2.5" stroke-linecap="round">
+              <rect x="13" y="12" width="30" height="13" rx="2"/><rect x="13" y="31" width="30" height="13" rx="2"/><line x1="19" y1="18.5" x2="23" y2="18.5"/><line x1="19" y1="37.5" x2="23" y2="37.5"/>
+            </g>
+          </symbol>
+          <symbol id="router" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="28" fill="var(--dc)"/>
+            <g fill="none" stroke="var(--card)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22 H40 M34 16 L40 22 L34 28"/><path d="M44 34 H16 M22 28 L16 34 L22 40"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: two separate networks -->
+        <g data-step="1">
+          <rect x="20" y="90" width="250" height="420" rx="10" fill="var(--card)" stroke="var(--dc)" stroke-width="2.5"/>
+          <text x="34" y="114" font-size="14" font-weight="700" style="fill:var(--dc)">Corporate data centre</text>
+          <text x="34" y="132" font-size="11.5" class="mono">192.168.0.0/16</text>
+          <use href="#server" x="40" y="165" width="40" height="40"/>
+          <text x="90" y="182" font-size="12.5" font-weight="700">Database server</text>
+          <text x="90" y="198" font-size="11" class="mono">192.168.1.10</text>
+          <use href="#server" x="40" y="222" width="40" height="40"/>
+          <text x="90" y="239" font-size="12.5" font-weight="700">File server</text>
+          <text x="90" y="255" font-size="11" class="mono">192.168.1.20</text>
+
+          <rect x="590" y="40" width="390" height="535" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="966" y="63" font-size="15" font-weight="700" text-anchor="end">AWS Cloud</text>
+          <rect x="605" y="78" width="360" height="482" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="951" y="100" font-size="13.5" font-weight="700" text-anchor="end" style="fill:var(--region)">Region — ap-south-1</text>
+          <rect x="640" y="118" width="310" height="426" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="936" y="141" font-size="13.5" font-weight="700" text-anchor="end" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <rect x="672" y="156" width="262" height="100" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="686" y="178" font-size="12.5" font-weight="700" style="fill:var(--priv)">Private subnet — 10.0.2.0/24</text>
+          <use href="#ec2" x="686" y="192" width="38" height="38"/>
+          <text x="734" y="208" font-size="12.5" font-weight="700">App server</text>
+          <text x="734" y="225" font-size="11" class="mono">10.0.2.10 · no public IP</text>
+        </g>
+
+        <!-- Step 2: the two ends of the connection -->
+        <g data-step="2">
+          <use href="#router" x="190" y="274" width="52" height="52"/>
+          <text x="182" y="296" font-size="12" font-weight="700" text-anchor="end">Customer gateway</text>
+          <text x="182" y="312" font-size="10.5" text-anchor="end" style="fill:var(--muted)">your router · 203.0.113.9</text>
+          <circle cx="640" cy="300" r="27" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="640" y="305" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">VGW</text>
+          <text x="678" y="296" font-size="12" font-weight="700" style="fill:var(--vpc)">Virtual private gateway</text>
+          <text x="678" y="312" font-size="11" style="fill:var(--muted)">attached to the VPC</text>
+        </g>
+
+        <!-- Step 3: Site-to-Site VPN over the internet -->
+        <g data-step="3" class="fl" id="gVpn">
+          <ellipse cx="430" cy="185" rx="100" ry="40" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="430" y="190" font-size="14" font-weight="700" text-anchor="middle">Internet</text>
+          <g fill="none" stroke="var(--az)" stroke-width="3" stroke-dasharray="8 5">
+            <path d="M244 288 C 290 120, 570 120, 618 282" marker-start="url(#arrowB)" marker-end="url(#arrowB)"/>
+            <path d="M246 300 C 310 176, 550 176, 613 293"/>
+          </g>
+          <text x="430" y="118" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:var(--az)">Site-to-Site VPN</text>
+          <text x="430" y="134" font-size="11" text-anchor="middle" style="fill:var(--az)">2 encrypted IPsec tunnels</text>
+        </g>
+
+        <!-- Step 4: routes on both sides -->
+        <g data-step="4">
+          <rect x="672" y="350" width="262" height="112" rx="6" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="684" y="372" font-size="12.5" font-weight="700" style="fill:var(--priv)">Private route table</text>
+          <text x="684" y="395" font-size="11.5" class="mono">10.0.0.0/16      local</text>
+          <rect x="678" y="403" width="250" height="24" rx="4" fill="var(--priv-fill)"/>
+          <text x="684" y="420" font-size="11.5" font-weight="700" class="mono">192.168.0.0/16   vgw</text>
+          <text x="684" y="447" font-size="10.5" style="fill:var(--muted)">added by route propagation</text>
+          <text x="34" y="462" font-size="10" style="fill:var(--muted)" letter-spacing=".06em">ROUTE ON THE ROUTER</text>
+          <text x="34" y="480" font-size="11.5" font-weight="700" class="mono">10.0.0.0/16  →  AWS</text>
+          <text x="34" y="497" font-size="10.5" style="fill:var(--muted)">exchanged automatically with BGP</text>
+        </g>
+
+        <!-- Step 5: Direct Connect -->
+        <g data-step="5" class="fl" id="gDx">
+          <g stroke="var(--orange)" stroke-width="5" stroke-linecap="round">
+            <line x1="244" y1="316" x2="322" y2="440"/><line x1="538" y1="440" x2="620" y2="318"/>
+          </g>
+          <rect x="325" y="392" width="210" height="104" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <text x="430" y="413" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:var(--orange)">Direct Connect location</text>
+          <text x="430" y="429" font-size="10.5" text-anchor="middle" style="fill:var(--muted)">a carrier's data centre near you</text>
+          <g fill="var(--bg)" stroke="var(--border)" stroke-width="1.5">
+            <rect x="338" y="442" width="86" height="38" rx="5"/><rect x="436" y="442" width="86" height="38" rx="5"/>
+          </g>
+          <line x1="424" y1="461" x2="436" y2="461" stroke="var(--orange)" stroke-width="5"/>
+          <g font-size="10.5" font-weight="600" text-anchor="middle">
+            <text x="381" y="458">Your or</text><text x="381" y="471">partner router</text>
+            <text x="479" y="465">AWS router</text>
+          </g>
+          <text x="430" y="524" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:var(--orange)">Direct Connect</text>
+          <text x="430" y="540" font-size="11" text-anchor="middle" style="fill:var(--orange)">private fibre · never on the internet</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the data centre and the VPC have different private ranges and become one routed network. Both paths end at the <b>virtual private gateway</b> on the VPC. The <b>VPN</b> sends encrypted tunnels across the public internet. <b>Direct Connect</b> is a physical private line through a Direct Connect location. Servers on each side reach the other by private IP address, and the app server needs no public IP.</p>
+    <div class="legend">
+      <span style="--c:var(--dc)">On-premises: data centre, router</span>
+      <span style="--c:var(--az)">Site-to-Site VPN (dashed)</span>
+      <span style="--c:var(--orange)">Direct Connect (solid)</span>
+      <span style="--c:var(--vpc)">VPC and virtual private gateway</span>
+    </div>
+  </div>
+
+  <h2>Which link would you choose?</h2>
+  <div class="card">
+    <p>Each button is a requirement from a real project. Decide between VPN, Direct Connect or both before you click. The diagram above lights your answer's path.</p>
+    <div class="seg" id="simBtns"></div>
+    <p class="result" id="simMsg">Pick a requirement.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>The two gateways</h3>
+      <ul>
+        <li><b>Virtual private gateway (VGW):</b> the AWS end, attached to one VPC. Draw it on the VPC border, like an Internet Gateway but for private links.</li>
+        <li><b>Customer gateway:</b> your end. It is your physical router or firewall, plus a small record in AWS holding its public IP.</li>
+        <li>With many VPCs, both VPN and Direct Connect attach to a <b>Transit Gateway</b> instead (Day 22).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Site-to-Site VPN</h3>
+      <p>An encrypted connection over the ordinary internet.</p>
+      <ul>
+        <li>Always <b>two tunnels</b>, ending in two different AZs, so AWS maintenance on one does not cut you off.</li>
+        <li>Ready in minutes; you only configure your router.</li>
+        <li>Up to about 1.25 Gbps per tunnel.</li>
+        <li>Speed and latency vary, because the internet in between is not yours.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Direct Connect</h3>
+      <p>A dedicated physical connection from your network into AWS.</p>
+      <ul>
+        <li>You or a partner run fibre to a <b>Direct Connect location</b>, where it is cross-connected to an AWS router.</li>
+        <li>1, 10 or 100 Gbps, with steady latency.</li>
+        <li>Takes <b>weeks to months</b> to install.</li>
+        <li>Lower per-GB price for data leaving AWS, which matters at large volumes.</li>
+        <li><b>Not encrypted</b> by itself. It is private, not secret.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Routing</h3>
+      <ul>
+        <li>The VPC route table needs the data centre's range pointing at the VGW. <b>Route propagation</b> adds it for you.</li>
+        <li>Your router needs the VPC's range pointing at the link. <b>BGP</b> exchanges these routes automatically and switches path when a link fails.</li>
+        <li>The two ranges <b>must not overlap</b>. A VPC of <code>192.168.0.0/16</code> could never be joined to this data centre.</li>
+        <li>Security groups must allow the data centre's range.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>VPN vs Direct Connect</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Site-to-Site VPN</th><th>Direct Connect</th></tr>
+      <tr><td><b>Path</b></td><td>Public internet</td><td>Private fibre</td></tr>
+      <tr><td><b>Time to set up</b></td><td>Minutes to hours</td><td>Weeks to months</td></tr>
+      <tr><td><b>Bandwidth</b></td><td>Up to about 1.25 Gbps per tunnel</td><td>1, 10 or 100 Gbps</td></tr>
+      <tr><td><b>Performance</b></td><td>Varies with the internet</td><td>Consistent</td></tr>
+      <tr><td><b>Encrypted</b></td><td>Yes, always (IPsec)</td><td>No, unless you add MACsec or run a VPN over it</td></tr>
+      <tr><td><b>Cost</b></td><td>Low: a small hourly fee</td><td>High: port fee, circuit from a carrier, but cheaper per GB</td></tr>
+      <tr><td><b>Built-in redundancy</b></td><td>Two tunnels</td><td>None: one link is a single point of failure</td></tr>
+      <tr><td><b>Choose it for</b></td><td>Getting started, small sites, backup</td><td>Heavy, steady or latency-sensitive traffic</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">The common production design is both: Direct Connect as the main path and the VPN as an automatic backup. For the highest resilience, use two Direct Connect links at two different locations.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>On the left, draw the <b>corporate data centre</b> with its range, <code>192.168.0.0/16</code>, and a couple of servers.</li>
+      <li>On the right, draw the AWS Cloud, Region and a <b>VPC</b> with <code>10.0.0.0/16</code> and a private subnet.</li>
+      <li>Draw the <b>customer gateway</b> (router) on the data centre's edge and the <b>virtual private gateway</b> on the VPC's border.</li>
+      <li>Draw the <b>Internet</b> between them, and two dashed tunnels through it: “Site-to-Site VPN”.</li>
+      <li>Below, draw a <b>Direct Connect location</b> with two routers in it, joined by solid lines to both gateways.</li>
+      <li>Write the route on each side: <code>192.168.0.0/16 → vgw</code> in the VPC, <code>10.0.0.0/16 → AWS</code> on the router.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Dashed through the internet for VPN, solid and separate for Direct Connect.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>VPN or Direct Connect: what are the trade-offs?</summary><p>VPN is quick, cheap and encrypted, but runs over the internet, so its speed and latency vary and it tops out near 1.25 Gbps per tunnel. Direct Connect is private, fast and consistent, with cheaper data transfer at volume, but takes weeks to install, costs more, is not encrypted by default, and is a single point of failure unless you add a second link or a VPN backup.</p></details>
+  <details><summary>Is traffic on Direct Connect encrypted?</summary><p>Not by default. The line is private, but the data on it is in the clear. Add MACsec on the link or run a Site-to-Site VPN over the Direct Connect connection when encryption is required.</p></details>
+  <details><summary>Why does a Site-to-Site VPN always have two tunnels?</summary><p>For availability. Each tunnel ends at a different AWS endpoint in a different AZ. AWS can take one down for maintenance, or one can fail, and traffic continues on the other.</p></details>
+  <details><summary>The app server has no public IP. Can the database server in the data centre connect to it?</summary><p>Yes. Over the VPN or Direct Connect the two networks route each other's private addresses, so it connects to <code>10.0.2.10</code> directly. The security group must allow the data centre's range.</p></details>
+  <details><summary>The data centre uses <code>10.0.0.0/16</code> and so does the VPC. What happens?</summary><p>They cannot be routed to each other: each side thinks those addresses are local. One network has to be renumbered. Choosing cloud ranges that do not clash with existing networks is part of the very first design step.</p></details>
+  <details><summary>The Direct Connect fibre is cut by road works. What keeps the business running?</summary><p>A backup path. With a VPN configured alongside, BGP notices the lost routes and sends traffic through the tunnels within seconds to minutes. Without a backup, the two sites are cut off until the fibre is repaired.</p></details>
+  <details><summary>The company has twenty VPCs. Do you build twenty VPNs?</summary><p>No. Attach the VPN or Direct Connect once to a Transit Gateway, and attach the VPCs to that. For Direct Connect alone, a Direct Connect gateway can also share one link among several VPCs and Regions.</p></details>
+  <details><summary>A migration starts next week, and the company will move 200 TB over six months. What do you set up?</summary><p>A VPN now, so work can begin immediately, and order Direct Connect at once for the bulk transfer. When it arrives, make it the main path and keep the VPN as backup.</p></details>
+
+  <div class="next">
+    <b>Next — Day 24: Private access to AWS services.</b> Instances in private subnets reach S3, DynamoDB and other services without a NAT Gateway and without leaving the AWS network, using gateway endpoints, interface endpoints and PrivateLink.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Two separate networks.</b> A corporate data centre using <code>192.168.0.0/16</code> and a VPC using <code>10.0.0.0/16</code>. The ranges do not overlap, which is required before they can be joined.",
+    "<b>Step 2 — The two ends.</b> On your side, the customer gateway: your router. On the AWS side, a virtual private gateway attached to the VPC.",
+    "<b>Step 3 — Site-to-Site VPN.</b> Two encrypted IPsec tunnels across the internet between the two gateways. It can be working within the hour.",
+    "<b>Step 4 — Routes.</b> The VPC learns that <code>192.168.0.0/16</code> is behind the gateway, and your router learns that <code>10.0.0.0/16</code> is in AWS. Now servers on each side can use each other's private addresses.",
+    "<b>Step 5 — Direct Connect.</b> A private fibre from your data centre to a Direct Connect location, cross-connected there to AWS. Faster and steadier than the VPN, which stays as the backup."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  const V = `<b style="color:var(--az)">Site-to-Site VPN.</b> `, D = `<b style="color:var(--orange)">Direct Connect.</b> `, B = `<b>Both.</b> `;
+  const cases = [
+    ["It must be working this week", ["gVpn"], V + "A VPN needs only configuration on your router and can be up in an hour. Direct Connect involves ordering a circuit and takes weeks to months."],
+    ["5 TB of backups every night", ["gDx"], D + "Large, regular transfers need bandwidth you can count on. At this volume the lower per-GB price also pays for the line."],
+    ["A trading system needs steady, low latency", ["gDx"], D + "The internet's latency changes from minute to minute. A private line gives the same latency every time."],
+    ["A small branch office with light traffic", ["gVpn"], V + "A few people using internal tools do not justify a dedicated circuit. A VPN is cheap and good enough."],
+    ["The link must survive a cable cut", ["gVpn", "gDx"], B + "One Direct Connect link is a single point of failure. Run a VPN beside it as an automatic backup, or use two Direct Connect links through two different locations."],
+    ["Data must not cross the internet, and must be encrypted", ["gDx"], D + "Only Direct Connect keeps traffic off the internet. But it is not encrypted by itself, so add MACsec or run VPN tunnels <i>over</i> the Direct Connect link."]
+  ];
+  cases.forEach((c, i) => {
+    const b = document.createElement("button");
+    b.textContent = c[0];
+    b.onclick = () => {
+      [...$("simBtns").children].forEach((x, j) => x.classList.toggle("on", j === i));
+      $("simMsg").innerHTML = c[2];
+      svg.classList.add("lit");
+      svg.querySelectorAll(".fl").forEach(g => g.classList.toggle("on", c[1].includes(g.id)));
+    };
+    $("simBtns").appendChild(b);
+  });
+</script>
+</body>
+</html>
