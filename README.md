@@ -37,7 +37,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | Day | Architecture | Components to draw | Check yourself |
 |-----|--------------|--------------------|----------------|
 | 8 | **[Load-balanced web tier](day-08/index.html)** | Application Load Balancer across 2 public subnets, EC2 in private subnets, target group | Why does the ALB need subnets in at least 2 AZs? |
-| 9 | **Auto Scaling** | Auto Scaling Group spanning 2 AZs, launch template, CloudWatch alarm → scaling policy | What triggers scale-out vs scale-in? |
+| 9 | **[Auto Scaling](day-09/index.html)** | Auto Scaling Group spanning 2 AZs, launch template, CloudWatch alarm → scaling policy | What triggers scale-out vs scale-in? |
 | 10 | **Classic 3-tier app** | Web tier (ALB), app tier (EC2 ASG), data tier (RDS Multi-AZ primary + standby) | Which security group references which? |
 | 11 | **Read scaling and caching** | RDS read replicas, ElastiCache (Redis) between app and DB | Multi-AZ standby vs read replica — what is each for? |
 | 12 | **Static website** | S3 bucket (private), CloudFront with Origin Access Control, ACM certificate | Why keep the bucket private behind CloudFront? |

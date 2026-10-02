@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 9 — Auto Scaling</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .slot use, #diagram .slot .ghost { transition: opacity .3s; }
+  #diagram .slot .ghost { opacity: 0; }
+  #diagram .slot.off use { opacity: 0; }
+  #diagram .slot.off .ghost { opacity: 1; }
+  #diagram .slot.dead use { opacity: .25; }
+  #diagram .slot .cross { opacity: 0; }
+  #diagram .slot.dead .cross { opacity: 1; }
+  .sim { display: flex; flex-wrap: wrap; gap: 14px 30px; align-items: flex-end; margin-bottom: 14px; }
+  .sim input[type=range] { width: 280px; max-width: 100%; accent-color: var(--orange); display: block; }
+  .sim .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .sim .lbl { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .bar { height: 12px; border-radius: 6px; background: var(--border); overflow: hidden; width: 160px; margin-top: 6px; }
+  .bar i { display: block; height: 100%; background: var(--pub); transition: width .3s, background .3s; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-08/index.html">← Day 8</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 9 of 30 · Week 2 — Compute, Load Balancing, High Availability</div>
+    <h1>Auto Scaling</h1>
+    <p class="lead">Yesterday's load balancer could skip a broken server but not replace it, and could not add servers when traffic grew. Today an Auto Scaling group takes over the servers: it launches them from a template, keeps the right number running across both zones, and replaces any that fail.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 732" role="img" aria-label="An Auto Scaling group spans the private subnets of two Availability Zones behind an Application Load Balancer. CloudWatch watches the group's CPU, a scaling policy changes the desired capacity, and new instances are launched from a launch template.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: Day 8 network with the load balancer -->
+        <g data-step="1">
+          <rect x="430" y="14" width="140" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="45" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="20" y="90" width="960" height="627" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+          <rect x="40" y="128" width="920" height="577" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="190" width="880" height="400" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="500" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+
+          <rect x="80" y="232" width="410" height="345" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+          <rect x="510" y="232" width="410" height="345" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="906" y="254" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+
+          <rect x="100" y="272" width="370" height="120" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="380" font-size="13" font-weight="700" style="fill:var(--pub)">Public A — 10.0.1.0/24</text>
+          <rect x="530" y="272" width="370" height="120" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="886" y="380" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--pub)">Public B — 10.0.3.0/24</text>
+          <rect x="100" y="420" width="370" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="550" font-size="13" font-weight="700" style="fill:var(--priv)">Private A — 10.0.2.0/24</text>
+          <rect x="530" y="420" width="370" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="886" y="550" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--priv)">Private B — 10.0.4.0/24</text>
+
+          <use href="#nat" x="124" y="296" width="40" height="40"/>
+          <text x="144" y="352" font-size="12" font-weight="600" text-anchor="middle">nat-a</text>
+          <use href="#nat" x="836" y="296" width="40" height="40"/>
+          <text x="856" y="352" font-size="12" font-weight="600" text-anchor="middle">nat-b</text>
+
+          <rect x="300" y="300" width="400" height="54" rx="10" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="324" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+          <text x="500" y="343" font-size="11.5" text-anchor="middle" style="fill:#fff">forwards to target group web-tg</text>
+        </g>
+
+        <!-- Step 2: launch template -->
+        <g data-step="2">
+          <rect x="670" y="612" width="250" height="80" rx="6" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+          <text x="682" y="633" font-size="13" font-weight="700" style="fill:var(--orange)">Launch template</text>
+          <text x="682" y="654" font-size="12">AMI · t3.micro · web-sg</text>
+          <text x="682" y="673" font-size="12" style="fill:var(--muted)">User data: start the web server</text>
+        </g>
+
+        <!-- Step 3: Auto Scaling group across both AZs -->
+        <g data-step="3">
+          <rect x="120" y="440" width="760" height="88" rx="10" fill="none" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+          <rect x="345" y="517" width="310" height="22" rx="5" fill="var(--orange)"/>
+          <text id="asgTab" x="500" y="532" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">Auto Scaling group · min 2 · desired 2 · max 6</text>
+          <g id="slots">
+            <g class="slot" transform="translate(150 456)"><use href="#ec2" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="cross" x="22" y="31" font-size="26" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text></g>
+            <g class="slot" transform="translate(806 456)"><use href="#ec2" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="cross" x="22" y="31" font-size="26" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text></g>
+            <g class="slot off" transform="translate(230 456)"><use href="#ec2" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="cross" x="22" y="31" font-size="26" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text></g>
+            <g class="slot off" transform="translate(726 456)"><use href="#ec2" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="cross" x="22" y="31" font-size="26" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text></g>
+            <g class="slot off" transform="translate(310 456)"><use href="#ec2" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="cross" x="22" y="31" font-size="26" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text></g>
+            <g class="slot off" transform="translate(646 456)"><use href="#ec2" width="44" height="44"/><rect class="ghost" width="44" height="44" rx="7" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-dasharray="4 4"/><text class="cross" x="22" y="31" font-size="26" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text></g>
+          </g>
+          <line x1="700" y1="610" x2="700" y2="534" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+          <text x="710" y="605" font-size="11.5" font-weight="600" style="fill:var(--dc)">launches from</text>
+        </g>
+
+        <!-- Step 4: user traffic through the load balancer -->
+        <g data-step="4">
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="500" y1="66" x2="500" y2="161"/>
+            <line x1="500" y1="216" x2="500" y2="295"/>
+            <line x1="400" y1="357" x2="264" y2="449"/>
+            <line x1="600" y1="357" x2="736" y2="449"/>
+          </g>
+          <g font-size="12" font-weight="700">
+            <text x="522" y="258" style="fill:var(--orange)">HTTPS 443</text>
+            <text x="308" y="412" text-anchor="end" style="fill:var(--orange)">HTTP 80</text>
+            <text x="692" y="412" style="fill:var(--orange)">HTTP 80</text>
+          </g>
+        </g>
+
+        <!-- Step 5: CloudWatch watches the group -->
+        <g data-step="5">
+          <rect x="80" y="612" width="250" height="80" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <text x="92" y="633" font-size="13" font-weight="700" style="fill:var(--dc)">CloudWatch</text>
+          <text x="92" y="654" font-size="12">Average CPU of the group</text>
+          <text x="92" y="673" font-size="12" style="fill:var(--muted)">Alarm when far from the target</text>
+          <line x1="300" y1="530" x2="300" y2="608" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+          <text x="290" y="605" font-size="11.5" font-weight="600" text-anchor="end" style="fill:var(--dc)">CPU metrics</text>
+        </g>
+
+        <!-- Step 6: scaling policy closes the loop -->
+        <g data-step="6">
+          <rect x="375" y="612" width="250" height="80" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <text x="387" y="633" font-size="13" font-weight="700" style="fill:var(--dc)">Scaling policy</text>
+          <text x="387" y="654" font-size="12">Target tracking</text>
+          <text x="387" y="673" font-size="12" style="fill:var(--muted)">Keep average CPU at 50%</text>
+          <g stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)">
+            <line x1="332" y1="660" x2="371" y2="660"/>
+            <line x1="500" y1="610" x2="500" y2="544"/>
+          </g>
+          <text x="352" y="650" font-size="11" font-weight="600" text-anchor="middle" style="fill:var(--dc)">alarm</text>
+          <text x="510" y="605" font-size="11.5" font-weight="600" style="fill:var(--dc)">sets desired capacity</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the <b>Auto Scaling group</b> spans both private subnets and keeps between 2 and 6 web servers running, launched from the <b>launch template</b>. <b>CloudWatch</b> watches the group's average CPU; when it drifts from the target, the <b>scaling policy</b> changes the desired capacity. Dashed squares are servers that exist only when needed.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Auto Scaling group, instances, user traffic</span>
+      <span style="--c:var(--vpc)">Load balancer</span>
+      <span style="--c:var(--dc)">Control loop: metrics, alarm, policy</span>
+    </div>
+  </div>
+
+  <h2>Scaling simulator</h2>
+  <div class="card">
+    <p>Each server handles 100 requests per second at full CPU. The policy keeps average CPU at 50%. Move the load and watch the group in the diagram above grow and shrink.</p>
+    <div class="sim">
+      <div><div class="lbl">Incoming load</div><div class="big"><span id="sLoad">100</span> req/s</div><input type="range" id="load" min="0" max="400" step="10" value="100" aria-label="Incoming load in requests per second"></div>
+      <div><div class="lbl">Servers running</div><div class="big" id="sCount">2</div></div>
+      <div><div class="lbl">Average CPU</div><div class="big" id="sCpu">50%</div><div class="bar"><i id="sBar" style="width:50%"></i></div></div>
+      <div><button id="kill">Terminate one server</button></div>
+    </div>
+    <p class="result" id="sMsg"></p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Auto Scaling group (ASG)</h3>
+      <p>A group of identical instances that AWS keeps at the size you ask for.</p>
+      <ul>
+        <li>You give it subnets in several AZs; it spreads instances evenly across them.</li>
+        <li>It registers each new instance with the load balancer's target group, and deregisters it before termination.</li>
+        <li>It replaces any instance that fails a health check.</li>
+        <li>The group itself is free; you pay for the instances.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Min, desired, max</h3>
+      <ul>
+        <li><b>Min (2):</b> never fewer, even at 3 a.m. Two keeps one in each AZ.</li>
+        <li><b>Max (6):</b> never more, whatever the load. This caps your bill.</li>
+        <li><b>Desired:</b> how many should be running right now. Scaling policies move it between min and max; the group then launches or terminates to match.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Launch template</h3>
+      <p>The recipe for a new instance, so no human is needed when one is launched.</p>
+      <ul>
+        <li>AMI (the disk image), instance type, security group, IAM role, key pair.</li>
+        <li><b>User data:</b> a script that runs at first boot to install or start the application.</li>
+        <li>Templates are versioned; roll out a new version to update the fleet.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Scale out and scale in</h3>
+      <ul>
+        <li><b>Scale out:</b> add instances. Triggered when the metric is above the target, for example CPU over 50%.</li>
+        <li><b>Scale in:</b> remove instances. Triggered when the metric stays well below the target.</li>
+        <li>Scale-out is fast; scale-in is deliberately slow, to avoid adding and removing servers every minute.</li>
+        <li>Scaling <b>up</b> is different: a bigger instance, not more instances.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Types of scaling policy</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Policy</th><th>How it decides</th><th>Use it when</th></tr>
+      <tr><td><b>Target tracking</b></td><td>Keeps a metric at a value, like a thermostat. Creates its own CloudWatch alarms.</td><td>Almost always. Start here.</td></tr>
+      <tr><td><b>Step scaling</b></td><td>You define alarms and steps: CPU over 70% add 1, over 90% add 3.</td><td>You need different reactions at different levels.</td></tr>
+      <tr><td><b>Scheduled</b></td><td>Changes capacity at set times.</td><td>Load is predictable, such as office hours or a sale at 10:00.</td></tr>
+      <tr><td><b>Predictive</b></td><td>Forecasts load from past patterns and scales ahead of it.</td><td>Daily or weekly cycles with slow-starting servers.</td></tr>
+    </table>
+  </div>
+
+  <h2>One rule this design forces on you</h2>
+  <div class="card">
+    <p><b>Servers must be stateless.</b> Any instance can be terminated at any moment, by scale-in or by a failure. Anything stored only on that instance is lost.</p>
+    <ul>
+      <li>User sessions go in a shared store such as ElastiCache or DynamoDB (Day 11).</li>
+      <li>Uploaded files go to S3 (Day 12).</li>
+      <li>Data goes in a database outside the group (Day 10).</li>
+    </ul>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the Day 8 network: two AZs, four subnets, Internet Gateway, NAT Gateways, and the load balancer across the public subnets.</li>
+      <li>Draw one dashed <b>Auto Scaling group</b> box stretching across both private subnets. Write min, desired and max on it.</li>
+      <li>Put instances inside it, the same number in each AZ.</li>
+      <li>Draw the <b>launch template</b> outside the VPC with an arrow to the group.</li>
+      <li>Draw <b>CloudWatch</b> and the <b>scaling policy</b> outside the VPC, and the loop: group → CloudWatch → policy → group.</li>
+      <li>Draw user traffic: Users → Internet Gateway → load balancer → instances.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. The group box must cross the AZ boundary; that is what shows it survives a zone failure.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>What triggers scale-out and what triggers scale-in?</summary><p>Scale-out: the tracked metric rises above the target, for example average CPU above 50%, and a CloudWatch alarm fires. Scale-in: the metric stays well below the target for a longer period. In both cases the policy changes the desired capacity and the group launches or terminates instances to match.</p></details>
+  <details><summary>An instance crashes. Desired capacity is 4. What happens?</summary><p>The group sees 3 healthy instances but wants 4, so it launches a replacement from the launch template, in the AZ that is now short. No alarm or scaling policy is involved; this is the group maintaining its size.</p></details>
+  <details><summary>An instance is running but its application has hung. Will the group replace it?</summary><p>Only if the group uses the load balancer's health check. By default it checks only that the instance is running. Turn on the ELB health check so that a target the load balancer marks unhealthy is replaced.</p></details>
+  <details><summary>AZ a fails completely. Desired capacity is 4, two in each AZ. What does the group do?</summary><p>It launches two replacements in AZ b, so four are running again. When AZ a returns, it rebalances the instances across both zones.</p></details>
+  <details><summary>The group is at max (6) and CPU is still 90%. What happens next?</summary><p>Nothing. The group never exceeds max. Users get slower responses until load drops, or until you raise max or use a larger instance type in the template.</p></details>
+  <details><summary>Why set min to 2 and not 1?</summary><p>With one instance, a failure of that instance or its AZ means zero capacity until a replacement boots. Two, one per AZ, keeps the site up through either failure.</p></details>
+  <details><summary>A user uploads a profile picture and it is saved on the instance's disk. What goes wrong?</summary><p>Their next request may hit a different instance that does not have the file, and the file disappears for good when that instance is scaled in. Store uploads in S3.</p></details>
+  <details><summary>New instances take four minutes to start serving. How does that change the design?</summary><p>Scaling reacts too late for sudden spikes. Shorten boot time with a pre-built AMI, keep more spare capacity with a lower target, or add scheduled or predictive scaling for known peaks.</p></details>
+
+  <div class="next">
+    <b>Next — Day 10: Classic 3-tier application.</b> You separate the application into three layers, each in its own subnets: the load balancer in front, the application servers in an Auto Scaling group, and a Multi-AZ RDS database behind them.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Where Day 8 ended.</b> The network and the load balancer are in place. The two hand-made web servers are gone; the private subnets are empty.",
+    "<b>Step 2 — Launch template.</b> Describe a web server once: image, size, security group and a start-up script. It is a regional resource, so draw it outside the VPC.",
+    "<b>Step 3 — Auto Scaling group.</b> Create the group across both private subnets with min 2, desired 2, max 6. It launches two instances from the template, one per zone. Dashed squares are room to grow.",
+    "<b>Step 4 — Traffic.</b> The group registers its instances with the load balancer's target group, so user requests reach whichever instances exist right now.",
+    "<b>Step 5 — CloudWatch.</b> Every instance reports its CPU. CloudWatch averages it across the group.",
+    "<b>Step 6 — Scaling policy.</b> A target tracking policy keeps average CPU at 50%. When CloudWatch raises an alarm, the policy changes the desired capacity and the group adds or removes instances."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const MIN = 2, MAX = 6, TARGET = 50, PER = 100;
+  const $ = id => document.getElementById(id);
+  const slots = [...document.querySelectorAll("#slots .slot")];  // launch order: A, B, A, B, A, B
+  let n = 2, busy = false;
+
+  function paint(load, msg) {
+    const cpu = Math.min(100, Math.round(load / (n * PER) * 100));
+    slots.forEach((s, i) => s.classList.toggle("off", i >= n));
+    $("asgTab").textContent = `Auto Scaling group · min ${MIN} · desired ${n} · max ${MAX}`;
+    $("sLoad").textContent = load;
+    $("sCount").textContent = n;
+    $("sCpu").textContent = cpu + "%";
+    $("sBar").style.width = cpu + "%";
+    $("sBar").style.background = cpu > 80 ? "var(--bad)" : cpu > 55 ? "var(--orange)" : "var(--pub)";
+    if (msg) $("sMsg").innerHTML = msg;
+  }
+  function react() {
+    const load = +$("load").value;
+    const before = Math.round(load / (n * PER) * 100);
+    const want = Math.max(MIN, Math.min(MAX, Math.ceil(load / (PER * TARGET / 100))));
+    let msg;
+    if (want > n) {
+      msg = `<b>Scale out.</b> With ${n} servers, CPU would be ${Math.min(before, 100)}%, above the ${TARGET}% target. The policy raised desired capacity to ${want} and the group launched ${want - n} more, balanced across the zones.`;
+    } else if (want < n) {
+      msg = `<b>Scale in.</b> With ${n} servers, CPU would be only ${before}%. The policy lowered desired capacity to ${want} and the group terminated ${n - want}. In reality this happens slowly, after the low load has lasted several minutes.`;
+    } else if (n === MAX && before > TARGET) {
+      msg = `<b>At maximum.</b> The group already has ${MAX} servers and cannot add more, so CPU climbs above the target. Raise max or use bigger instances.`;
+    } else if (n === MIN && before < TARGET) {
+      msg = `<b>At minimum.</b> Load is low, but the group never goes below ${MIN} servers, so one stays in each zone.`;
+    } else {
+      msg = `<b>Steady.</b> ${n} servers hold average CPU at the target. Nothing to do.`;
+    }
+    n = want;
+    paint(load, msg);
+  }
+  $("load").oninput = () => { if (!busy) react(); };
+
+  $("kill").onclick = () => {
+    if (busy) return;
+    busy = true;
+    const victim = slots[n - 1];
+    victim.classList.add("dead");
+    $("sMsg").innerHTML = `<b>One server failed.</b> The load balancer stops sending it traffic. The group now has ${n - 1} healthy servers but desired capacity is ${n}…`;
+    setTimeout(() => {
+      victim.classList.remove("dead");
+      $("sMsg").innerHTML = `<b>Replaced.</b> The group terminated the failed server and launched a new one from the launch template in the same zone. ${n} servers are running again, and no scaling policy was involved.`;
+      busy = false;
+    }, 1800);
+  };
+  react();
+</script>
+</body>
+</html>
