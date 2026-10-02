@@ -49,7 +49,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | Day | Architecture | Components to draw | Check yourself |
 |-----|--------------|--------------------|----------------|
 | 15 | **[Serverless API](day-15/index.html)** | API Gateway → Lambda → DynamoDB | Which parts live inside a VPC? (none by default) |
-| 16 | **Decoupling with queues** | Producer → SQS → consumer ASG, dead-letter queue, SNS → multiple SQS (fan-out) | SQS vs SNS — pull vs push? |
+| 16 | **[Decoupling with queues](day-16/index.html)** | Producer → SQS → consumer ASG, dead-letter queue, SNS → multiple SQS (fan-out) | SQS vs SNS — pull vs push? |
 | 17 | **Event-driven processing** | S3 upload event → Lambda → DynamoDB, EventBridge rules → targets | When to use EventBridge over SNS? |
 | 18 | **Containers on ECS Fargate** | ECR, ECS cluster, service + tasks in private subnets, ALB | Task role vs execution role? |
 | 19 | **Kubernetes on EKS** | EKS control plane (AWS-managed), managed node groups in private subnets, ALB ingress | What does AWS manage vs what do you manage? |

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 16 — Decoupling with Queues</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  :root { --msg: #c2255c; --msg-fill: #fdf0f5; }
+  @media (prefers-color-scheme: dark) { :root { --msg: #f783ac; --msg-fill: #2e1722; } }
+  #diagram .slot { fill: var(--border); transition: fill .2s; }
+  #diagram .slot.full { fill: var(--msg); }
+  #diagram .workers { transition: opacity .25s; }
+  #diagram.broken .workers { opacity: .35; }
+  #diagram .wx { display: none; }
+  #diagram.broken .wx { display: inline; }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px 32px; margin: 14px 0 4px; }
+  .stats .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stats .lbl { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-15/index.html">← Day 15</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 16 of 30 · Week 3 — Serverless, Decoupling, Containers</div>
+    <h1>Decoupling with Queues</h1>
+    <p class="lead">When one service calls another directly, the slow one slows both and the broken one breaks both. Today you put a queue between them. The sender drops a message and moves on; the receiver works through messages at its own pace. Then you add a topic so one event can feed several queues at once.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 540" role="img" aria-label="An order service publishes one message to an SNS topic. The topic pushes a copy to three SQS queues. Payment workers in an Auto Scaling group, and two Lambda functions, each poll their own queue. The payments queue has a dead-letter queue for messages that keep failing.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--az)"/></marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="lambda" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <text x="28" y="40" font-size="32" font-weight="700" text-anchor="middle" style="fill:#fff">λ</text>
+          </symbol>
+        </defs>
+
+        <rect x="20" y="20" width="960" height="505" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="44" font-size="15" font-weight="700">AWS Cloud · Region ap-south-1</text>
+
+        <!-- Step 1: producer and consumer -->
+        <g data-step="1">
+          <rect x="45" y="265" width="160" height="90" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <use href="#ec2" x="57" y="277" width="36" height="36"/>
+          <text x="103" y="293" font-size="13.5" font-weight="700">Order service</text>
+          <text x="103" y="310" font-size="11.5" style="fill:var(--muted)">producer</text>
+          <text x="57" y="340" font-size="11" style="fill:var(--muted)">takes the customer's order</text>
+
+          <g class="workers">
+            <rect x="760" y="70" width="195" height="104" rx="10" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+            <text x="772" y="91" font-size="11.5" font-weight="700" style="fill:var(--orange)">Auto Scaling group</text>
+            <use href="#ec2" x="772" y="101" width="34" height="34"/><use href="#ec2" x="814" y="101" width="34" height="34"/>
+            <text x="858" y="116" font-size="13" font-weight="700">Payment</text>
+            <text x="858" y="132" font-size="13" font-weight="700">workers</text>
+            <text x="772" y="160" font-size="11" style="fill:var(--muted)">consumers · scale on queue depth</text>
+          </g>
+          <text class="wx" x="808" y="128" font-size="30" font-weight="700" text-anchor="middle" style="fill:var(--bad)">✕</text>
+        </g>
+
+        <!-- Step 2: a queue between them -->
+        <g data-step="2">
+          <rect x="480" y="80" width="200" height="84" rx="8" fill="var(--msg-fill)" stroke="var(--msg)" stroke-width="2.5"/>
+          <text x="492" y="102" font-size="12.5" font-weight="700" style="fill:var(--msg)">SQS queue · payments</text>
+          <g id="s1">
+            <rect class="slot" x="492" y="112" width="16" height="20" rx="3"/><rect class="slot" x="514" y="112" width="16" height="20" rx="3"/><rect class="slot" x="536" y="112" width="16" height="20" rx="3"/><rect class="slot" x="558" y="112" width="16" height="20" rx="3"/>
+            <rect class="slot" x="580" y="112" width="16" height="20" rx="3"/><rect class="slot" x="602" y="112" width="16" height="20" rx="3"/><rect class="slot" x="624" y="112" width="16" height="20" rx="3"/><rect class="slot" x="646" y="112" width="16" height="20" rx="3"/>
+          </g>
+          <text id="t1" x="492" y="152" font-size="11" style="fill:var(--muted)">0 messages waiting</text>
+          <line x1="682" y1="122" x2="755" y2="122" stroke="var(--az)" stroke-width="3.5" marker-end="url(#arrowB)"/>
+          <text x="718" y="112" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:var(--az)">poll</text>
+        </g>
+
+        <!-- Step 3: dead-letter queue -->
+        <g data-step="3">
+          <line x1="580" y1="166" x2="580" y2="192" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="5 3" marker-end="url(#arrowR)"/>
+          <text x="590" y="184" font-size="10.5" font-weight="700" style="fill:var(--bad)">after 3 failed tries</text>
+          <rect x="480" y="196" width="200" height="48" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="492" y="216" font-size="12" font-weight="700" style="fill:var(--bad)">Dead-letter queue</text>
+          <text id="tD" x="492" y="233" font-size="11" style="fill:var(--muted)">0 messages set aside</text>
+        </g>
+
+        <!-- Step 4: SNS topic in front -->
+        <g data-step="4">
+          <rect x="265" y="270" width="150" height="80" rx="8" fill="var(--msg-fill)" stroke="var(--msg)" stroke-width="2.5"/>
+          <text x="340" y="295" font-size="13.5" font-weight="700" text-anchor="middle" style="fill:var(--msg)">SNS topic</text>
+          <text x="340" y="313" font-size="12" text-anchor="middle" class="mono">order-placed</text>
+          <text x="340" y="334" font-size="11" text-anchor="middle" style="fill:var(--muted)">copies to every subscriber</text>
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="207" y1="310" x2="260" y2="310"/>
+            <line x1="417" y1="288" x2="476" y2="128"/>
+          </g>
+          <text x="234" y="299" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:var(--orange)">publish</text>
+          <text x="428" y="200" font-size="11.5" font-weight="700" text-anchor="end" style="fill:var(--orange)">push</text>
+        </g>
+
+        <!-- Step 5: fan-out to more queues and consumers -->
+        <g data-step="5">
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="417" y1="312" x2="475" y2="312"/>
+            <line x1="417" y1="334" x2="476" y2="438"/>
+          </g>
+          <rect x="480" y="270" width="200" height="84" rx="8" fill="var(--msg-fill)" stroke="var(--msg)" stroke-width="2.5"/>
+          <text x="492" y="292" font-size="12.5" font-weight="700" style="fill:var(--msg)">SQS queue · email</text>
+          <g id="s2">
+            <rect class="slot" x="492" y="302" width="16" height="20" rx="3"/><rect class="slot" x="514" y="302" width="16" height="20" rx="3"/><rect class="slot" x="536" y="302" width="16" height="20" rx="3"/><rect class="slot" x="558" y="302" width="16" height="20" rx="3"/>
+            <rect class="slot" x="580" y="302" width="16" height="20" rx="3"/><rect class="slot" x="602" y="302" width="16" height="20" rx="3"/><rect class="slot" x="624" y="302" width="16" height="20" rx="3"/><rect class="slot" x="646" y="302" width="16" height="20" rx="3"/>
+          </g>
+          <text id="t2" x="492" y="342" font-size="11" style="fill:var(--muted)">0 messages waiting</text>
+
+          <rect x="480" y="400" width="200" height="84" rx="8" fill="var(--msg-fill)" stroke="var(--msg)" stroke-width="2.5"/>
+          <text x="492" y="422" font-size="12.5" font-weight="700" style="fill:var(--msg)">SQS queue · analytics</text>
+          <g id="s3">
+            <rect class="slot" x="492" y="432" width="16" height="20" rx="3"/><rect class="slot" x="514" y="432" width="16" height="20" rx="3"/><rect class="slot" x="536" y="432" width="16" height="20" rx="3"/><rect class="slot" x="558" y="432" width="16" height="20" rx="3"/>
+            <rect class="slot" x="580" y="432" width="16" height="20" rx="3"/><rect class="slot" x="602" y="432" width="16" height="20" rx="3"/><rect class="slot" x="624" y="432" width="16" height="20" rx="3"/><rect class="slot" x="646" y="432" width="16" height="20" rx="3"/>
+          </g>
+          <text id="t3" x="492" y="472" font-size="11" style="fill:var(--muted)">0 messages waiting</text>
+
+          <g stroke="var(--az)" stroke-width="3.5" marker-end="url(#arrowB)">
+            <line x1="682" y1="312" x2="755" y2="312"/><line x1="682" y1="442" x2="755" y2="442"/>
+          </g>
+          <g font-size="11.5" font-weight="700" text-anchor="middle">
+            <text x="718" y="302" style="fill:var(--az)">poll</text><text x="718" y="432" style="fill:var(--az)">poll</text>
+          </g>
+          <rect x="760" y="270" width="195" height="84" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <use href="#lambda" x="772" y="282" width="36" height="36"/>
+          <text x="818" y="298" font-size="13" font-weight="700">Lambda</text>
+          <text x="818" y="315" font-size="11.5" style="fill:var(--muted)">confirmation email</text>
+          <rect x="760" y="400" width="195" height="84" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <use href="#lambda" x="772" y="412" width="36" height="36"/>
+          <text x="818" y="428" font-size="13" font-weight="700">Lambda</text>
+          <text x="818" y="445" font-size="11.5" style="fill:var(--muted)">sales dashboard</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the order service <b>publishes</b> one message to an <b>SNS topic</b> and immediately returns to the customer. SNS <b>pushes</b> a copy into each subscribed <b>SQS queue</b>. Each consumer <b>polls</b> its own queue and works at its own speed. A payment message that fails three times is moved to the <b>dead-letter queue</b> instead of blocking the others.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Push: publish and fan-out</span>
+      <span style="--c:var(--az)">Pull: consumers poll</span>
+      <span style="--c:var(--msg)">SNS topic, SQS queues, waiting messages</span>
+      <span style="--c:var(--bad)">Dead-letter queue</span>
+    </div>
+  </div>
+
+  <h2>Queue simulator</h2>
+  <div class="card">
+    <p>Place orders and let the consumers work. The pink blocks in the diagram above are messages waiting in each queue. Then break the payment workers and see what the customer notices.</p>
+    <div class="seg" id="simBtns">
+      <button data-a="one" class="primary">Place 1 order</button>
+      <button data-a="ten" class="primary">Sale starts: 10 orders at once</button>
+      <button data-a="work">Consumers poll once</button>
+      <button data-a="break" id="btnBreak">Break the payment workers</button>
+      <button data-a="reset">Reset</button>
+    </div>
+    <p class="result" id="simMsg">All queues are empty. Place an order.</p>
+    <div class="stats">
+      <div><div class="lbl">Orders accepted</div><div class="big" id="stOrd">0</div></div>
+      <div><div class="lbl">Payments done</div><div class="big" id="stPay">0</div></div>
+      <div><div class="lbl">Emails sent</div><div class="big" id="stMail">0</div></div>
+      <div><div class="lbl">In dead-letter queue</div><div class="big" id="stDlq">0</div></div>
+    </div>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Why decouple</h3>
+      <p>Without a queue, the order service calls the payment service and waits.</p>
+      <ul>
+        <li><b>Failure spreads:</b> payments down means orders down.</li>
+        <li><b>Spikes hurt:</b> both sides must be sized for the peak.</li>
+        <li><b>The user waits</b> for work that could happen later.</li>
+      </ul>
+      <p style="margin-top:10px">With a queue, the order is accepted the moment the message is stored. The queue is a buffer that soaks up spikes and outages.</p>
+    </div>
+    <div class="card" style="border-top:4px solid var(--msg)">
+      <h3>SQS: a queue</h3>
+      <p>Simple Queue Service stores messages until a consumer takes them.</p>
+      <ul>
+        <li>Consumers <b>pull</b>: they ask the queue for messages.</li>
+        <li>Each message is handled by <b>one</b> consumer, then deleted.</li>
+        <li>Messages are kept up to 14 days, so a consumer can be down for hours.</li>
+        <li><b>Standard</b> queues are fastest; <b>FIFO</b> queues keep strict order.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--msg)">
+      <h3>SNS: a topic</h3>
+      <p>Simple Notification Service delivers each published message to every subscriber.</p>
+      <ul>
+        <li>It <b>pushes</b>: subscribers do not ask, they are sent a copy.</li>
+        <li>Subscribers can be SQS queues, Lambda functions, HTTP endpoints, email or SMS.</li>
+        <li>It does not store messages. A subscriber that is down misses them, which is why you subscribe a queue rather than the worker itself.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Dead-letter queue (DLQ)</h3>
+      <p>A second queue for messages that keep failing.</p>
+      <ul>
+        <li>You set a limit, such as three receives. Past it, SQS moves the message to the DLQ.</li>
+        <li>One bad message, a “poison pill”, cannot block the queue forever.</li>
+        <li>Put an alarm on the DLQ: anything in it needs a human to look.</li>
+        <li>After fixing the bug, you can send the messages back to be retried.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>The life of one message</h2>
+  <div class="card">
+    <ol>
+      <li>A worker <b>receives</b> the message. It is not removed; it becomes invisible to other workers for the <b>visibility timeout</b>, 30 seconds by default.</li>
+      <li>The worker <b>processes</b> it.</li>
+      <li>On success the worker <b>deletes</b> it. Only now is it gone.</li>
+      <li>If the worker crashes first, the timeout runs out, the message becomes visible again, and another worker picks it up.</li>
+    </ol>
+    <p style="margin-top:12px">So no message is lost when a worker dies, but a message can be delivered more than once. This is called <b>at-least-once delivery</b>. Workers must be <b>idempotent</b>: handling the same message twice must not charge the customer twice.</p>
+  </div>
+
+  <h2>SQS vs SNS</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>SQS queue</th><th>SNS topic</th></tr>
+      <tr><td><b>Delivery</b></td><td>Pull: consumers poll</td><td>Push: sent to subscribers</td></tr>
+      <tr><td><b>Who gets a message</b></td><td>One consumer</td><td>Every subscriber, each a copy</td></tr>
+      <tr><td><b>Stored?</b></td><td>Yes, up to 14 days</td><td>No</td></tr>
+      <tr><td><b>If the receiver is down</b></td><td>Messages wait</td><td>Messages are missed after a few retries</td></tr>
+      <tr><td><b>Use it to</b></td><td>Buffer work for one job</td><td>Announce an event to many listeners</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">Together they make the <b>fan-out</b> pattern in the diagram: SNS announces, and a queue per consumer makes sure each one eventually gets every message. Adding a new consumer means adding a queue and a subscription; the order service does not change.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the <b>order service</b> on the left and the <b>payment workers</b> (an Auto Scaling group) on the right.</li>
+      <li>Draw an <b>SQS queue</b> between them. Arrow from queue to workers, labelled “poll”.</li>
+      <li>Draw a <b>dead-letter queue</b> under it, with an arrow labelled “after 3 failed tries”.</li>
+      <li>Insert an <b>SNS topic</b> between the order service and the queue. Label the arrows “publish” and “push”.</li>
+      <li>Add two more queues subscribed to the topic, each with its own consumer.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Use one arrow style for push and another for pull.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>SQS and SNS: which is pull and which is push?</summary><p>SQS is pull: a consumer asks the queue for messages and one consumer handles each. SNS is push: the topic sends a copy of every message to all its subscribers.</p></details>
+  <details><summary>The payment workers are down for an hour. What does a customer placing an order see?</summary><p>Nothing unusual. The order service publishes the message and returns. The message waits in the payments queue and is processed when the workers return. The confirmation email is still sent, since that queue is independent.</p></details>
+  <details><summary>Why subscribe a queue to the topic instead of subscribing the worker directly?</summary><p>SNS does not store messages. If the worker is down or slow when the push arrives, the message is lost after a few retries. A queue holds it until the worker is ready.</p></details>
+  <details><summary>A worker crashes halfway through a message. Is the message lost?</summary><p>No. It was never deleted, only hidden. When the visibility timeout ends it becomes visible again and another worker receives it.</p></details>
+  <details><summary>How could a customer be charged twice, and how do you prevent it?</summary><p>A worker finishes the payment but crashes before deleting the message, so the message is delivered again. Make the worker idempotent: record the order ID once processed and skip any message whose ID is already recorded.</p></details>
+  <details><summary>The fraud team wants a copy of every order. What changes?</summary><p>Create a new queue, subscribe it to the topic, and let the fraud service poll it. The order service and the other consumers are untouched.</p></details>
+  <details><summary>The payments queue grows to 50,000 messages during a sale. What should happen automatically?</summary><p>The Auto Scaling group should scale out on queue depth, the number of visible messages per worker, and scale back in when the queue drains. CPU is the wrong signal for queue workers.</p></details>
+  <details><summary>What does the customer lose in exchange for all this resilience?</summary><p>An immediate answer. The order is accepted before payment is confirmed, so the result arrives later, by email or a status page. Asynchronous designs trade instant certainty for availability.</p></details>
+
+  <div class="next">
+    <b>Next — Day 17: Event-driven processing.</b> Instead of your code sending messages, AWS services raise events themselves: a file landing in S3 starts a Lambda function, and EventBridge routes events to targets by rule.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Two services.</b> The order service takes orders; the payment workers charge the card. If the first calls the second directly, every problem in payments becomes a problem in ordering.",
+    "<b>Step 2 — A queue between them.</b> The order service puts a message in an SQS queue and is done. The workers poll the queue when they are ready. Neither needs the other to be up at the same moment.",
+    "<b>Step 3 — Dead-letter queue.</b> A message that fails three times is moved aside, so it cannot be retried forever in front of the healthy ones.",
+    "<b>Step 4 — A topic in front.</b> The order service now publishes to an SNS topic instead of to one queue. The topic pushes the message into the queue. So far nothing else has changed.",
+    "<b>Step 5 — Fan-out.</b> Subscribe two more queues to the same topic. One published order now produces three independent messages, each handled by its own consumer at its own pace."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  const MAX_TRIES = 3, PER_POLL = 4;
+  // The payments queue tracks receive counts per message; the others only need a length.
+  const st = { pay: [], mail: 0, stats: 0, dlq: 0, orders: 0, paid: 0, mailed: 0, broken: false };
+
+  function fill(groupId, n, textId) {
+    [...$(groupId).children].forEach((r, i) => r.classList.toggle("full", i < n));
+    $(textId).textContent = n === 1 ? "1 message waiting" : `${n} messages waiting`;
+  }
+  function paint() {
+    fill("s1", st.pay.length, "t1"); fill("s2", st.mail, "t2"); fill("s3", st.stats, "t3");
+    $("tD").textContent = `${st.dlq} message${st.dlq === 1 ? "" : "s"} set aside`;
+    $("stOrd").textContent = st.orders; $("stPay").textContent = st.paid;
+    $("stMail").textContent = st.mailed; $("stDlq").textContent = st.dlq;
+    svg.classList.toggle("broken", st.broken);
+    $("btnBreak").textContent = st.broken ? "Repair the payment workers" : "Break the payment workers";
+  }
+  function place(n) {
+    st.orders += n; st.mail += n; st.stats += n;
+    for (let i = 0; i < n; i++) st.pay.push(0);
+    return `<b>${n === 1 ? "Order" : n + " orders"} accepted.</b> The order service published ${n === 1 ? "one message" : n + " messages"} and answered the customer${n === 1 ? "" : "s"} at once. SNS pushed a copy into each of the three queues.` +
+      (st.broken ? " The payment workers are broken, and the customer did not notice." : "");
+  }
+  const actions = {
+    one: () => place(1),
+    ten: () => place(10),
+    work() {
+      if (!st.pay.length && !st.mail && !st.stats) return "Every queue is empty, so the consumers have nothing to do. Polling an empty queue costs almost nothing.";
+      const mail = st.mail; st.mailed += mail; st.mail = 0; st.stats = 0;
+      const batch = Math.min(PER_POLL, st.pay.length);
+      let pay;
+      if (!batch) {
+        pay = "The payments queue was already empty.";
+      } else if (!st.broken) {
+        st.pay.splice(0, batch); st.paid += batch;
+        pay = `The payment workers took ${batch} message${batch === 1 ? "" : "s"}, charged the cards and deleted ${batch === 1 ? "it" : "them"}.` +
+          (st.pay.length ? ` ${st.pay.length} still wait: the queue is absorbing the spike, and queue depth would trigger a scale-out.` : "");
+      } else {
+        for (let i = 0; i < batch; i++) st.pay[i]++;
+        const dead = st.pay.filter(t => t >= MAX_TRIES).length;
+        st.pay = st.pay.filter(t => t < MAX_TRIES); st.dlq += dead;
+        pay = `The payment workers received ${batch} message${batch === 1 ? "" : "s"} and failed. Nothing was deleted, so the messages became visible again.` +
+          (dead ? ` <b>${dead} had now failed ${MAX_TRIES} times and moved to the dead-letter queue.</b>` : " Each failure counts toward the limit of three.");
+      }
+      return `<b>Consumers polled.</b> ${pay} ` + (mail ? `The email function sent ${mail} confirmation${mail === 1 ? "" : "s"}, unaffected by payments.` : "");
+    },
+    break() {
+      st.broken = !st.broken;
+      return st.broken
+        ? "<b>Payment workers broken.</b> They still poll, but every attempt fails. Place orders and poll a few times: orders are still accepted, emails still go out, and payment messages wait."
+        : "<b>Payment workers repaired.</b> Poll again: the waiting messages are processed as if nothing had happened. Those in the dead-letter queue stay there until someone sends them back.";
+    },
+    reset() {
+      Object.assign(st, { pay: [], mail: 0, stats: 0, dlq: 0, orders: 0, paid: 0, mailed: 0, broken: false });
+      return "All queues are empty. Place an order.";
+    }
+  };
+  $("simBtns").querySelectorAll("button").forEach(b => b.onclick = () => { $("simMsg").innerHTML = actions[b.dataset.a](); paint(); });
+  paint();
+</script>
+</body>
+</html>
