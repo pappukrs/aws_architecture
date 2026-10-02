@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 6 — Multi-AZ VPC</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .aza, #diagram .azb { transition: opacity .25s; }
+  #diagram.fail-a .aza, #diagram.fail-b .azb { opacity: .15; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-05/index.html">← Day 5</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 6 of 30 · Week 1 — Networking Foundations</div>
+    <h1>Multi-AZ VPC</h1>
+    <p class="lead">Everything so far lived in one Availability Zone, so one zone failure would take it all down. Today you build the network twice, side by side: a public and a private subnet in each of two AZs, and a NAT Gateway in each. This is the base layout of almost every production architecture.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 695" role="img" aria-label="A VPC across two Availability Zones. Each zone has a public subnet with a NAT Gateway and a private subnet. One Internet Gateway and one public route table are shared; each private subnet has its own route table pointing to the NAT Gateway in its own zone.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: Region, VPC, IGW, two AZs -->
+        <g data-step="1">
+          <rect x="420" y="14" width="160" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="45" font-size="15" font-weight="700" text-anchor="middle">Internet</text>
+
+          <rect x="20" y="90" width="960" height="590" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+          <rect x="40" y="128" width="920" height="540" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="190" width="880" height="465" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="500" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <text x="536" y="178" font-size="13.5" font-weight="700" style="fill:var(--vpc)">Internet Gateway (one, shared)</text>
+
+          <g class="aza">
+            <rect x="80" y="232" width="410" height="320" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+            <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+          </g>
+          <g class="azb">
+            <rect x="510" y="232" width="410" height="320" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+            <text x="906" y="254" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+          </g>
+        </g>
+
+        <!-- Step 2: public subnets -->
+        <g data-step="2">
+          <g class="aza">
+            <rect x="100" y="268" width="370" height="125" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+            <text x="114" y="291" font-size="14" font-weight="700" style="fill:var(--pub)">Public subnet A — 10.0.1.0/24</text>
+            <use href="#ec2" x="120" y="318" width="44" height="44"/>
+            <text x="174" y="337" font-size="13.5" font-weight="600">Web server</text>
+            <text x="174" y="355" font-size="12.5" style="fill:var(--muted)">10.0.1.10</text>
+          </g>
+          <g class="azb">
+            <rect x="530" y="268" width="370" height="125" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+            <text x="886" y="291" font-size="14" font-weight="700" text-anchor="end" style="fill:var(--pub)">Public subnet B — 10.0.3.0/24</text>
+            <use href="#ec2" x="836" y="318" width="44" height="44"/>
+            <text x="826" y="337" font-size="13.5" font-weight="600" text-anchor="end">Web server</text>
+            <text x="826" y="355" font-size="12.5" text-anchor="end" style="fill:var(--muted)">10.0.3.10</text>
+          </g>
+        </g>
+
+        <!-- Step 3: private subnets -->
+        <g data-step="3">
+          <g class="aza">
+            <rect x="100" y="415" width="370" height="125" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+            <text x="114" y="438" font-size="14" font-weight="700" style="fill:var(--priv)">Private subnet A — 10.0.2.0/24</text>
+            <use href="#ec2" x="376" y="460" width="48" height="48"/>
+            <text x="366" y="480" font-size="13.5" font-weight="600" text-anchor="end">App server</text>
+            <text x="366" y="498" font-size="12.5" text-anchor="end" style="fill:var(--muted)">10.0.2.10</text>
+          </g>
+          <g class="azb">
+            <rect x="530" y="415" width="370" height="125" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+            <text x="886" y="438" font-size="14" font-weight="700" text-anchor="end" style="fill:var(--priv)">Private subnet B — 10.0.4.0/24</text>
+            <use href="#ec2" x="576" y="460" width="48" height="48"/>
+            <text x="634" y="480" font-size="13.5" font-weight="600">App server</text>
+            <text x="634" y="498" font-size="12.5" style="fill:var(--muted)">10.0.4.10</text>
+          </g>
+        </g>
+
+        <!-- Step 4: one NAT Gateway per AZ -->
+        <g data-step="4">
+          <g class="aza">
+            <use href="#nat" x="376" y="312" width="48" height="48"/>
+            <text x="366" y="332" font-size="13.5" font-weight="600" text-anchor="end">NAT Gateway A</text>
+            <text x="366" y="350" font-size="12.5" text-anchor="end" style="fill:var(--muted)">nat-a · Elastic IP</text>
+          </g>
+          <g class="azb">
+            <use href="#nat" x="576" y="312" width="48" height="48"/>
+            <text x="634" y="332" font-size="13.5" font-weight="600">NAT Gateway B</text>
+            <text x="634" y="350" font-size="12.5" style="fill:var(--muted)">nat-b · Elastic IP</text>
+          </g>
+        </g>
+
+        <!-- Step 5: route tables -->
+        <g data-step="5">
+          <g font-size="11.5">
+            <text class="aza" x="114" y="381" style="fill:var(--muted)">route table: public</text>
+            <text class="aza" x="114" y="528" style="fill:var(--muted)">route table: private A</text>
+            <text class="azb" x="886" y="381" text-anchor="end" style="fill:var(--muted)">route table: public</text>
+            <text class="azb" x="886" y="528" text-anchor="end" style="fill:var(--muted)">route table: private B</text>
+          </g>
+          <rect x="80" y="568" width="268" height="72" rx="6" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="92" y="588" font-size="13" font-weight="700" style="fill:var(--priv)">Private route table A</text>
+          <text x="92" y="608" font-size="12" class="mono">10.0.0.0/16   local</text>
+          <text x="92" y="626" font-size="12" font-weight="700" class="mono">0.0.0.0/0     nat-a</text>
+
+          <rect x="366" y="568" width="268" height="72" rx="6" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="378" y="588" font-size="13" font-weight="700" style="fill:var(--pub)">Public route table (shared)</text>
+          <text x="378" y="608" font-size="12" class="mono">10.0.0.0/16   local</text>
+          <text x="378" y="626" font-size="12" font-weight="700" class="mono">0.0.0.0/0     igw</text>
+
+          <rect x="652" y="568" width="268" height="72" rx="6" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="664" y="588" font-size="13" font-weight="700" style="fill:var(--priv)">Private route table B</text>
+          <text x="664" y="608" font-size="12" class="mono">10.0.0.0/16   local</text>
+          <text x="664" y="626" font-size="12" font-weight="700" class="mono">0.0.0.0/0     nat-b</text>
+        </g>
+
+        <!-- Step 6: outbound flows stay inside their own AZ -->
+        <g data-step="6" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+          <g class="aza">
+            <line x1="400" y1="456" x2="400" y2="366"/>
+            <line x1="404" y1="308" x2="481" y2="214"/>
+          </g>
+          <g class="azb">
+            <line x1="600" y1="456" x2="600" y2="366"/>
+            <line x1="596" y1="308" x2="519" y2="214"/>
+          </g>
+          <line x1="500" y1="162" x2="500" y2="71"/>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: one <b>VPC</b> and one <b>Internet Gateway</b> serve the whole Region. Each <b>Availability Zone</b> has its own public subnet, private subnet and NAT Gateway. The public subnets share one route table; each private subnet has its own, pointing to the NAT Gateway <b>in its own zone</b>. If either zone is lost, the other keeps working by itself.</p>
+    <div class="legend">
+      <span style="--c:var(--az)">Availability Zone</span>
+      <span style="--c:var(--pub)">Public subnet</span>
+      <span style="--c:var(--priv)">Private subnet</span>
+      <span style="--c:var(--vpc)">Internet Gateway / NAT Gateway</span>
+      <span style="--c:var(--orange)">Outbound traffic from private subnets</span>
+    </div>
+  </div>
+
+  <h2>What if an AZ fails?</h2>
+  <div class="card">
+    <p>Choose a design and a failure. The diagram above fades the failed zone. Predict the result before you read it.</p>
+    <div class="seg" id="segDesign"><b>Design</b>
+      <button data-v="per" class="on">One NAT Gateway per AZ</button>
+      <button data-v="single">Single NAT Gateway in AZ a (cheaper)</button>
+    </div>
+    <div class="seg" id="segFail"><b>Failure</b>
+      <button data-v="none" class="on">Nothing fails</button>
+      <button data-v="a">AZ a fails</button>
+      <button data-v="b">AZ b fails</button>
+    </div>
+    <div class="table-wrap"><table id="simTable"></table></div>
+    <p class="result" id="simResult"></p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Why two AZs</h3>
+      <p>An AZ can lose power or network. If everything is in one AZ, that is your outage too.</p>
+      <ul>
+        <li>Put a copy of <b>every tier</b> in at least two AZs.</li>
+        <li>A subnet lives in one AZ, so you need one subnet per tier per AZ: 2 tiers × 2 AZs = 4 subnets.</li>
+        <li>Three AZs is common in production; two is the minimum.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>What is shared, what is duplicated</h3>
+      <ul>
+        <li><b>Shared:</b> the VPC and the Internet Gateway. Both are regional and already survive an AZ failure.</li>
+        <li><b>Shared:</b> the public route table. Every public subnet has the same rule, <code>0.0.0.0/0 → igw</code>.</li>
+        <li><b>Duplicated:</b> subnets, NAT Gateways and private route tables. These are tied to one AZ.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>One private route table per AZ</h3>
+      <p>A route table has one target for <code>0.0.0.0/0</code>. To send each private subnet to the NAT Gateway of its own zone, each needs its own table.</p>
+      <ul>
+        <li>Private A → <code>nat-a</code>, private B → <code>nat-b</code>.</li>
+        <li>Traffic never crosses to the other AZ, so a failure there cannot affect it.</li>
+        <li>It also avoids the per-GB charge for data crossing between AZs.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>The cost trade-off</h3>
+      <p>Each NAT Gateway is billed per hour, so one per AZ doubles that part of the bill.</p>
+      <ul>
+        <li><b>Production:</b> one NAT Gateway per AZ.</li>
+        <li><b>Development or test:</b> a single NAT Gateway is a common, accepted saving.</li>
+        <li>Say which one you chose and why. In an interview, that sentence matters more than the drawing.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>The address plan</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Subnet</th><th>AZ</th><th>CIDR</th><th>Route table</th><th>Default route</th></tr>
+      <tr><td>Public A</td><td><code>ap-south-1a</code></td><td><code>10.0.1.0/24</code></td><td>Public</td><td><code>igw</code></td></tr>
+      <tr><td>Private A</td><td><code>ap-south-1a</code></td><td><code>10.0.2.0/24</code></td><td>Private A</td><td><code>nat-a</code></td></tr>
+      <tr><td>Public B</td><td><code>ap-south-1b</code></td><td><code>10.0.3.0/24</code></td><td>Public</td><td><code>igw</code></td></tr>
+      <tr><td>Private B</td><td><code>ap-south-1b</code></td><td><code>10.0.4.0/24</code></td><td>Private B</td><td><code>nat-b</code></td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">Four subnets use 4 of the 256 possible <code>/24</code> blocks in the VPC. Write a table like this before you draw; it stops overlapping ranges and makes the diagram easy to label.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the Region, the VPC and the Internet Gateway on the VPC's top border, in the middle.</li>
+      <li>Draw two <b>AZ</b> boxes side by side inside the VPC.</li>
+      <li>In each AZ, draw a <b>public subnet</b> on top and a <b>private subnet</b> below. Write a different CIDR on each of the four.</li>
+      <li>Put a <b>NAT Gateway</b> in each public subnet.</li>
+      <li>Draw three route tables: one public (shared), and one private per AZ pointing to that AZ's NAT Gateway.</li>
+      <li>Draw the outbound arrows: private subnet → NAT Gateway in the same AZ → Internet Gateway → Internet.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. This is tomorrow's review drawing, so time yourself: the goal is under 10 minutes.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>What breaks if you use only one NAT Gateway?</summary><p>If its AZ fails, private subnets in the other AZ are still running but lose their outbound internet access, because their default route points to a gateway that is gone. You also pay for data crossing between AZs in normal operation.</p></details>
+  <details><summary>Do you need one Internet Gateway per AZ?</summary><p>No. An Internet Gateway is attached to the VPC, is regional, and is already redundant across AZs. One per VPC is both the limit and enough.</p></details>
+  <details><summary>Why can the two public subnets share a route table but the two private subnets cannot?</summary><p>The public subnets have the same default route, to the one Internet Gateway. The private subnets need different targets, <code>nat-a</code> and <code>nat-b</code>, and a route table has only one target per destination.</p></details>
+  <details><summary>Can public subnet A and public subnet B both be <code>10.0.1.0/24</code>?</summary><p>No. Subnets in one VPC must not overlap, whichever AZ they are in.</p></details>
+  <details><summary>An application has web, app and database tiers and must run in three AZs. How many subnets?</summary><p>Nine: one subnet per tier per AZ, 3 × 3.</p></details>
+  <details><summary>AZ a fails. A user's browser was talking to the web server at <code>10.0.1.10</code>. Is the user automatically sent to AZ b?</summary><p>Not with this diagram alone. The network in AZ b is healthy, but nothing redirects users to it. That is the job of a load balancer, which you add on Day 8.</p></details>
+  <details><summary>Can the app server in AZ a talk to the app server in AZ b?</summary><p>Yes. They are in the same VPC, so the local route connects them across AZs. Security groups still decide whether it is allowed.</p></details>
+  <details><summary>A startup wants the cheapest possible test environment across two AZs. What do you change?</summary><p>Use a single NAT Gateway and point both private route tables at it. Accept that an AZ failure can cut outbound access, and note it as a deliberate choice.</p></details>
+
+  <div class="next">
+    <b>Next — Day 7: Review.</b> No new services. You redraw today's multi-AZ VPC from a blank page with every CIDR and route table, add the security layers from Day 5, and time yourself.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Region, VPC and two AZs.</b> One VPC and one Internet Gateway cover the Region. Draw two Availability Zone boxes side by side inside the VPC.",
+    "<b>Step 2 — Public subnets.</b> Add a public subnet in each AZ, each with its own CIDR. A web server runs in both, so either zone can serve users.",
+    "<b>Step 3 — Private subnets.</b> Add a private subnet in each AZ for the app servers. You now have four subnets: one per tier per AZ.",
+    "<b>Step 4 — NAT Gateways.</b> Put a NAT Gateway in <b>each</b> public subnet. A NAT Gateway lives in one AZ, so one per AZ removes the single point of failure.",
+    "<b>Step 5 — Route tables.</b> The public subnets share one table that points to the Internet Gateway. Each private subnet gets its own table, pointing to the NAT Gateway in the same AZ.",
+    "<b>Step 6 — Outbound traffic.</b> Each app server goes out through its own zone's NAT Gateway and then the shared Internet Gateway. Nothing in one AZ depends on the other."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const sim = { design: "per", fail: "none" };
+  const up = t => `<span style="color:var(--pub)">✓</span> ${t}`;
+  const down = t => `<span style="color:var(--bad)">✕</span> ${t}`;
+
+  function runSim() {
+    const aUp = sim.fail !== "a", bUp = sim.fail !== "b";
+    const single = sim.design === "single";
+    // With a single NAT Gateway in AZ a, private subnet B depends on AZ a being up.
+    const outA = aUp, outB = bUp && (single ? aUp : true);
+    const rows = [
+      ["Servers in AZ a", aUp ? up("Running") : down("Down with the zone")],
+      ["Servers in AZ b", bUp ? up("Running") : down("Down with the zone")],
+      ["Outbound internet from private subnet A", outA ? up(`Through <code>nat-a</code>`) : down("Zone is down")],
+      ["Outbound internet from private subnet B",
+        !bUp ? down("Zone is down")
+        : outB ? up(single ? "Through <code>nat-a</code> in the other AZ" : "Through <code>nat-b</code>")
+        : down("Servers are running, but their only NAT Gateway was in AZ a")],
+      ["NAT Gateways billed", single ? "1" : "2"]
+    ];
+    document.getElementById("simTable").innerHTML =
+      "<tr><th>Item</th><th>Status</th></tr>" + rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("");
+
+    let msg;
+    if (sim.fail === "none") {
+      msg = single
+        ? "Everything works, at about half the NAT Gateway cost. But private subnet B's traffic crosses into AZ a, which is charged per GB and is a hidden dependency."
+        : "Everything works, and each AZ is independent. You pay for two NAT Gateways.";
+    } else if (single && sim.fail === "a") {
+      msg = "<b>This is the single point of failure.</b> AZ b is healthy, yet its app servers can no longer reach the internet for updates or external APIs, because the only NAT Gateway went down with AZ a.";
+    } else if (single && sim.fail === "b") {
+      msg = "AZ a carries on unaffected, because the NAT Gateway happens to be on the surviving side. You were lucky with which zone failed.";
+    } else {
+      msg = "<b>The surviving AZ is fully independent.</b> It has its own subnets, its own NAT Gateway and its own route table, so it keeps working exactly as before.";
+    }
+    document.getElementById("simResult").innerHTML = msg;
+
+    const svg = document.getElementById("diagram");
+    svg.classList.toggle("fail-a", sim.fail === "a");
+    svg.classList.toggle("fail-b", sim.fail === "b");
+  }
+  for (const [id, key] of [["segDesign", "design"], ["segFail", "fail"]]) {
+    const seg = document.getElementById(id);
+    seg.querySelectorAll("button").forEach(b => b.onclick = () => {
+      seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      sim[key] = b.dataset.v;
+      runSim();
+    });
+  }
+  runSim();
+</script>
+</body>
+</html>
