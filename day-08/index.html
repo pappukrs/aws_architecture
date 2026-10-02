@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 8 — Load-Balanced Web Tier</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .flowA, #diagram .flowB, #diagram .srvA, #diagram .srvB { transition: opacity .25s; }
+  #diagram.a-down .flowA, #diagram.b-down .flowB { opacity: .12; }
+  #diagram.a-down .srvA, #diagram.b-down .srvB { opacity: .45; }
+  #diagram.a-down.b-down .flowA, #diagram.a-down.b-down .flowB { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-07/index.html">← Day 7</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 8 of 30 · Week 2 — Compute, Load Balancing, High Availability</div>
+    <h1>Load-Balanced Web Tier</h1>
+    <p class="lead">Week 1 ended with two web servers and nothing to share users between them. Today you put an Application Load Balancer in front: one address for users, traffic spread over both zones, and failed servers skipped automatically. The web servers move into the private subnets.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 705" role="img" aria-label="An Application Load Balancer spans the public subnets of two Availability Zones and forwards requests to web servers in the private subnets, which are registered in a target group.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/>
+          </marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+        </defs>
+
+        <!-- Step 1: the multi-AZ VPC from Week 1 -->
+        <g data-step="1">
+          <rect x="430" y="14" width="140" height="50" rx="25" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="500" y="45" font-size="15" font-weight="700" text-anchor="middle">Users</text>
+          <rect x="20" y="90" width="960" height="600" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="34" y="114" font-size="15" font-weight="700">AWS Cloud</text>
+          <rect x="40" y="128" width="920" height="550" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="54" y="152" font-size="15" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="60" y="190" width="880" height="475" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="74" y="214" font-size="15" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="500" cy="190" r="25" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="195" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+
+          <rect x="80" y="232" width="410" height="345" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="94" y="254" font-size="13.5" font-weight="600" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+          <rect x="510" y="232" width="410" height="345" rx="6" fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="906" y="254" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+
+          <rect x="100" y="272" width="370" height="120" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="114" y="380" font-size="13" font-weight="700" style="fill:var(--pub)">Public A — 10.0.1.0/24</text>
+          <rect x="530" y="272" width="370" height="120" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="886" y="380" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--pub)">Public B — 10.0.3.0/24</text>
+          <rect x="100" y="420" width="370" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="114" y="548" font-size="13" font-weight="700" style="fill:var(--priv)">Private A — 10.0.2.0/24</text>
+          <rect x="530" y="420" width="370" height="140" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="886" y="548" font-size="13" font-weight="700" text-anchor="end" style="fill:var(--priv)">Private B — 10.0.4.0/24</text>
+
+          <use href="#nat" x="124" y="296" width="40" height="40"/>
+          <text x="144" y="352" font-size="12" font-weight="600" text-anchor="middle">nat-a</text>
+          <use href="#nat" x="836" y="296" width="40" height="40"/>
+          <text x="856" y="352" font-size="12" font-weight="600" text-anchor="middle">nat-b</text>
+        </g>
+
+        <!-- Step 2: web servers in the private subnets -->
+        <g data-step="2">
+          <g class="srvA">
+            <use href="#ec2" x="250" y="458" width="48" height="48"/>
+            <text x="308" y="476" font-size="13.5" font-weight="600">Web server A</text>
+            <text x="308" y="494" font-size="12" style="fill:var(--muted)">10.0.2.10 · web-sg</text>
+          </g>
+          <g class="srvB">
+            <use href="#ec2" x="702" y="458" width="48" height="48"/>
+            <text x="692" y="476" font-size="13.5" font-weight="600" text-anchor="end">Web server B</text>
+            <text x="692" y="494" font-size="12" text-anchor="end" style="fill:var(--muted)">10.0.4.10 · web-sg</text>
+          </g>
+        </g>
+
+        <!-- Step 3: target group + health checks -->
+        <g data-step="3">
+          <rect x="228" y="440" width="544" height="88" rx="10" fill="none" stroke="var(--vpc)" stroke-width="2" stroke-dasharray="8 5"/>
+          <rect x="405" y="429" width="190" height="22" rx="5" fill="var(--vpc)"/>
+          <text x="500" y="444" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">Target group: web-tg</text>
+          <text id="hA" x="308" y="512" font-size="11.5" font-weight="700" style="fill:var(--pub)">● healthy</text>
+          <text id="hB" x="692" y="512" font-size="11.5" font-weight="700" text-anchor="end" style="fill:var(--pub)">● healthy</text>
+        </g>
+
+        <!-- Step 4: the load balancer and its listener -->
+        <g data-step="4">
+          <rect x="300" y="300" width="400" height="54" rx="10" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="324" font-size="14.5" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+          <text x="500" y="343" font-size="11.5" text-anchor="middle" style="fill:#fff">one node in each public subnet · alb-sg</text>
+
+          <rect x="80" y="590" width="268" height="64" rx="6" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+          <text x="92" y="611" font-size="13" font-weight="700" style="fill:var(--vpc)">Listener</text>
+          <text x="92" y="632" font-size="12" class="mono">HTTPS 443  →  forward to web-tg</text>
+          <text x="92" y="647" font-size="11" style="fill:var(--muted)">TLS certificate from ACM</text>
+        </g>
+
+        <!-- Step 5: security groups -->
+        <g data-step="5">
+          <rect x="366" y="590" width="268" height="64" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+          <text x="378" y="611" font-size="13" font-weight="700" style="fill:var(--bad)">alb-sg — inbound</text>
+          <text x="378" y="634" font-size="12" class="mono">HTTPS 443   from 0.0.0.0/0</text>
+          <rect x="652" y="590" width="268" height="64" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+          <text x="664" y="611" font-size="13" font-weight="700" style="fill:var(--bad)">web-sg — inbound</text>
+          <text x="664" y="634" font-size="12" class="mono">HTTP 80     from alb-sg</text>
+        </g>
+
+        <!-- Step 6: traffic flow -->
+        <g data-step="6">
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="500" y1="66" x2="500" y2="161"/>
+            <line x1="500" y1="216" x2="500" y2="295"/>
+            <line class="flowA" x1="400" y1="357" x2="281" y2="453"/>
+            <line class="flowB" x1="600" y1="357" x2="719" y2="453"/>
+          </g>
+          <g font-size="12" font-weight="700">
+            <text x="522" y="258" style="fill:var(--orange)">HTTPS 443</text>
+            <text class="flowA" x="322" y="412" text-anchor="end" style="fill:var(--orange)">HTTP 80</text>
+            <text class="flowB" x="678" y="412" style="fill:var(--orange)">HTTP 80</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: users connect to one address, the <b>Application Load Balancer</b>, which has a node in the public subnet of each zone. Its <b>listener</b> accepts HTTPS and forwards each request to a healthy server in the <b>target group</b>. The web servers now sit in the private subnets and accept traffic only from the load balancer.</p>
+    <div class="legend">
+      <span style="--c:var(--vpc)">Load balancer / target group</span>
+      <span style="--c:var(--pub)">Public subnet</span>
+      <span style="--c:var(--priv)">Private subnet</span>
+      <span style="--c:var(--bad)">Security group rules</span>
+      <span style="--c:var(--orange)">User traffic</span>
+    </div>
+  </div>
+
+  <h2>Health check simulator</h2>
+  <div class="card">
+    <p>The load balancer calls <code>GET /health</code> on every target every few seconds. Break a server and see where the next ten requests go. The diagram above follows your choice.</p>
+    <div class="seg" id="segA"><b>Web server A</b>
+      <button data-v="up" class="on">Healthy</button>
+      <button data-v="down">Failing health check</button>
+    </div>
+    <div class="seg" id="segB"><b>Web server B</b>
+      <button data-v="up" class="on">Healthy</button>
+      <button data-v="down">Failing health check</button>
+    </div>
+    <div class="table-wrap"><table id="hcTable"></table></div>
+    <p class="result" id="hcResult"></p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Application Load Balancer (ALB)</h3>
+      <p>A managed service that receives requests and spreads them over many servers. It works at the HTTP level (layer 7).</p>
+      <ul>
+        <li>Users get <b>one DNS name</b>; they never see individual servers.</li>
+        <li>You give it subnets in <b>at least two AZs</b>. It places a node in each.</li>
+        <li>AWS scales it and replaces failed nodes; you manage nothing.</li>
+        <li>Draw it across the public subnets, straddling the AZs.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Listener and rules</h3>
+      <p>A listener is a port the load balancer listens on, plus rules for what to do with each request.</p>
+      <ul>
+        <li>Here: HTTPS 443 → forward to <code>web-tg</code>.</li>
+        <li>Rules can route by path or host: <code>/api/*</code> to one target group, <code>/images/*</code> to another.</li>
+        <li>HTTPS is decrypted here, using a certificate from ACM. This is called TLS termination.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Target group and health checks</h3>
+      <p>A target group is the list of servers that can receive traffic, with one health check definition for all of them.</p>
+      <ul>
+        <li>Targets can be instances, IP addresses or a Lambda function.</li>
+        <li>A target that fails several checks in a row is marked <b>unhealthy</b> and gets no traffic.</li>
+        <li>When it passes again it is put back automatically.</li>
+        <li>The load balancer does not repair or replace the server. That is Auto Scaling, tomorrow.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Why the servers moved to private subnets</h3>
+      <p>In Week 1 the web servers had public IPs. Now only the load balancer faces the internet.</p>
+      <ul>
+        <li>Servers have no public IP, so they cannot be attacked directly.</li>
+        <li><code>web-sg</code> allows port 80 <b>only from <code>alb-sg</code></b>: security group chaining again.</li>
+        <li>They still use the NAT Gateway for their own outbound updates.</li>
+        <li>What stays in the public subnets: the load balancer and the NAT Gateways.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Application vs Network Load Balancer</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Application Load Balancer</th><th>Network Load Balancer</th></tr>
+      <tr><td><b>Layer</b></td><td>7: understands HTTP and HTTPS</td><td>4: passes TCP and UDP connections</td></tr>
+      <tr><td><b>Routing</b></td><td>By path, host, header, query string</td><td>By port only</td></tr>
+      <tr><td><b>Address</b></td><td>DNS name; IPs change</td><td>One static IP per AZ, Elastic IP possible</td></tr>
+      <tr><td><b>Security group</b></td><td>Yes</td><td>Optional</td></tr>
+      <tr><td><b>Choose it for</b></td><td>Websites, APIs, microservices</td><td>Very high throughput, non-HTTP protocols, a fixed IP</td></tr>
+    </table>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the multi-AZ VPC from Day 6: two AZs, four subnets, Internet Gateway, a NAT Gateway in each public subnet.</li>
+      <li>Put one <b>web server</b> in each <b>private</b> subnet.</li>
+      <li>Draw a dashed <b>target group</b> box around both web servers, crossing the AZ boundary.</li>
+      <li>Draw the <b>Application Load Balancer</b> as one shape stretching across both public subnets.</li>
+      <li>Write the listener (<code>HTTPS 443</code>) and the two security group rules beside the diagram.</li>
+      <li>Draw the arrows: Users → Internet Gateway → load balancer → each web server. Label them <code>HTTPS 443</code> and <code>HTTP 80</code>.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Check that the load balancer touches both AZs and that the servers are in the private subnets.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Why does the load balancer need subnets in at least two AZs?</summary><p>It places one node in each subnet you give it. With nodes in two AZs, the loss of one zone leaves a working node in the other, so the load balancer itself is not a single point of failure. AWS will not let you create an ALB with fewer than two.</p></details>
+  <details><summary>Web server A fails its health check. What does the load balancer do, and what does it not do?</summary><p>It stops sending requests to A and sends everything to B. It does not restart, repair or replace A. When A passes the check again, traffic returns to it.</p></details>
+  <details><summary>What is the source in the inbound rule of <code>web-sg</code>?</summary><p>The security group <code>alb-sg</code>. Only the load balancer may reach the servers on port 80; nothing else can, even from inside the VPC.</p></details>
+  <details><summary>The web server logs show every request coming from <code>10.0.1.x</code> or <code>10.0.3.x</code>. Why, and where is the real client IP?</summary><p>Those are the load balancer nodes' private addresses; the load balancer opens a new connection to the server. The original client address is in the <code>X-Forwarded-For</code> header.</p></details>
+  <details><summary>Can you point your domain at the load balancer's IP address?</summary><p>No. Its IP addresses change as AWS scales it. You point the domain at its DNS name, using a Route 53 alias record (Day 13).</p></details>
+  <details><summary>Where is HTTPS decrypted in this design?</summary><p>At the load balancer. Traffic from the load balancer to the servers is plain HTTP on port 80 inside the VPC. If policy requires encryption all the way, the target group can use HTTPS as well.</p></details>
+  <details><summary>Do the web servers still need the NAT Gateways?</summary><p>Yes, for connections they start themselves, such as downloading updates. Requests from users arrive through the load balancer, and replies go back through it, so that traffic does not use the NAT Gateway.</p></details>
+  <details><summary>Both servers are healthy but traffic doubles and they are overloaded. Does the load balancer help?</summary><p>Only by sharing the load evenly. It cannot add servers. Adding and removing servers automatically is Auto Scaling, on Day 9.</p></details>
+
+  <div class="next">
+    <b>Next — Day 9: Auto Scaling.</b> You replace the two hand-made web servers with an Auto Scaling group that spans both zones, launches servers from a template, registers them with the target group, and replaces any that fail.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The Week 1 network.</b> Two AZs, a public and a private subnet in each, an Internet Gateway and a NAT Gateway per zone. This is now your standard starting point.",
+    "<b>Step 2 — Web servers in private subnets.</b> One web server per zone, with no public IP. Right now nothing on the internet can reach them.",
+    "<b>Step 3 — Target group.</b> Register both servers in one target group. It defines a health check, and each server is marked healthy or unhealthy.",
+    "<b>Step 4 — Application Load Balancer.</b> Create it with both public subnets, so it has a node in each zone. Its listener accepts HTTPS 443 and forwards to the target group.",
+    "<b>Step 5 — Security groups.</b> The load balancer accepts 443 from anywhere. The web servers accept 80 only from the load balancer's security group.",
+    "<b>Step 6 — Traffic flow.</b> Users → Internet Gateway → load balancer → a healthy web server in either zone. The reply returns along the same path."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const hc = { A: "up", B: "up" };
+  const svg = document.getElementById("diagram");
+
+  function paintHealth(id, up) {
+    const el = document.getElementById(id);
+    el.textContent = up ? "● healthy" : "● unhealthy";
+    el.style.fill = up ? "var(--pub)" : "var(--bad)";
+  }
+  function runHc() {
+    const a = hc.A === "up", b = hc.B === "up";
+    // 10 requests, round robin over the healthy targets.
+    // With no healthy target the load balancer "fails open" and tries all of them.
+    const pool = a || b ? [a && "A", b && "B"].filter(Boolean) : ["A", "B"];
+    const got = { A: 0, B: 0 };
+    for (let i = 0; i < 10; i++) got[pool[i % pool.length]]++;
+
+    const status = up => up ? `<span style="color:var(--pub)">✓ healthy</span>` : `<span style="color:var(--bad)">✕ unhealthy</span>`;
+    document.getElementById("hcTable").innerHTML =
+      `<tr><th>Target</th><th>Health</th><th>Requests received (of 10)</th></tr>
+       <tr><td>Web server A, AZ a</td><td>${status(a)}</td><td><b>${got.A}</b></td></tr>
+       <tr><td>Web server B, AZ b</td><td>${status(b)}</td><td><b>${got.B}</b></td></tr>`;
+
+    document.getElementById("hcResult").innerHTML =
+      a && b ? "Both targets are healthy, so requests alternate between the two zones."
+      : !a && !b ? "<b>No healthy target.</b> The load balancer “fails open”: it sends requests to all targets anyway, and users most likely see errors. Nothing here will fix the servers."
+      : `<b>Users notice nothing.</b> All requests go to web server ${a ? "A" : "B"}. But one server now carries the full load, and the failed one stays broken until someone replaces it.`;
+
+    paintHealth("hA", a); paintHealth("hB", b);
+    svg.classList.toggle("a-down", !a);
+    svg.classList.toggle("b-down", !b);
+  }
+  for (const k of ["A", "B"]) {
+    const seg = document.getElementById("seg" + k);
+    seg.querySelectorAll("button").forEach(btn => btn.onclick = () => {
+      seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === btn));
+      hc[k] = btn.dataset.v;
+      runHc();
+    });
+  }
+  runHc();
+</script>
+</body>
+</html>
