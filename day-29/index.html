@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 29 — Multi-Account Setup</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .tool { transition: opacity .25s; }
+  #diagram.lit .tool { opacity: .16; }
+  #diagram.lit .tool.on { opacity: 1; }
+  .eval .seg b { min-width: 72px; }
+  .eval .calc { margin: 16px 0 12px; }
+  .eval .note { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+  .pill { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 1px 9px; border-radius: 999px; color: var(--card); white-space: nowrap; }
+  .pill.yes { background: var(--pub); } .pill.no { background: var(--bad); } .pill.skip { background: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-28/index.html">← Day 28</a><a href="../README.md">30-day plan</a><a href="../day-30/index.html">Day 30 →</a></nav>
+  <header>
+    <div class="tag">Day 29 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Multi-Account Setup</h1>
+    <p class="lead">Every drawing so far sat inside one AWS account. A real company does not work that way. It has one account for production, one for testing, one for logs, and often hundreds more. An account is the strongest wall AWS offers: nothing crosses it unless you allow it. Today you draw how the accounts are arranged in a tree, how rules flow down that tree, and where the log archive account from Day 26 lives.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 592" role="img" aria-label="An organisation drawn as a tree. At the top, the management account, with IAM Identity Center on its left and Control Tower on its right. Below it the root, and under the root four organisational units: Security with the Audit and Log Archive accounts, Infrastructure with the Network and Shared Services accounts, Workloads with the Dev, Staging and Prod accounts, and Sandbox with one sandbox account. Service control policies are attached to the root and to three of the units. A dashed arrow carries logs from every account to the Log Archive account.">
+        <defs>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <symbol id="s3" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g></symbol>
+          <symbol id="guard" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--dc)"/><path d="M28 11 L42 16 V28 C42 37 36 43 28 46 C20 43 14 37 14 28 V16 Z" fill="none" stroke="var(--card)" stroke-width="2.5" stroke-linejoin="round"/></symbol>
+          <symbol id="user" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--az)"/><g fill="#fff"><circle cx="28" cy="21" r="8"/><path d="M12 46 a16 14 0 0 1 32 0 z"/></g></symbol>
+          <symbol id="tgw" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--vpc)"/><text x="28" y="35" font-size="19" font-weight="700" text-anchor="middle" style="fill:#fff">TGW</text></symbol>
+          <symbol id="ci" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--vpc)"/><text x="28" y="36" font-size="20" font-weight="700" text-anchor="middle" style="fill:#fff">CI</text></symbol>
+        </defs>
+
+        <rect x="20" y="20" width="960" height="552" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="44" font-size="15" font-weight="700">Organisation <tspan font-size="12" font-weight="400" style="fill:var(--muted)">· created with AWS Organizations</tspan></text>
+
+        <!-- Step 1: management account -->
+        <g data-step="1">
+          <g class="tool" id="aMgmt">
+            <rect x="360" y="58" width="280" height="76" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+            <text x="374" y="80" font-size="13.5" font-weight="700" style="fill:var(--orange)">Management account</text>
+            <text x="374" y="98" font-size="11" style="fill:var(--muted)">creates the organisation, pays one bill</text>
+            <text x="374" y="114" font-size="11" style="fill:var(--muted)">no workloads here · SCPs do not apply</text>
+          </g>
+        </g>
+
+        <!-- Step 2: root and organisational units -->
+        <g data-step="2">
+          <path d="M500 134 V152 M500 180 V198 M146 214 V198 H854 V214 M382 198 V214 M618 198 V214" fill="none" stroke="var(--region)" stroke-width="2"/>
+          <rect x="450" y="152" width="100" height="28" rx="14" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2"/>
+          <text x="500" y="171" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:var(--region)">Root</text>
+          <g fill="var(--region-fill)" stroke="var(--region)" stroke-width="1.5" stroke-dasharray="7 5">
+            <rect x="36" y="214" width="220" height="300" rx="8"/><rect x="272" y="214" width="220" height="300" rx="8"/><rect x="508" y="214" width="220" height="300" rx="8"/><rect x="744" y="214" width="220" height="300" rx="8"/>
+          </g>
+          <g font-size="12.5" font-weight="700">
+            <text x="48" y="235" style="fill:var(--region)">Security OU</text>
+            <text x="284" y="235" style="fill:var(--region)">Infrastructure OU</text>
+            <text x="520" y="235" style="fill:var(--region)">Workloads OU</text>
+            <text x="756" y="235" style="fill:var(--region)">Sandbox OU</text>
+          </g>
+        </g>
+
+        <!-- Step 3: Security OU accounts -->
+        <g data-step="3">
+          <g class="tool" id="aAudit">
+            <rect x="48" y="292" width="196" height="102" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+            <use href="#guard" x="58" y="301" width="28" height="28"/>
+            <text x="94" y="320" font-size="12.5" font-weight="700">Audit account</text>
+            <text x="58" y="348" font-size="11" style="fill:var(--muted)">the security team's account:</text>
+            <text x="58" y="363" font-size="11" style="fill:var(--muted)">GuardDuty and Security Hub</text>
+            <text x="58" y="378" font-size="11" style="fill:var(--muted)">findings from every account</text>
+          </g>
+          <g class="tool" id="aLog">
+            <rect x="48" y="402" width="196" height="102" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2"/>
+            <use href="#s3" x="58" y="411" width="28" height="28"/>
+            <text x="94" y="430" font-size="12.5" font-weight="700">Log Archive account</text>
+            <text x="58" y="458" font-size="11" style="fill:var(--muted)">the central bucket of Day 26:</text>
+            <text x="58" y="473" font-size="11" style="fill:var(--muted)">CloudTrail and Config logs</text>
+            <text x="58" y="488" font-size="11" style="fill:var(--muted)">from every account</text>
+          </g>
+        </g>
+
+        <!-- Step 4: Infrastructure OU accounts -->
+        <g data-step="4">
+          <g class="tool" id="aNet">
+            <rect x="284" y="292" width="196" height="102" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+            <use href="#tgw" x="294" y="301" width="28" height="28"/>
+            <text x="330" y="320" font-size="12.5" font-weight="700">Network account</text>
+            <text x="294" y="348" font-size="11" style="fill:var(--muted)">Transit Gateway (Day 22),</text>
+            <text x="294" y="363" font-size="11" style="fill:var(--muted)">VPN and Direct Connect,</text>
+            <text x="294" y="378" font-size="11" style="fill:var(--muted)">shared with other accounts</text>
+          </g>
+          <g class="tool" id="aShared">
+            <rect x="284" y="402" width="196" height="102" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+            <use href="#ci" x="294" y="411" width="28" height="28"/>
+            <text x="330" y="430" font-size="12.5" font-weight="700">Shared Services</text>
+            <text x="294" y="458" font-size="11" style="fill:var(--muted)">CI/CD pipeline, container</text>
+            <text x="294" y="473" font-size="11" style="fill:var(--muted)">images and internal tools</text>
+            <text x="294" y="488" font-size="11" style="fill:var(--muted)">that every team uses</text>
+          </g>
+        </g>
+
+        <!-- Step 5: workload accounts and sandbox -->
+        <g data-step="5">
+          <g class="tool" id="aDev">
+            <rect x="520" y="292" width="196" height="66" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+            <text x="532" y="313" font-size="12.5" font-weight="700">Dev account</text>
+            <text x="532" y="331" font-size="11" style="fill:var(--muted)">engineers have wide access,</text>
+            <text x="532" y="346" font-size="11" style="fill:var(--muted)">no real customer data</text>
+          </g>
+          <g class="tool" id="aStg">
+            <rect x="520" y="365" width="196" height="66" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+            <text x="532" y="386" font-size="12.5" font-weight="700">Staging account</text>
+            <text x="532" y="404" font-size="11" style="fill:var(--muted)">a copy of prod, to test a</text>
+            <text x="532" y="419" font-size="11" style="fill:var(--muted)">release before it ships</text>
+          </g>
+          <g class="tool" id="aProd">
+            <rect x="520" y="438" width="196" height="66" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+            <text x="532" y="459" font-size="12.5" font-weight="700">Prod account</text>
+            <text x="532" y="477" font-size="11" style="fill:var(--muted)">real customers, real data;</text>
+            <text x="532" y="492" font-size="11" style="fill:var(--muted)">very few people can change it</text>
+          </g>
+          <g class="tool" id="aSbx">
+            <rect x="756" y="292" width="196" height="102" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+            <text x="768" y="313" font-size="12.5" font-weight="700">Sandbox account</text>
+            <text x="768" y="333" font-size="11" style="fill:var(--muted)">a place to try new services:</text>
+            <text x="768" y="348" font-size="11" style="fill:var(--muted)">a budget alarm, and no</text>
+            <text x="768" y="363" font-size="11" style="fill:var(--muted)">connection to the company</text>
+            <text x="768" y="378" font-size="11" style="fill:var(--muted)">network</text>
+          </g>
+        </g>
+
+        <!-- Step 6: service control policies -->
+        <g data-step="6">
+          <g class="tool" id="scpRoot">
+            <line x1="551" y1="166" x2="570" y2="166" stroke="var(--bad)" stroke-width="1.5"/>
+            <rect x="570" y="147" width="394" height="38" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="1.5"/>
+            <text x="582" y="163" font-size="10.5" font-weight="700" style="fill:var(--bad)">SCPs on the root <tspan font-weight="400" style="fill:var(--muted)">· FullAWSAccess, which allows everything, and:</tspan></text>
+            <text x="582" y="177" font-size="10.5">Deny: stopping CloudTrail · Deny: Regions we do not use</text>
+          </g>
+          <g class="tool" id="scpSec">
+            <rect x="48" y="244" width="196" height="38" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="1.5"/>
+            <text x="58" y="260" font-size="10.5" font-weight="700" style="fill:var(--bad)">SCP · protect the logs</text>
+            <text x="58" y="274" font-size="10.5">Deny: deleting buckets or objects</text>
+          </g>
+          <g class="tool" id="scpInf">
+            <rect x="284" y="244" width="196" height="38" rx="6" fill="var(--card)" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="5 4"/>
+            <text x="294" y="260" font-size="10.5" font-weight="700" style="fill:var(--muted)">No SCP of its own</text>
+            <text x="294" y="274" font-size="10.5" style="fill:var(--muted)">only the root's rules apply</text>
+          </g>
+          <g class="tool" id="scpWl">
+            <rect x="520" y="244" width="196" height="38" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="1.5"/>
+            <text x="530" y="260" font-size="10.5" font-weight="700" style="fill:var(--bad)">SCP · no long-lived keys</text>
+            <text x="530" y="274" font-size="10.5">Deny: creating IAM users</text>
+          </g>
+          <g class="tool" id="scpSbx">
+            <rect x="756" y="244" width="196" height="38" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="1.5"/>
+            <text x="766" y="260" font-size="10.5" font-weight="700" style="fill:var(--bad)">SCP · allow list</text>
+            <text x="766" y="274" font-size="10.5">only EC2, S3, Lambda, DynamoDB</text>
+          </g>
+        </g>
+
+        <!-- Step 7: central logging -->
+        <g data-step="7">
+          <g fill="none" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4">
+            <path d="M854 515 V536 H146 V507" marker-end="url(#arrowD)"/>
+            <path d="M382 515 V536 M618 515 V536"/>
+          </g>
+          <text x="500" y="556" font-size="11" text-anchor="middle" style="fill:var(--muted)">CloudTrail and Config logs from every account, delivered to the Log Archive bucket</text>
+        </g>
+
+        <!-- Step 8: IAM Identity Center -->
+        <g data-step="8">
+          <line x1="297" y1="96" x2="359" y2="96" stroke="var(--az)" stroke-width="2"/>
+          <g class="tool" id="sIdc">
+            <rect x="36" y="58" width="260" height="76" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="2.5"/>
+            <use href="#user" x="48" y="80" width="32" height="32"/>
+            <text x="90" y="80" font-size="13.5" font-weight="700" style="fill:var(--az)">IAM Identity Center</text>
+            <text x="90" y="98" font-size="11" style="fill:var(--muted)">people sign in once, then</text>
+            <text x="90" y="114" font-size="11" style="fill:var(--muted)">choose an account and a role</text>
+          </g>
+        </g>
+
+        <!-- Step 9: Control Tower -->
+        <g data-step="9">
+          <line x1="641" y1="96" x2="703" y2="96" stroke="var(--az)" stroke-width="2"/>
+          <g class="tool" id="sCt">
+            <rect x="704" y="58" width="260" height="76" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="2.5"/>
+            <text x="718" y="80" font-size="13.5" font-weight="700" style="fill:var(--az)">AWS Control Tower</text>
+            <text x="718" y="98" font-size="11" style="fill:var(--muted)">builds the base of this landing zone,</text>
+            <text x="718" y="114" font-size="11" style="fill:var(--muted)">then keeps its guardrails in place</text>
+          </g>
+          <g class="tool" id="aNew">
+            <rect x="756" y="402" width="196" height="102" rx="8" fill="none" stroke="var(--az)" stroke-width="1.5" stroke-dasharray="5 4"/>
+            <text x="768" y="423" font-size="12.5" font-weight="700" style="fill:var(--az)">+ the next account</text>
+            <text x="768" y="443" font-size="11" style="fill:var(--muted)">made by Account Factory:</text>
+            <text x="768" y="458" font-size="11" style="fill:var(--muted)">logging, sign-in and</text>
+            <text x="768" y="473" font-size="11" style="fill:var(--muted)">guardrails are already there</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: one <b>organisation</b> holds every account. The <b>management account</b> is at the top, attached straight to the <b>root</b> and outside every OU. Below the root, <b>organisational units (OUs)</b> group the accounts that need the same rules. <b>SCPs</b>, in red, are attached to the root and to OUs, and every account below inherits them. Each account has one job: security tools, logs, the network, shared tools, one stage of the application, or experiments. <b>Control Tower</b> sets up the base of this layout and <b>IAM Identity Center</b> gives people one sign-in for all of it. Lines in the tree mean “contains”. The dashed arrow is log delivery.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Management account</span>
+      <span style="--c:var(--region)">Root and OUs</span>
+      <span style="--c:var(--bad)">SCPs</span>
+      <span style="--c:var(--priv)">Security accounts</span>
+      <span style="--c:var(--vpc)">Infrastructure accounts</span>
+      <span style="--c:var(--pub)">Workload accounts</span>
+      <span style="--c:var(--dc)">Sandbox · log delivery</span>
+      <span style="--c:var(--az)">Identity Center, Control Tower</span>
+    </div>
+  </div>
+
+  <h2>Which account does it belong in?</h2>
+  <div class="card">
+    <p>Each button is something a company has to put somewhere. Name the account first. The diagram above lights it.</p>
+    <div class="seg" id="qBtns"></div>
+    <p class="result" id="qMsg">Pick one.</p>
+  </div>
+
+  <h2>Is the action allowed?</h2>
+  <div class="card eval">
+    <p>Every request is checked against two kinds of policy. The <b>SCPs</b> on the path from the root down to the account set the outer limit. The <b>IAM policy</b> of the user or role gives the actual permission. Both must say yes. Pick an account, an identity and an action, and say the answer before you read it.</p>
+    <div id="evOpts"></div>
+    <div class="calc">
+      <div><div class="lbl">SCPs: the outer limit</div><div class="big" id="evScp"></div></div>
+      <div><div class="lbl">IAM policy: the grant</div><div class="big" id="evIam"></div></div>
+      <div><div class="lbl">Result</div><div class="big" id="evOut"></div></div>
+    </div>
+    <div class="table-wrap"><table id="evTable"></table></div>
+    <p class="result" id="evMsg"></p>
+    <p class="note">The SCPs are the ones in the diagram, written out in full. The same three roles exist in every account: Admin allows every action; Developer allows EC2, S3, RDS, Lambda and DynamoDB; Read-only allows only actions that start with Describe, Get or List. A real Region rule also lists exceptions for global services such as IAM and Route 53, as this one does.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>AWS Organizations</h3>
+      <ul>
+        <li>An <b>AWS account</b> is a container for resources. It has its own users and roles, its own limits and its own bill.</li>
+        <li><b>AWS Organizations</b> joins many accounts into one <b>organisation</b>. The account that creates it is the <b>management account</b>. All the others are <b>member accounts</b>.</li>
+        <li><b>Consolidated billing:</b> one bill for all accounts, paid by the management account, and still broken down per account. Usage is added together, so volume discounts are reached sooner.</li>
+        <li>New accounts are created with one API call. Existing accounts can be invited.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Root and OUs</h3>
+      <ul>
+        <li>The <b>root</b> is the top of the tree. An organisation has exactly one. It is not the same thing as an account's root user.</li>
+        <li>An <b>organisational unit (OU)</b> is a folder for accounts. An OU can contain other OUs.</li>
+        <li>An account sits in one place in the tree at a time. You can move it later.</li>
+        <li>Group accounts by <b>the rules they need</b>, not by the company's departments. Security, Infrastructure, Workloads and Sandbox are a common starting set.</li>
+        <li>Anything attached to an OU applies to every account under it, including accounts added later.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Service control policies</h3>
+      <ul>
+        <li>An <b>SCP</b> is a policy attached to the root, to an OU or to one account. It sets the <b>most</b> that anyone in those accounts can do.</li>
+        <li>It <b>never grants</b> a permission. Users and roles still need an IAM policy, as on Day 25.</li>
+        <li>It binds every user and role in a member account, <b>including the root user</b>.</li>
+        <li>It does <b>not</b> apply to the management account. It also does not apply to service-linked roles, the roles AWS services use for themselves.</li>
+        <li>A <b>Deny</b> at any level wins. And an action must be allowed at <b>every</b> level, which is why <code>FullAWSAccess</code> is attached everywhere by default.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Security and logging accounts</h3>
+      <ul>
+        <li><b>Log Archive</b> holds the central bucket from Day 26. The organisation-wide CloudTrail trail and AWS Config deliver there.</li>
+        <li><b>Audit</b>, also called Security Tooling, is where the security team works. GuardDuty and Security Hub send findings from every account to it.</li>
+        <li>Both are separate from the workloads, so the people being watched cannot change what watches them.</li>
+        <li>Almost nobody can sign in to them, and their OU carries its own stricter SCP.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Control Tower</h3>
+      <ul>
+        <li>A <b>landing zone</b> is a multi-account environment that is ready and secure before the first workload arrives: the tree, the security accounts, central logging and sign-in.</li>
+        <li><b>Control Tower</b> builds one on top of Organizations. It creates the Security OU with the Log Archive and Audit accounts. Newer Control Tower versions call these two accounts CloudTrail administrator and Config aggregator, and keep the Config logs in a bucket in the second one.</li>
+        <li>A <b>guardrail</b>, which AWS now calls a <b>control</b>, is a rule applied to a whole OU. A <b>preventive</b> one is an SCP: it stops the action. A <b>detective</b> one is an AWS Config rule: it reports what already breaks the rule. A third kind, <b>proactive</b>, checks a CloudFormation template before the resource is created.</li>
+        <li><b>Account Factory</b> creates new accounts from a template, already in an OU, with logging and guardrails switched on.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>IAM Identity Center</h3>
+      <ul>
+        <li>One place where people sign in, once, for every account. It was called AWS SSO before 2022.</li>
+        <li>Users and groups come from its own directory or from the company's identity provider, such as Microsoft Entra ID or Okta.</li>
+        <li>A <b>permission set</b> is a bundle of IAM policies. Assign a group and a permission set to an account, and Identity Center creates the matching IAM role in that account.</li>
+        <li>People receive temporary credentials each time. There are no IAM users and no long-lived access keys to leak.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Separate VPCs vs separate accounts</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Separate VPCs in one account</th><th>Separate accounts</th></tr>
+      <tr><td><b>What is separated</b></td><td>The network only</td><td>Everything: network, permissions, limits and the bill</td></tr>
+      <tr><td><b>IAM</b></td><td>One set of users and roles. An admin reaches every VPC.</td><td>Each account has its own. An admin in dev is nobody in prod.</td></tr>
+      <tr><td><b>A mistake or a stolen credential</b></td><td>Can reach every resource in the account</td><td>Stops at the edge of the account</td></tr>
+      <tr><td><b>Service quotas</b></td><td>Shared. A load test can use up the Lambda concurrency that production needs (Day 15).</td><td>Each account has its own</td></tr>
+      <tr><td><b>Cost</b></td><td>One total. Splitting it needs tags on every resource.</td><td>Split per account automatically</td></tr>
+      <tr><td><b>Rules from above</b></td><td>None. An SCP attaches to an account or an OU, never to a VPC.</td><td>One SCP per OU covers every account in it</td></tr>
+      <tr><td><b>Connecting them</b></td><td>Peering or Transit Gateway</td><td>The same. Both work across accounts (Day 22).</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">A way to remember: a VPC is a wall for <b>packets</b>. An account is a wall for <b>everything</b>.</p>
+  </div>
+
+  <h2>How accounts still work together</h2>
+  <div class="card">
+    <p>If every account is a wall, something must be allowed through. There are four standard doors.</p>
+    <ul>
+      <li><b>Cross-account role:</b> a role in account B that trusts account A. Someone in A assumes it and receives temporary credentials for B. This is how the pipeline in Shared Services deploys to prod, and how the Audit account looks into the others.</li>
+      <li><b>Resource sharing:</b> AWS Resource Access Manager (RAM) shares one resource, such as the Transit Gateway or a subnet, with other accounts or with a whole OU.</li>
+      <li><b>Organisation-wide services:</b> one CloudTrail trail, GuardDuty and AWS Config are switched on for every account from one place. A member account cannot turn the organisation trail off.</li>
+      <li><b>Delegated administrator:</b> the management account hands the running of a service, such as GuardDuty, to a member account, usually Audit. The security team then never needs to sign in to the management account.</li>
+    </ul>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw one large box for the organisation. At the top centre, draw the <b>management account</b> and write “pays the bill, no workloads”.</li>
+      <li>Under it draw a small <b>Root</b>. Below the root draw four dashed boxes, the OUs: <b>Security</b>, <b>Infrastructure</b>, <b>Workloads</b>, <b>Sandbox</b>. Join them to the root as a tree.</li>
+      <li>In Security draw <b>Audit</b> and <b>Log Archive</b>. In Infrastructure draw <b>Network</b> and <b>Shared Services</b>.</li>
+      <li>In Workloads draw <b>Dev</b>, <b>Staging</b> and <b>Prod</b>. In Sandbox draw one sandbox account.</li>
+      <li>In red, write an <b>SCP</b> next to the root and inside each OU that has one, with what it denies.</li>
+      <li>Draw a dashed arrow from every OU to Log Archive and label it “CloudTrail and Config logs”.</li>
+      <li>Left of the management account draw <b>IAM Identity Center</b>. Right of it draw <b>Control Tower</b>.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. On most architecture diagrams this whole page shrinks to a label in a corner, such as “prod account”. You should know what stands behind that label.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Why separate accounts instead of separate VPCs?</summary><p>A VPC separates only the network. Inside one account, IAM users and roles, service quotas and the bill are shared, so an admin, a mistake or a stolen credential in one VPC can reach the resources of the other. An account separates all of it, and nothing crosses unless you allow it. You can also put rules above an account with SCPs, which you cannot do for a VPC.</p></details>
+  <details><summary>The Infrastructure OU has only <code>FullAWSAccess</code>. A read-only role in the Network account tries to delete the Transit Gateway. Does it work?</summary><p>No. An SCP never grants a permission. <code>FullAWSAccess</code> only means that the SCPs block nothing. The permission itself must come from the role's IAM policy, and a read-only policy does not allow deleting.</p></details>
+  <details><summary>An SCP on the root denies stopping CloudTrail. An admin in the management account stops it anyway. How?</summary><p>SCPs do not apply to the management account, not even those attached to the root. That is why the management account holds no workloads and why very few people can sign in to it.</p></details>
+  <details><summary>Can the root user of a member account get around an SCP?</summary><p>No. An SCP binds every user and role in a member account, and the root user too. No IAM policy can restrict a root user, but an SCP does.</p></details>
+  <details><summary>You replace <code>FullAWSAccess</code> on an OU with an SCP that allows only EC2 and S3. What happens to Lambda in the accounts below?</summary><p>It is blocked. An action must be allowed by an SCP at every level: the root, each OU on the way down, and the account. If one level has no SCP that allows Lambda, nobody in those accounts can use it, whatever their IAM policy says.</p></details>
+  <details><summary>The Workloads OU denies creating IAM users. How do engineers sign in to the prod account?</summary><p>Through IAM Identity Center. They sign in once, choose the account and a permission set, and receive temporary credentials for a role in that account. No IAM user and no stored access key is needed.</p></details>
+  <details><summary>Why is the Log Archive account separate, and in its own OU?</summary><p>So that whoever takes over or misuses a workload account cannot delete the record of what they did. Nobody does daily work in the Log Archive account, and its OU carries an SCP that forbids deleting the log buckets or the logs in them, even for an admin of that account.</p></details>
+  <details><summary>What is a landing zone, and what does Control Tower do with it?</summary><p>A landing zone is a multi-account environment that is ready and secure before any workload arrives. Control Tower builds it: the organisation, the Security OU with the Log Archive and Audit accounts, central logging, sign-in through Identity Center, and a set of guardrails.</p></details>
+  <details><summary>Preventive guardrail or detective guardrail: what is the difference?</summary><p>A preventive guardrail is an SCP, so the action fails when someone tries it. A detective guardrail is an AWS Config rule, so the action succeeds and the resource is then reported as non-compliant. Use the first for things that must never happen, and the second for things you want to see and fix.</p></details>
+  <details><summary>A new team needs an account tomorrow. How do you make sure it is safe from the first minute?</summary><p>Create it with Account Factory, into the right OU. The account then inherits that OU's SCPs at once, its logs already go to the Log Archive account, and people reach it through Identity Center. Nobody has to remember to switch these on.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-30/index.html">Day 30: Capstone, a production e-commerce platform</a>.</b> Everything from the 30 days combined in one drawing. You draw it from a blank page in 30 minutes and explain every arrow.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Management account.</b> One account creates the organisation. It invites or creates all the others and pays one bill for all of them. Keep it almost empty: no workloads, very few people.",
+    "<b>Step 2 — Root and OUs.</b> The root is the top of the tree. Under it, organisational units (OUs) are folders for accounts that need the same rules. Four is a common start: Security, Infrastructure, Workloads, Sandbox.",
+    "<b>Step 3 — Security OU.</b> Two accounts that nobody builds in. Log Archive keeps the logs. Audit is where the security team sees findings from every account.",
+    "<b>Step 4 — Infrastructure OU.</b> Things that all teams share. The Network account owns the Transit Gateway and the links to the data centre. Shared Services holds the pipeline and internal tools.",
+    "<b>Step 5 — Workloads and Sandbox.</b> One account for each stage of the application, so a mistake in dev cannot touch prod. The sandbox is for experiments and is connected to nothing.",
+    "<b>Step 6 — SCPs.</b> A service control policy sets the most that an account may do. Attach it to the root or to an OU, and every account below inherits it. An SCP only limits. It never gives a permission.",
+    "<b>Step 7 — Central logging.</b> CloudTrail and AWS Config in every account deliver to one bucket in the Log Archive account. This is the central bucket you drew on Day 26.",
+    "<b>Step 8 — IAM Identity Center.</b> People sign in once. They then choose an account and a role, and get temporary credentials for it. There is no separate user name in each account.",
+    "<b>Step 9 — Control Tower.</b> It sets up the base of this drawing for you: the organisation, the Security OU with its two accounts, central logging, sign-in through Identity Center and a first set of guardrails. The result is called a landing zone. You add the other OUs and accounts yourself, usually with its Account Factory, and they get the guardrails automatically."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  // Lighting needs the whole diagram, so it leaves the step-by-step build first.
+  let lighting = false;
+  const light = ids => {
+    lighting = true; $("btnAll").click(); lighting = false;
+    svg.classList.add("lit");
+    svg.querySelectorAll(".tool").forEach(g => g.classList.toggle("on", ids.includes(g.id)));
+  };
+  // Any diagram button pressed by the learner clears the lighting and the picked item.
+  ["btnBuild", "btnPrev", "btnNext", "btnAll"].forEach(id => $(id).addEventListener("click", () => {
+    if (lighting) return;
+    svg.classList.remove("lit");
+    [...$("qBtns").children].forEach(b => b.classList.remove("on"));
+    $("qMsg").innerHTML = "Pick one.";
+  }));
+
+  // ---- Which account? [button, diagram ids, explanation] ----
+  const things = [
+    ["The bucket with every account's CloudTrail logs", ["aLog"], "<b>Log Archive account.</b> Nobody builds anything in this account, so nobody is there to delete the evidence. Services write to the bucket and a few security staff may read it."],
+    ["GuardDuty findings from all accounts, in one list", ["aAudit"], "<b>Audit account.</b> The security team runs GuardDuty and Security Hub for the whole organisation from here, so findings from every account arrive in one place."],
+    ["The Transit Gateway and the Direct Connect link", ["aNet"], "<b>Network account.</b> One team owns the hub from Day 22 and the links from Day 23, and shares them with the other accounts. Workload teams attach their VPCs but cannot change the hub."],
+    ["The pipeline that deploys to dev, staging and prod", ["aShared"], "<b>Shared Services account.</b> The pipeline lives outside the accounts it deploys to and assumes a role in each of them. Shared container images and internal tools sit here too."],
+    ["A load test of next week's release", ["aStg"], "<b>Staging account.</b> It looks like prod but holds no real customers. It also has its own service quotas, so a heavy test cannot use up the limits that production needs."],
+    ["The database with real customer orders", ["aProd"], "<b>Prod account.</b> Only the pipeline and a few on-call engineers can change anything here. A leaked password from dev opens nothing in this account."],
+    ["A developer wants to try a service nobody has approved", ["aSbx"], "<b>Sandbox account.</b> It has a budget alarm and no connection to the company network, so an experiment can break nothing and reach no data."],
+    ["The monthly bill, the OUs and the SCPs themselves", ["aMgmt"], "<b>Management account.</b> It pays one bill for every account, and it is where the tree and its policies are managed. Nothing else belongs here, because SCPs cannot restrict this account."],
+    ["The list of employees and which accounts each may enter", ["sIdc"], "<b>IAM Identity Center.</b> Users and groups are kept in one place and are assigned to accounts with a permission set. When someone leaves the company, you remove them once."],
+    ["A new team needs its own account by tomorrow", ["sCt", "aNew"], "<b>Control Tower's Account Factory.</b> It creates the account in the OU you choose. The OU's SCPs, central logging and Identity Center access are in place from the first minute."]
+  ];
+  things.forEach((t, i) => {
+    const b = document.createElement("button");
+    b.textContent = t[0];
+    b.onclick = () => {
+      [...$("qBtns").children].forEach((x, j) => x.classList.toggle("on", j === i));
+      $("qMsg").innerHTML = t[2];
+      light(t[1]);
+    };
+    $("qBtns").appendChild(b);
+  });
+
+  // ---- SCP and IAM evaluation ----
+  // A statement matches when the action fits its Action list (or is outside its NotAction list) and its condition holds.
+  const REGIONS = ["ap-south-1", "ap-southeast-1"], HOME = REGIONS[0]; // Mumbai and Singapore, as on Days 28 and 30
+  const glob = (pattern, api) => new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$").test(api);
+  const hits = (st, act) =>
+    (!st.actions || st.actions.some(p => glob(p, act.api))) &&
+    (!st.notActions || !st.notActions.some(p => glob(p, act.api))) &&
+    (!st.when || st.when(act));
+  // One set of policies: an explicit Deny wins, then an Allow, otherwise nothing allows it (implicit deny).
+  function decide(policies, act) {
+    for (const p of policies) for (const st of p.st) if (st.effect === "Deny" && hits(st, act)) return { say: "deny", why: st.why };
+    for (const p of policies) for (const st of p.st) if (st.effect === "Allow" && hits(st, act)) return { say: "allow" };
+    return { say: "none" };
+  }
+
+  const FULL = { label: "<code>FullAWSAccess</code>", st: [{ effect: "Allow", actions: ["*"] }] };
+  const GLOBAL_SERVICES = ["iam:*", "organizations:*", "route53:*", "cloudfront:*", "support:*"];
+  const SCPS = {
+    root: [FULL, { label: "Deny: stopping CloudTrail · Deny: Regions other than Mumbai and Singapore", st: [
+      { effect: "Deny", actions: ["cloudtrail:StopLogging", "cloudtrail:DeleteTrail"], why: "stopping CloudTrail" },
+      { effect: "Deny", notActions: GLOBAL_SERVICES, when: a => !REGIONS.includes(a.region), why: "using any Region other than Mumbai (ap-south-1) and Singapore (ap-southeast-1)" }
+    ] }],
+    sec: [FULL, { label: "Deny: deleting S3 buckets or the objects in them", st: [{ effect: "Deny", actions: ["s3:DeleteBucket", "s3:DeleteObject*", "s3:PutLifecycleConfiguration"], why: "deleting S3 buckets or the objects in them" }] }],
+    inf: [FULL],
+    wl: [FULL, { label: "Deny: creating IAM users", st: [{ effect: "Deny", actions: ["iam:CreateUser", "iam:CreateAccessKey"], why: "creating IAM users" }] }],
+    sbx: [{ label: "Allow list: EC2, S3, Lambda, DynamoDB", st: [{ effect: "Allow", actions: ["ec2:*", "s3:*", "lambda:*", "dynamodb:*"] }] }]
+  };
+  const OUS = { sec: ["Security OU", "scpSec"], inf: ["Infrastructure OU", "scpInf"], wl: ["Workloads OU", "scpWl"], sbx: ["Sandbox OU", "scpSbx"] };
+  const ACCOUNTS = [
+    ["mgmt", "Management", null, "aMgmt"], ["audit", "Audit", "sec", "aAudit"], ["log", "Log Archive", "sec", "aLog"],
+    ["net", "Network", "inf", "aNet"], ["shared", "Shared Services", "inf", "aShared"],
+    ["dev", "Dev", "wl", "aDev"], ["stg", "Staging", "wl", "aStg"], ["prod", "Prod", "wl", "aProd"], ["sbx", "Sandbox", "sbx", "aSbx"]
+  ];
+  const WHO = [
+    ["admin", "Admin role", "<code>AdministratorAccess</code>: allows every action", [{ effect: "Allow", actions: ["*"] }]],
+    ["dev", "Developer role", "allows EC2, S3, RDS, Lambda and DynamoDB", [{ effect: "Allow", actions: ["ec2:*", "s3:*", "rds:*", "lambda:*", "dynamodb:*"] }]],
+    ["ro", "Read-only role", "allows only Describe, Get and List actions", [{ effect: "Allow", actions: ["*:Describe*", "*:Get*", "*:List*"] }]],
+    ["root", "Root user of the account", "", null]
+  ];
+  const ACTIONS = [
+    ["ec2ok", "Launch an EC2 instance in ap-south-1", "ec2:RunInstances", HOME],
+    ["ec2far", "Launch an EC2 instance in us-west-2", "ec2:RunInstances", "us-west-2"],
+    ["rds", "Create an RDS database", "rds:CreateDBInstance", HOME],
+    ["iam", "Create an IAM user", "iam:CreateUser", "global"],
+    ["trail", "Stop CloudTrail logging", "cloudtrail:StopLogging", HOME],
+    ["bucket", "Delete an S3 bucket", "s3:DeleteBucket", HOME]
+  ];
+
+  function evaluate(accId, whoId, actId) {
+    const [, accName, ou, node] = ACCOUNTS.find(a => a[0] === accId);
+    const [, whoName, whoPolicy, whoSt] = WHO.find(w => w[0] === whoId);
+    const [, , api, region] = ACTIONS.find(a => a[0] === actId);
+    const act = { api, region };
+    // SCPs: every level from the root down to the account. They are skipped for the management account.
+    const levels = ou === null ? [] : [
+      { where: "the root", name: "Root", scps: SCPS.root },
+      { where: "the " + OUS[ou][0], name: OUS[ou][0], scps: SCPS[ou] },
+      { where: "the account", name: accName + " account", scps: [FULL] }
+    ];
+    levels.forEach(l => Object.assign(l, decide(l.scps, act)));
+    const denied = levels.find(l => l.say === "deny"), missing = levels.find(l => l.say === "none");
+    const scpOk = !denied && !missing;
+    // IAM: the root user has no IAM policy to check.
+    const iam = whoSt ? decide([{ st: whoSt }], act) : null;
+    const iamOk = !iam || iam.say === "allow";
+    return { accName, ou, node, whoName, whoPolicy, api, levels, denied, missing, scpOk, iam, iamOk,
+      verdict: !scpOk ? "scp" : !iamOk ? "iam" : "allow" };
+  }
+
+  const pick = { acc: "dev", who: "dev", act: "ec2ok" };
+  const opts = [["acc", "Account", ACCOUNTS], ["who", "Identity", WHO], ["act", "Action", ACTIONS]];
+  const pill = (kind, text) => `<span class="pill ${kind}">${text}</span>`;
+  const SAY = { allow: pill("yes", "Allows"), deny: pill("no", "Denies"), none: pill("no", "No allow") };
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+
+  function paintEval(lightUp) {
+    opts.forEach(([key, , choices], r) => [...$("evOpts").children[r].querySelectorAll("button")].forEach((b, j) => b.classList.toggle("on", choices[j][0] === pick[key])));
+    const e = evaluate(pick.acc, pick.who, pick.act);
+    const member = e.ou !== null, api = `<code>${e.api}</code>`, role = "the " + e.whoName;
+
+    const rows = member
+      ? e.levels.map((l, i) => `<tr><td><b>SCPs on ${i < 2 ? l.name : "the account itself"}</b></td><td>${l.scps.map(s => s.label).join("<br>")}</td><td>${SAY[l.say]}</td></tr>`)
+      : [`<tr><td><b>SCPs on Root</b></td><td>${SCPS.root.map(s => s.label).join("<br>")}</td><td>${pill("skip", "Not applied")}</td></tr>`];
+    rows.push(e.iam
+      ? `<tr><td><b>IAM policy of ${role}</b></td><td>${e.whoPolicy}</td><td>${SAY[e.iam.say]}</td></tr>`
+      : `<tr><td><b>IAM policy</b></td><td>None. The root user is not limited by IAM policies.</td><td>${pill("skip", "Not needed")}</td></tr>`);
+    $("evTable").innerHTML = "<tr><th>Checked</th><th>Policies there</th><th>Says</th></tr>" + rows.join("");
+
+    big("evScp", !member ? "Not applied" : e.scpOk ? "No block" : "Blocked", !member ? "muted" : e.scpOk ? "pub" : "bad");
+    big("evIam", !e.iam ? "Not needed" : e.iamOk ? "Allows" : "No allow", !e.iam ? "muted" : e.iamOk ? "pub" : "bad");
+    big("evOut", e.verdict === "allow" ? "Allowed" : "Denied", e.verdict === "allow" ? "pub" : "bad");
+
+    let msg;
+    if (!member) {
+      msg = "SCPs do not apply to the management account, not even the ones on the root. ";
+      msg += !e.iam ? "Its root user can do anything. <b>Allowed.</b>"
+        : e.iamOk ? `So only IAM decides, and ${role} allows ${api}. <b>Allowed.</b>`
+        : `So only IAM decides, and ${role} has no statement that allows ${api}. <b>Denied by IAM.</b>`;
+      if (e.iamOk) msg += " This is why the account holds no workloads and very few people can sign in to it.";
+    } else if (!e.scpOk) {
+      msg = e.denied
+        ? `<b>Denied by an SCP.</b> The SCP on ${e.denied.where} denies ${e.denied.why}. An explicit deny wins over every allow, in every policy.`
+        : `<b>Denied by an SCP.</b> Nothing attached to ${e.missing.where} allows ${api}. That OU has an allow list in place of <code>FullAWSAccess</code>, so whatever is not on the list is blocked. An action needs an allow at every level of the tree.`;
+      msg += !e.iam ? " This binds the root user of a member account too."
+        : e.iamOk ? ` The IAM policy of ${role} allows the action, and that changes nothing.`
+        : ` The IAM policy of ${role} does not allow it either.`;
+    } else if (!e.iamOk) {
+      msg = `<b>Denied by IAM.</b> No SCP blocks ${api} here, but an SCP never grants anything. It only sets the outer limit. The permission must come from the IAM policy, and ${role} has no statement that allows this action.`;
+    } else {
+      msg = !e.iam
+        ? `<b>Allowed.</b> No SCP on the path blocks ${api}, and the root user needs no IAM policy. An IAM policy cannot limit a root user, but an SCP can.`
+        : `<b>Allowed.</b> Both said yes: no SCP on the path blocks ${api}, and the IAM policy of ${role} allows it. What a person can really do is the part that both allow.`;
+    }
+    $("evMsg").innerHTML = msg;
+    $("evMsg").dataset.verdict = e.verdict;
+    if (lightUp) light(member ? [e.node, "scpRoot", OUS[e.ou][1]] : [e.node]);
+  }
+  opts.forEach(([key, label, choices]) => {
+    const row = document.createElement("div");
+    row.className = "seg";
+    row.innerHTML = `<b>${label}</b>`;
+    choices.forEach(([value, text]) => {
+      const b = document.createElement("button");
+      b.textContent = text;
+      b.onclick = () => { pick[key] = value; paintEval(true); };
+      row.appendChild(b);
+    });
+    $("evOpts").appendChild(row);
+  });
+  paintEval(false);
+</script>
+</body>
+</html>
