@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 17 — Event-Driven Processing</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  :root { --msg: #c2255c; --msg-fill: #fdf0f5; }
+  @media (prefers-color-scheme: dark) { :root { --msg: #f783ac; --msg-fill: #2e1722; } }
+  #diagram .fl { transition: opacity .25s; }
+  #diagram.lit .fl { opacity: .12; }
+  #diagram.lit .fl.on { opacity: 1; }
+  pre.event { margin: 12px 0 0; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-16/index.html">← Day 16</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 17 of 30 · Week 3 — Serverless, Decoupling, Containers</div>
+    <h1>Event-Driven Processing</h1>
+    <p class="lead">Yesterday your code sent messages on purpose. Today things simply <i>happen</i> — a file is uploaded, a server stops, the clock reaches two in the morning — and AWS turns each of those into an event that starts your code. Nothing polls and nothing waits. You draw two versions: a service that raises its own events, and EventBridge, which routes any event by rule.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 540" role="img" aria-label="Top: a photo uploaded to an S3 bucket raises an event that invokes a Lambda function, which writes a thumbnail to a second bucket and metadata to DynamoDB. Bottom: three event sources send events to an EventBridge bus, where rules match them and forward them to targets.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowM" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--msg)"/></marker>
+          <symbol id="s3" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--pub)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g>
+          </symbol>
+          <symbol id="lambda" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <text x="28" y="40" font-size="32" font-weight="700" text-anchor="middle" style="fill:#fff">λ</text>
+          </symbol>
+          <symbol id="ddb" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--priv)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5"><rect x="13" y="14" width="30" height="28" rx="3"/><line x1="13" y1="24" x2="43" y2="24"/><line x1="13" y1="33" x2="43" y2="33"/><line x1="25" y1="14" x2="25" y2="42"/></g>
+          </symbol>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/><line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/><line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="clock" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--dc)"/>
+            <g fill="none" stroke="var(--card)" stroke-width="2.5" stroke-linecap="round"><circle cx="28" cy="28" r="14"/><path d="M28 19 V28 L35 32"/></g>
+          </symbol>
+          <symbol id="sns" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--msg)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 36 H39 L36 31 V24 a8 8 0 0 0 -16 0 V31 Z"/><path d="M25 41 a3 3 0 0 0 6 0"/></g>
+          </symbol>
+        </defs>
+
+        <rect x="200" y="20" width="780" height="505" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="214" y="44" font-size="15" font-weight="700">AWS Cloud · Region ap-south-1</text>
+
+        <!-- Step 1: upload bucket -->
+        <g data-step="1">
+          <text x="215" y="68" font-size="12" font-weight="700" style="fill:var(--muted)">1 · A SERVICE RAISES ITS OWN EVENT</text>
+          <rect x="20" y="105" width="150" height="60" rx="30" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="95" y="131" font-size="14" font-weight="700" text-anchor="middle">User</text>
+          <text x="95" y="149" font-size="11" text-anchor="middle" style="fill:var(--muted)">uploads a photo</text>
+          <rect x="215" y="80" width="190" height="110" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+          <use href="#s3" x="227" y="92" width="40" height="40"/>
+          <text x="277" y="108" font-size="13.5" font-weight="700">S3 bucket</text>
+          <text x="277" y="125" font-size="12" class="mono">uploads</text>
+          <text x="227" y="153" font-size="11.5">raises: ObjectCreated</text>
+          <text id="tFiles" x="227" y="172" font-size="11" style="fill:var(--muted)">0 files</text>
+          <line class="fl fUp" x1="172" y1="135" x2="210" y2="135" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+        </g>
+
+        <!-- Step 2: the function the event invokes -->
+        <g data-step="2">
+          <rect x="460" y="80" width="230" height="110" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <use href="#lambda" x="472" y="92" width="40" height="40"/>
+          <text x="522" y="108" font-size="13.5" font-weight="700">Lambda</text>
+          <text x="522" y="125" font-size="12" class="mono">make-thumbnail</text>
+          <text x="472" y="153" font-size="11.5">runs once per uploaded file</text>
+          <text id="tInv" x="472" y="172" font-size="11" style="fill:var(--muted)">0 invocations</text>
+          <line class="fl fUp" x1="407" y1="135" x2="455" y2="135" stroke="var(--msg)" stroke-width="3.5" stroke-dasharray="7 4" marker-end="url(#arrowM)"/>
+          <text x="431" y="124" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:var(--msg)">event</text>
+        </g>
+
+        <!-- Step 3: where the function writes -->
+        <g data-step="3">
+          <rect x="750" y="70" width="210" height="56" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+          <use href="#s3" x="760" y="82" width="32" height="32"/>
+          <text x="802" y="96" font-size="12.5" font-weight="700">S3 bucket</text>
+          <text x="802" y="113" font-size="11.5" class="mono">thumbnails</text>
+          <rect x="750" y="138" width="210" height="56" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2.5"/>
+          <use href="#ddb" x="760" y="150" width="32" height="32"/>
+          <text x="802" y="164" font-size="12.5" font-weight="700">DynamoDB</text>
+          <text x="802" y="181" font-size="11.5" style="fill:var(--muted)">image metadata</text>
+          <g class="fl fUp" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line x1="692" y1="122" x2="745" y2="102"/><line x1="692" y1="150" x2="745" y2="165"/>
+          </g>
+        </g>
+
+        <!-- Step 4: EventBridge bus and event sources -->
+        <g data-step="4">
+          <text x="215" y="232" font-size="12" font-weight="700" style="fill:var(--muted)">2 · EVENTBRIDGE ROUTES BY RULE</text>
+          <g fill="var(--card)" stroke="var(--border)" stroke-width="1.5">
+            <rect x="215" y="250" width="190" height="70" rx="8"/><rect x="215" y="336" width="190" height="70" rx="8"/><rect x="215" y="422" width="190" height="70" rx="8"/>
+          </g>
+          <use href="#ec2" x="225" y="260" width="32" height="32"/>
+          <text x="267" y="274" font-size="12.5" font-weight="700">Order service</text>
+          <text x="267" y="291" font-size="11" class="mono">OrderPlaced</text>
+          <text x="225" y="310" font-size="10.5" style="fill:var(--muted)">your own application</text>
+          <use href="#ec2" x="225" y="346" width="32" height="32"/>
+          <text x="267" y="360" font-size="12.5" font-weight="700">EC2</text>
+          <text x="267" y="377" font-size="11" class="mono">state: stopped</text>
+          <text x="225" y="396" font-size="10.5" style="fill:var(--muted)">an AWS service</text>
+          <use href="#clock" x="225" y="432" width="32" height="32"/>
+          <text x="267" y="446" font-size="12.5" font-weight="700">Schedule</text>
+          <text x="267" y="463" font-size="11" class="mono">every day 02:00</text>
+          <text x="225" y="482" font-size="10.5" style="fill:var(--muted)">a timer, no server needed</text>
+
+          <rect x="460" y="206" width="230" height="300" rx="8" fill="var(--msg-fill)" stroke="var(--msg)" stroke-width="2.5"/>
+          <text x="472" y="227" font-size="13.5" font-weight="700" style="fill:var(--msg)">EventBridge</text>
+          <text x="472" y="244" font-size="11.5" style="fill:var(--muted)">event bus</text>
+          <g stroke="var(--msg)" stroke-width="3.5" stroke-dasharray="7 4" marker-end="url(#arrowM)">
+            <line id="fS1" class="fl" x1="407" y1="285" x2="455" y2="285"/>
+            <line id="fS2" class="fl" x1="407" y1="371" x2="455" y2="371"/>
+            <line id="fS3" class="fl" x1="407" y1="457" x2="455" y2="457"/>
+          </g>
+        </g>
+
+        <!-- Step 5: rules -->
+        <g data-step="5">
+          <g fill="var(--card)" stroke="var(--msg)" stroke-width="1.5">
+            <rect x="472" y="258" width="206" height="54" rx="6"/><rect x="472" y="344" width="206" height="54" rx="6"/><rect x="472" y="430" width="206" height="54" rx="6"/>
+          </g>
+          <g font-size="11.5" font-weight="700">
+            <text x="482" y="275" style="fill:var(--msg)">Rule 1</text><text x="482" y="361" style="fill:var(--msg)">Rule 2</text><text x="482" y="447" style="fill:var(--msg)">Rule 3</text>
+          </g>
+          <g font-size="10.5">
+            <text x="482" y="291" class="mono">source = shop.orders</text><text x="482" y="305" class="mono">amount &gt; 1000</text>
+            <text x="482" y="377" class="mono">source = aws.ec2</text><text x="482" y="391" class="mono">state = stopped</text>
+            <text x="482" y="463" class="mono">schedule</text><text x="482" y="477" class="mono">cron(0 2 * * ? *)</text>
+          </g>
+        </g>
+
+        <!-- Step 6: targets -->
+        <g data-step="6">
+          <g fill="var(--card)" stroke-width="2.5">
+            <rect x="750" y="250" width="210" height="70" rx="8" stroke="var(--orange)"/><rect x="750" y="336" width="210" height="70" rx="8" stroke="var(--msg)"/><rect x="750" y="422" width="210" height="70" rx="8" stroke="var(--orange)"/>
+          </g>
+          <use href="#lambda" x="760" y="260" width="32" height="32"/>
+          <text x="802" y="274" font-size="12.5" font-weight="700">Lambda</text>
+          <text x="802" y="291" font-size="11.5" style="fill:var(--muted)">fraud check</text>
+          <use href="#sns" x="760" y="346" width="32" height="32"/>
+          <text x="802" y="360" font-size="12.5" font-weight="700">SNS topic</text>
+          <text x="802" y="377" font-size="11.5" style="fill:var(--muted)">alert the on-call engineer</text>
+          <use href="#lambda" x="760" y="432" width="32" height="32"/>
+          <text x="802" y="446" font-size="12.5" font-weight="700">Lambda</text>
+          <text x="802" y="463" font-size="11.5" style="fill:var(--muted)">nightly report</text>
+          <g stroke="var(--msg)" stroke-width="3.5" stroke-dasharray="7 4" marker-end="url(#arrowM)">
+            <line id="fR1" class="fl" x1="692" y1="285" x2="745" y2="285"/>
+            <line id="fR2" class="fl" x1="692" y1="371" x2="745" y2="371"/>
+            <line id="fR3" class="fl" x1="692" y1="457" x2="745" y2="457"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Two ways to react to events. <b>Top:</b> S3 raises an event for every uploaded file and invokes a Lambda function directly; the function writes a thumbnail and a database record. <b>Bottom:</b> many kinds of events arrive on an <b>EventBridge</b> bus. Each <b>rule</b> describes the events it wants and sends matching ones to its <b>target</b>. An event that matches no rule is simply dropped.</p>
+    <div class="legend">
+      <span style="--c:var(--msg)">Events (dashed)</span>
+      <span style="--c:var(--orange)">Uploads, writes, Lambda functions</span>
+      <span style="--c:var(--pub)">S3</span>
+      <span style="--c:var(--priv)">DynamoDB</span>
+    </div>
+  </div>
+
+  <h2>Event simulator</h2>
+  <div class="card">
+    <p>Make something happen. Predict which code runs, if any, then look at the event itself and the path that lights up in the diagram above.</p>
+    <div class="seg" id="simBtns">
+      <button data-a="upload" class="primary">Upload photo.jpg</button>
+      <button data-a="big" class="primary">Order of ₹5,000 placed</button>
+      <button data-a="small" class="primary">Order of ₹200 placed</button>
+      <button data-a="stop" class="primary">An EC2 instance stops</button>
+      <button data-a="night" class="primary">The clock reaches 02:00</button>
+      <button data-a="reset">Reset</button>
+    </div>
+    <p class="result" id="simMsg">Nothing has happened yet, so no code has run.</p>
+    <pre class="event" id="simEvent" hidden></pre>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--msg)">
+      <h3>Event</h3>
+      <p>A small JSON record saying that something happened: who raised it, what kind it is, and the details.</p>
+      <ul>
+        <li>The producer does not know or care who is listening.</li>
+        <li>Consumers are added later without touching the producer.</li>
+        <li>Nothing runs until an event arrives, so idle cost is zero.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>S3 event notifications</h3>
+      <p>A bucket can announce changes: object created, object removed.</p>
+      <ul>
+        <li>Targets: a Lambda function, an SQS queue, an SNS topic, or EventBridge.</li>
+        <li>Filter by prefix or suffix, such as only <code>.jpg</code> files.</li>
+        <li>The function is invoked <b>asynchronously</b>: S3 does not wait, and Lambda retries twice on failure.</li>
+        <li><b>Never write the output back to the same bucket and prefix.</b> Each output would raise a new event: an endless, expensive loop.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--msg)">
+      <h3>EventBridge</h3>
+      <p>A central event router: an <b>event bus</b> that receives events, and <b>rules</b> that pick out the ones to forward.</p>
+      <ul>
+        <li><b>Sources:</b> most AWS services automatically, your own applications, and outside SaaS products.</li>
+        <li><b>Rules</b> match on the content of the event: any field, numbers, prefixes.</li>
+        <li><b>Targets:</b> Lambda, SQS, SNS, Step Functions and many more, up to five per rule.</li>
+        <li>It can also keep an archive of events and replay them later.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Schedules</h3>
+      <p>EventBridge can raise an event at a set time, replacing a server that exists only to run cron jobs.</p>
+      <ul>
+        <li><code>rate(5 minutes)</code> or a cron expression.</li>
+        <li>The target is usually a Lambda function.</li>
+        <li>Nightly reports, clean-up jobs, stopping test servers after office hours.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>EventBridge or SNS?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>EventBridge</th><th>SNS</th></tr>
+      <tr><td><b>Filtering</b></td><td>On any field inside the event</td><td>On message attributes, simpler</td></tr>
+      <tr><td><b>Event sources</b></td><td>AWS services and SaaS products built in, plus your own</td><td>Whatever you publish yourself</td></tr>
+      <tr><td><b>Targets</b></td><td>Many AWS services directly</td><td>SQS, Lambda, HTTP, email, SMS, mobile push</td></tr>
+      <tr><td><b>Subscribers</b></td><td>Five targets per rule</td><td>Millions per topic</td></tr>
+      <tr><td><b>Speed and volume</b></td><td>About half a second, moderate throughput</td><td>Faster, very high throughput</td></tr>
+      <tr><td><b>Extras</b></td><td>Schedules, archive and replay</td><td>Messages to people: email and SMS</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)"><b>Choose EventBridge</b> when many kinds of events must be routed by their content, when you react to events from AWS services, or when you need a schedule. <b>Choose SNS</b> for simple, high-volume fan-out of one kind of message, or to notify people.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li><b>Top row:</b> user → S3 bucket <code>uploads</code> → Lambda → a second S3 bucket <code>thumbnails</code> and a DynamoDB table.</li>
+      <li>Draw the arrow from the bucket to the function <b>dashed</b> and label it “event: ObjectCreated”.</li>
+      <li><b>Bottom row:</b> draw three event sources on the left: your application, an AWS service, a schedule.</li>
+      <li>Draw the <b>EventBridge bus</b> in the middle with three rules inside, and write each rule's pattern.</li>
+      <li>Draw one target per rule on the right, with a dashed arrow from each rule.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Dashed arrows for events, solid for data being written, is a convention worth keeping.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>When would you use EventBridge instead of SNS?</summary><p>When events of many kinds must be routed by what they contain, when the events come from AWS services or SaaS products, or when you need schedules or replay. SNS suits simple, very high-volume fan-out of one message type and notifying people.</p></details>
+  <details><summary>The thumbnail function saves its output into the <code>uploads</code> bucket. What happens?</summary><p>The saved thumbnail is itself a new object, so it raises another event, which makes another thumbnail, without end. Use a separate bucket, or at least a prefix the trigger does not watch.</p></details>
+  <details><summary>An order of ₹200 arrives on the bus and matches no rule. Is that an error?</summary><p>No. The event is discarded quietly. A bus is not a queue: nothing is stored for later unless you turn on an archive.</p></details>
+  <details><summary>The thumbnail function throws an error on one photo. What happens to that event?</summary><p>The invocation is asynchronous, so Lambda retries it twice. If it still fails, the event goes to a dead-letter queue or failure destination if you configured one, and is lost if you did not.</p></details>
+  <details><summary>You must run a clean-up script every night. What is the serverless way?</summary><p>An EventBridge schedule with a Lambda function as its target. No server sits idle for the other 23 hours and 59 minutes.</p></details>
+  <details><summary>Ten thousand photos are uploaded in one minute. What does this design do, and what might you add?</summary><p>S3 raises ten thousand events and Lambda runs many copies at once, up to the concurrency limit. To smooth the load or protect something downstream, put an SQS queue between the bucket and the function.</p></details>
+  <details><summary>You want a message whenever any EC2 instance in the account stops, without installing anything on the instances. How?</summary><p>EC2 already sends state-change events to the default event bus. Add a rule matching <code>source = aws.ec2</code> and <code>state = stopped</code>, with an SNS topic as the target.</p></details>
+  <details><summary>How is today's design different from yesterday's queue?</summary><p>A queue stores work until a consumer pulls it, so nothing is lost while the consumer is away. An event is pushed once to whoever is listening now. Many designs use both: the event arrives, and its target is a queue.</p></details>
+
+  <div class="next">
+    <b>Next — Day 18: Containers on ECS Fargate.</b> Back to long-running services, but packaged as containers: an image in ECR, an ECS service running tasks in private subnets with no servers to manage, and a load balancer in front.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — A bucket for uploads.</b> Users upload photos into an S3 bucket. S3 can raise an event each time an object is created.",
+    "<b>Step 2 — The event invokes a function.</b> Configure the bucket to send <code>ObjectCreated</code> events to a Lambda function. Draw this arrow dashed: it is an event, not a request.",
+    "<b>Step 3 — The function writes its results.</b> A thumbnail goes to a <b>different</b> bucket and a record goes to DynamoDB. Writing back to the same bucket would trigger the function again.",
+    "<b>Step 4 — EventBridge and its sources.</b> A general event bus. Events arrive from your own application, from AWS services, and from schedules.",
+    "<b>Step 5 — Rules.</b> Each rule is a pattern. EventBridge compares every incoming event with every rule.",
+    "<b>Step 6 — Targets.</b> A matching event is forwarded to the rule's target. An event that matches nothing goes nowhere."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  const st = { files: 0, inv: 0 };
+
+  function light(sel) {
+    svg.classList.toggle("lit", sel.length > 0);
+    svg.querySelectorAll(".fl").forEach(el => el.classList.toggle("on", sel.some(s => el.matches(s))));
+  }
+  function show(msg, event, sel) {
+    $("simMsg").innerHTML = msg;
+    $("simEvent").hidden = !event;
+    if (event) $("simEvent").textContent = JSON.stringify(event, null, 2);
+    $("tFiles").textContent = st.files + (st.files === 1 ? " file" : " files");
+    $("tInv").textContent = st.inv + (st.inv === 1 ? " invocation" : " invocations");
+    light(sel);
+  }
+  const order = amount => ({ source: "shop.orders", "detail-type": "OrderPlaced", detail: { orderId: "A-1042", amount } });
+  const actions = {
+    upload() {
+      st.files++; st.inv++;
+      show("<b>S3 raised an event and Lambda ran.</b> The function read the photo, wrote a thumbnail to the <code>thumbnails</code> bucket and a record to DynamoDB. Nobody called the function; the upload itself did.",
+        { eventSource: "aws:s3", eventName: "ObjectCreated:Put", s3: { bucket: { name: "uploads" }, object: { key: "photo.jpg", size: 2481034 } } }, [".fUp"]);
+    },
+    big() {
+      show("<b>Rule 1 matched.</b> The source is <code>shop.orders</code> and the amount is above 1000, so EventBridge sent the event to the fraud-check function.", order(5000), ["#fS1", "#fR1"]);
+    },
+    small() {
+      show("<b>No rule matched.</b> The event reached the bus, but Rule 1 wants an amount above 1000. EventBridge dropped it. No error, no code run, no cost beyond the event itself.", order(200), ["#fS1"]);
+    },
+    stop() {
+      show("<b>Rule 2 matched.</b> EC2 sent this event by itself; nothing was installed on the instance. The rule forwarded it to the SNS topic, which messages the on-call engineer.",
+        { source: "aws.ec2", "detail-type": "EC2 Instance State-change Notification", detail: { "instance-id": "i-0abc123", state: "stopped" } }, ["#fS2", "#fR2"]);
+    },
+    night() {
+      show("<b>Rule 3 fired.</b> A schedule is a rule that triggers on time instead of on an event's content. It invoked the nightly-report function. No server was waiting for 02:00.",
+        { source: "aws.events", "detail-type": "Scheduled Event", time: "02:00:00Z" }, ["#fS3", "#fR3"]);
+    },
+    reset() {
+      st.files = st.inv = 0;
+      show("Nothing has happened yet, so no code has run.", null, []);
+    }
+  };
+  $("simBtns").querySelectorAll("button").forEach(b => b.onclick = () => actions[b.dataset.a]());
+</script>
+</body>
+</html>
