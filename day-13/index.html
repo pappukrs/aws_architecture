@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 13 — DNS and Routing</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .fl, #diagram .tgt { transition: opacity .25s; }
+  #diagram.lit .fl { opacity: .1; }
+  #diagram.lit .fl.on { opacity: 1; }
+  #diagram .tgt.down { opacity: .35; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-12/index.html">← Day 12</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 13 of 30 · Week 2 — Compute, Load Balancing, High Availability</div>
+    <h1>DNS and Routing</h1>
+    <p class="lead">Users type <code>app.example.com</code>, not the address of a load balancer. Route 53 turns the name into an address, and it can choose <i>which</i> address: the healthy one, the nearest one, or a share of each. Today you put that front door on everything built so far.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 640" role="img" aria-label="A user's DNS query goes to a Route 53 hosted zone. Alias records point www to a CloudFront distribution and app to load balancers in Mumbai and Singapore. After the DNS answer, the user connects directly to the chosen target.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--vpc)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+        </defs>
+
+        <rect x="20" y="70" width="745" height="550" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="94" font-size="15" font-weight="700">AWS Cloud</text>
+
+        <!-- Step 1: the two things users need to reach -->
+        <g data-step="1">
+          <rect x="450" y="150" width="290" height="100" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="464" y="176" font-size="13.5" font-weight="700" style="fill:var(--vpc)">CloudFront distribution</text>
+          <text x="464" y="196" font-size="12">Static site from S3 (Day 12)</text>
+          <text x="464" y="216" font-size="11.5" class="mono" style="fill:var(--muted)">d111abc.cloudfront.net</text>
+
+          <g class="tgt" id="tM">
+            <rect x="450" y="270" width="290" height="110" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+            <text x="464" y="293" font-size="13" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+            <rect x="468" y="306" width="254" height="34" rx="8" fill="var(--vpc)"/>
+            <text x="595" y="328" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">Load balancer → 3-tier app</text>
+            <text x="464" y="362" font-size="11.5" class="mono" style="fill:var(--muted)">alb-1.ap-south-1.elb.amazonaws.com</text>
+          </g>
+
+          <rect x="835" y="300" width="150" height="60" rx="30" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="910" y="326" font-size="14" font-weight="700" text-anchor="middle">User</text>
+          <text x="910" y="344" font-size="11.5" text-anchor="middle" style="fill:var(--muted)">browser + DNS resolver</text>
+        </g>
+
+        <!-- Step 2: hosted zone -->
+        <g data-step="2">
+          <rect x="40" y="110" width="370" height="490" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="54" y="134" font-size="14" font-weight="700" style="fill:var(--vpc)">Route 53 — global DNS</text>
+          <text x="54" y="152" font-size="12" style="fill:var(--muted)">Hosted zone: example.com</text>
+        </g>
+
+        <!-- Step 3: www → CloudFront -->
+        <g data-step="3">
+          <rect x="55" y="166" width="340" height="88" rx="6" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="67" y="189" font-size="13" font-weight="700" class="mono">www.example.com</text>
+          <text x="67" y="209" font-size="12">A record · alias → CloudFront distribution</text>
+          <text x="67" y="229" font-size="11.5" style="fill:var(--muted)">Simple routing: always the same answer</text>
+          <line x1="397" y1="208" x2="445" y2="203" stroke="var(--vpc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowP)"/>
+        </g>
+
+        <!-- Step 4: app → Mumbai load balancer -->
+        <g data-step="4">
+          <rect x="55" y="270" width="340" height="104" rx="6" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="67" y="293" font-size="13" font-weight="700" class="mono">app.example.com</text>
+          <text x="67" y="313" font-size="12">A record · alias → load balancer, Mumbai</text>
+          <line x1="397" y1="322" x2="445" y2="323" stroke="var(--vpc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowP)"/>
+        </g>
+
+        <!-- Step 5: DNS lookup, then a direct connection -->
+        <g data-step="5">
+          <polyline points="910,297 910,40 225,40 225,104" fill="none" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-start="url(#arrowD)" marker-end="url(#arrowD)"/>
+          <text x="560" y="31" font-size="12" font-weight="700" text-anchor="middle" style="fill:var(--dc)">1 · DNS query: where is app.example.com?</text>
+          <text id="dnsAns" x="560" y="58" font-size="12" font-weight="700" text-anchor="middle" style="fill:var(--dc)">2 · Answer: addresses of the Mumbai load balancer</text>
+          <g stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)">
+            <line id="rC" class="fl" x1="842" y1="304" x2="746" y2="216"/>
+            <line id="rM" class="fl" x1="833" y1="329" x2="746" y2="326"/>
+          </g>
+          <text x="898" y="244" font-size="12" font-weight="700" text-anchor="end" style="fill:var(--orange)">3 · HTTPS, direct</text>
+        </g>
+
+        <!-- Step 6: second Region, failover records, health checks -->
+        <g data-step="6">
+          <g class="tgt" id="tS">
+            <rect x="450" y="400" width="290" height="110" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+            <text x="464" y="423" font-size="13" font-weight="700" style="fill:var(--region)">Region — ap-southeast-1 (Singapore)</text>
+            <rect x="468" y="436" width="254" height="34" rx="8" fill="var(--vpc)"/>
+            <text x="595" y="458" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:#fff">Load balancer → 3-tier app</text>
+            <text x="464" y="492" font-size="11.5" class="mono" style="fill:var(--muted)">alb-2.ap-southeast-1.elb.amazonaws.com</text>
+          </g>
+
+          <text id="polM" x="67" y="335" font-size="11.5" font-weight="700" style="fill:var(--vpc)">Failover routing: PRIMARY</text>
+          <text id="hM" x="67" y="358" font-size="11.5" font-weight="700" style="fill:var(--pub)">● healthy</text>
+
+          <rect x="55" y="390" width="340" height="104" rx="6" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="67" y="413" font-size="13" font-weight="700" class="mono">app.example.com</text>
+          <text x="67" y="433" font-size="12">A record · alias → load balancer, Singapore</text>
+          <text id="polS" x="67" y="455" font-size="11.5" font-weight="700" style="fill:var(--vpc)">Failover routing: SECONDARY</text>
+          <text id="hS" x="67" y="478" font-size="11.5" font-weight="700" style="fill:var(--pub)">● healthy</text>
+          <line x1="397" y1="442" x2="445" y2="453" stroke="var(--vpc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowP)"/>
+
+          <text x="54" y="524" font-size="12.5" font-weight="700" style="fill:var(--vpc)">Health checks</text>
+          <text x="54" y="543" font-size="12">Route 53 tests each target continuously and</text>
+          <text x="54" y="560" font-size="12">stops answering with one that fails.</text>
+
+          <line id="rS" class="fl" x1="842" y1="356" x2="746" y2="452" stroke="var(--orange)" stroke-width="3.5" stroke-dasharray="8 5" marker-end="url(#arrowO)"/>
+          <text id="rSLabel" x="812" y="424" font-size="12" font-weight="700" style="fill:var(--orange)">only if Mumbai fails</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: the user's resolver asks <b>Route 53</b> for a name (1) and gets back addresses (2). The browser then connects <b>directly</b> to that target (3); Route 53 is not in the path of the request. <b>Alias records</b> point <code>www</code> at CloudFront and <code>app</code> at two load balancers. With failover routing and health checks, Singapore is used only when Mumbai is down.</p>
+    <div class="legend">
+      <span style="--c:var(--dc)">1–2 · DNS query and answer</span>
+      <span style="--c:var(--orange)">3 · The actual request</span>
+      <span style="--c:var(--vpc)">Route 53, alias pointers, load balancers</span>
+      <span style="--c:var(--region)">Region</span>
+    </div>
+  </div>
+
+  <h2>Routing policy simulator</h2>
+  <div class="card">
+    <p>Choose how <code>app.example.com</code> is routed, where the user is, and whether Mumbai is healthy. Predict Route 53's answer first. The diagram above lights the path the request takes.</p>
+    <div class="seg" id="segPol"><b>Policy</b>
+      <button data-v="failover" class="on">Failover</button>
+      <button data-v="latency">Latency</button>
+      <button data-v="weighted">Weighted 90 / 10</button>
+      <button data-v="geo">Geolocation</button>
+    </div>
+    <div class="seg" id="segLoc"><b>User in</b>
+      <button data-v="in" class="on">India</button>
+      <button data-v="id">Indonesia</button>
+      <button data-v="de">Germany</button>
+    </div>
+    <div class="seg" id="segHealth"><b>Mumbai</b>
+      <button data-v="up" class="on">Healthy</button>
+      <button data-v="down">Failing health check</button>
+    </div>
+    <p class="result" id="simMsg"></p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Route 53 and hosted zones</h3>
+      <p>Route 53 is AWS's DNS service. It answers the question “what is the address for this name?”</p>
+      <ul>
+        <li>A <b>hosted zone</b> holds all the records for one domain.</li>
+        <li>A <b>public</b> zone answers the internet. A <b>private</b> zone answers only inside your VPCs.</li>
+        <li>It is global: draw it outside every Region.</li>
+        <li>It only answers lookups. User traffic never flows through it.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Record types</h3>
+      <ul>
+        <li><b>A</b> — name to an IPv4 address. <b>AAAA</b> is the same for IPv6.</li>
+        <li><b>CNAME</b> — name to another name. Not allowed at the top of the zone (<code>example.com</code> itself).</li>
+        <li><b>Alias</b> — a Route 53 feature: an A record that points at an AWS resource and follows its changing IPs.</li>
+        <li><b>MX</b> for mail, <b>TXT</b> for verification, <b>NS</b> for the zone's name servers.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Health checks</h3>
+      <p>Route 53 can test a target and leave it out of answers when it fails.</p>
+      <ul>
+        <li>For an alias to a load balancer, turn on <b>Evaluate target health</b>; Route 53 then uses the load balancer's own view of its targets.</li>
+        <li>For anything else, create a health check that requests a URL every 10 or 30 seconds.</li>
+        <li>Failover routing needs a health check on the primary, or it never fails over.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>TTL</h3>
+      <p>Every answer says how long it may be cached. Until that time is up, the resolver does not ask again.</p>
+      <ul>
+        <li>Long TTL: fewer lookups, but changes and failovers take longer to reach users.</li>
+        <li>Short TTL: fast changes, more queries.</li>
+        <li>Alias records to load balancers use 60 seconds, so a failover reaches most users within a minute or two.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Alias vs CNAME</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Alias record</th><th>CNAME record</th></tr>
+      <tr><td><b>Points to</b></td><td>An AWS resource: load balancer, CloudFront, S3 website, API Gateway</td><td>Any other host name</td></tr>
+      <tr><td><b>At the zone apex</b> (<code>example.com</code>)</td><td>Allowed</td><td>Not allowed</td></tr>
+      <tr><td><b>What the user receives</b></td><td>The IP addresses directly</td><td>Another name, which needs a second lookup</td></tr>
+      <tr><td><b>Query cost</b></td><td>Free for AWS targets</td><td>Charged</td></tr>
+      <tr><td><b>Exists in</b></td><td>Route 53 only</td><td>Every DNS system</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">Rule: if the target is an AWS resource, use an alias. A load balancer's IP addresses change, so you can never use a plain A record with fixed addresses.</p>
+  </div>
+
+  <h2>Routing policies</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Policy</th><th>Route 53 answers with</th><th>Use it for</th></tr>
+      <tr><td><b>Simple</b></td><td>The one target</td><td>A single endpoint</td></tr>
+      <tr><td><b>Failover</b></td><td>The primary while healthy, otherwise the secondary</td><td>Active–passive disaster recovery</td></tr>
+      <tr><td><b>Latency</b></td><td>The Region with the lowest network latency for that user</td><td>Running the same app in several Regions</td></tr>
+      <tr><td><b>Weighted</b></td><td>Each target in proportion to its weight</td><td>Sending 10% of users to a new version</td></tr>
+      <tr><td><b>Geolocation</b></td><td>The target assigned to the user's country or continent</td><td>Legal or language requirements</td></tr>
+      <tr><td><b>Multivalue</b></td><td>Several healthy addresses at once</td><td>Simple spreading without a load balancer</td></tr>
+    </table>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw the <b>user</b> outside the AWS Cloud.</li>
+      <li>Draw the targets: a CloudFront distribution, and a Region box with a load balancer.</li>
+      <li>Draw <b>Route 53</b> outside any Region, with a hosted zone for <code>example.com</code>.</li>
+      <li>Write the records: <code>www</code> alias → CloudFront, <code>app</code> alias → load balancer. Draw a dashed pointer from each record to its target.</li>
+      <li>Draw arrow 1–2 between user and Route 53 (query and answer), and arrow 3 from the user <b>straight to the target</b>.</li>
+      <li>Add a second Region with its own load balancer, a second <code>app</code> record marked SECONDARY, and “health check” on the primary.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. The request arrow must not pass through Route 53.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Alias record or CNAME: what is the difference?</summary><p>An alias is a Route 53 A record that points at an AWS resource, tracks its changing IP addresses, works at the zone apex and is free to query. A CNAME maps a name to any other name, is not allowed at the apex, costs a second lookup and is charged.</p></details>
+  <details><summary>You want <code>example.com</code>, without <code>www</code>, to reach your load balancer. Which record?</summary><p>An alias A record. A CNAME is not permitted at the zone apex, and a plain A record needs fixed IP addresses, which a load balancer does not have.</p></details>
+  <details><summary>Does the user's HTTPS request travel through Route 53?</summary><p>No. Route 53 only answers the lookup. The browser then opens its connection directly to the load balancer or CloudFront.</p></details>
+  <details><summary>Mumbai fails. With failover routing, how long until users reach Singapore?</summary><p>Two delays add up: the time for health checks to mark Mumbai unhealthy, then the TTL of the answer that resolvers have cached. With a 60-second TTL that is typically one to three minutes.</p></details>
+  <details><summary>Latency routing and geolocation routing: what is the difference?</summary><p>Latency sends the user to the Region that responds fastest for them, wherever they are. Geolocation sends them to the target you assigned to their country or continent, even if another would be faster. Use latency for speed and geolocation for rules.</p></details>
+  <details><summary>You are releasing version 2 and want only a few users to see it first. Which policy?</summary><p>Weighted. Give the version 1 target a weight of 90 and version 2 a weight of 10, watch the errors, then shift the weights.</p></details>
+  <details><summary>The secondary record exists but nothing is deployed in Singapore yet. What happens on failover?</summary><p>Users are sent to an address with nothing behind it. DNS failover only redirects; the second Region needs a working copy of the application and its data. Building that is disaster recovery, Day 28.</p></details>
+  <details><summary>Your app servers need to find the database by the name <code>db.internal.example.com</code>, which must not be visible on the internet. How?</summary><p>A private hosted zone associated with the VPC. Its records resolve only for resources inside that VPC.</p></details>
+
+  <div class="next">
+    <b>Next — Day 14: Review, a highly available web application.</b> You combine all of Week 2 into one drawing: Route 53 → CloudFront → load balancer → Auto Scaling group → RDS Multi-AZ, with ElastiCache and S3, and then hunt for single points of failure.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — What users need to reach.</b> Two things already exist: the CloudFront distribution from Day 12 and the load balancer of the 3-tier app. Each has a long, generated name nobody would type.",
+    "<b>Step 2 — Hosted zone.</b> Create a Route 53 hosted zone for <code>example.com</code>. Route 53 is global, so draw it outside any Region.",
+    "<b>Step 3 — Alias to CloudFront.</b> <code>www.example.com</code> is an alias record pointing at the distribution. Simple routing: every query gets the same answer.",
+    "<b>Step 4 — Alias to the load balancer.</b> <code>app.example.com</code> is an alias pointing at the Mumbai load balancer. Route 53 keeps up with the load balancer's changing IP addresses.",
+    "<b>Step 5 — Lookup, then connect.</b> (1) The user's resolver asks Route 53. (2) Route 53 answers with addresses. (3) The browser connects straight to the target. Route 53 never sees the request itself.",
+    "<b>Step 6 — Second Region and failover.</b> Add the same app in Singapore and a second <code>app</code> record. Mark Mumbai PRIMARY and Singapore SECONDARY. Health checks decide which one Route 53 hands out."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  const sel = { pol: "failover", loc: "in", health: "up" };
+  const place = { in: "India", id: "Indonesia", de: "Germany" };
+  const M = "Mumbai", S = "Singapore";
+  let touched = false;
+
+  function run() {
+    const up = sel.health === "up";
+    let labels, to, why;                       // to: array of regions that receive requests
+    if (sel.pol === "failover") {
+      labels = ["Failover routing: PRIMARY", "Failover routing: SECONDARY"];
+      to = [up ? M : S];
+      why = up ? "The primary is healthy, so every user gets Mumbai, wherever they are. Singapore sits idle."
+               : "The primary failed its health check, so Route 53 now answers with the secondary. Users move over as their cached answers expire.";
+    } else if (sel.pol === "latency") {
+      labels = ["Latency routing: ap-south-1", "Latency routing: ap-southeast-1"];
+      const best = sel.loc === "id" ? S : M;
+      to = [best === M && !up ? S : best];
+      why = `From ${place[sel.loc]}, ${best} has the lower network latency.` +
+        (best === M && !up ? " But Mumbai is unhealthy, so Route 53 answers with the next best Region." : "") +
+        (best === S && !up ? " Mumbai being down does not matter to this user." : "");
+    } else if (sel.pol === "weighted") {
+      labels = ["Weighted routing: 90", "Weighted routing: 10"];
+      to = up ? [M, S] : [S];
+      why = up ? "About 9 answers in 10 are Mumbai and 1 in 10 is Singapore, regardless of where the user is. This is how a new version gets a small share of traffic."
+               : "Mumbai is unhealthy, so it is left out and every answer is Singapore.";
+    } else {
+      labels = ["Geolocation: India", "Geolocation: default (everywhere else)"];
+      const pick = sel.loc === "in" ? M : S;
+      to = [pick === M && !up ? S : pick];
+      why = (sel.loc === "in" ? "The user is in India, which is assigned to Mumbai." : `No record is assigned to ${place[sel.loc]}, so the default record applies: Singapore, even though Mumbai might be faster.`) +
+        (pick === M && !up ? " Mumbai is unhealthy, so Route 53 falls back to the default record." : "");
+    }
+    $("polM").textContent = labels[0];
+    $("polS").textContent = labels[1];
+    $("hM").textContent = up ? "● healthy" : "● unhealthy";
+    $("hM").style.fill = up ? "var(--pub)" : "var(--bad)";
+    $("tM").classList.toggle("down", !up);
+    $("rSLabel").textContent = sel.pol === "failover" ? "only if Mumbai fails" : "";
+    $("dnsAns").textContent = "2 · Answer: addresses of the " + to.join(" or ") + " load balancer";
+    $("simMsg").innerHTML = `<b>Route 53 answers with ${to.join(" (90%) and ") + (to.length > 1 ? " (10%)" : "")}.</b> ${why}`;
+
+    svg.classList.toggle("lit", touched);
+    $("rM").classList.toggle("on", to.includes(M));
+    $("rS").classList.toggle("on", to.includes(S));
+    $("rC").classList.remove("on");
+  }
+  for (const [id, key] of [["segPol", "pol"], ["segLoc", "loc"], ["segHealth", "health"]]) {
+    const seg = $(id);
+    seg.querySelectorAll("button").forEach(b => b.onclick = () => {
+      seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      sel[key] = b.dataset.v;
+      touched = true;
+      run();
+    });
+  }
+  run();
+</script>
+</body>
+</html>
