@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 22 — Connecting VPCs</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .fl { transition: opacity .25s; }
+  #diagram.lit .fl { opacity: .15; }
+  #diagram.lit .fl.on { opacity: 1; }
+  .scale { display: flex; flex-wrap: wrap; gap: 14px 34px; align-items: flex-end; }
+  .scale input[type=range] { width: 260px; max-width: 100%; accent-color: var(--orange); display: block; }
+  .scale .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .scale .lbl { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .bars { margin-top: 16px; display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; font-size: 14px; }
+  .bars .track { height: 14px; background: var(--border); border-radius: 7px; overflow: hidden; }
+  .bars .track i { display: block; height: 100%; border-radius: 7px; transition: width .25s; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-21/index.html">← Day 21</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 22 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Connecting VPCs</h1>
+    <p class="lead">A real company does not have one VPC. It has one for production, one for development, one for shared tools, often dozens. Week 4 is about that scale. Today you connect VPCs to each other privately: first with peering, which is simple but stops working as the number grows, then with a Transit Gateway that acts as a central hub.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 660" role="img" aria-label="Top: three VPCs joined by two peering connections, A to B and B to C. A cannot reach C through B. Bottom: four VPCs each attached to one Transit Gateway, which routes between all of them.">
+        <defs>
+          <marker id="arrowP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--vpc)"/></marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/><line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/><line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <rect x="20" y="20" width="960" height="625" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="44" font-size="15" font-weight="700">AWS Cloud · Region ap-south-1</text>
+
+        <!-- Step 1: two separate VPCs -->
+        <g data-step="1">
+          <text x="40" y="74" font-size="12" font-weight="700" style="fill:var(--muted)">1 · VPC PEERING: ONE CONNECTION PER PAIR</text>
+          <g fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5">
+            <rect x="40" y="85" width="250" height="132" rx="8"/><rect x="375" y="85" width="250" height="132" rx="8"/>
+          </g>
+          <text x="54" y="108" font-size="13.5" font-weight="700" style="fill:var(--vpc)">VPC A — 10.0.0.0/16</text>
+          <use href="#ec2" x="54" y="118" width="28" height="28"/>
+          <text x="90" y="137" font-size="11.5" class="mono">10.0.1.10</text>
+          <text x="54" y="166" font-size="10" style="fill:var(--muted)" letter-spacing=".06em">ROUTE TABLE</text>
+          <text x="54" y="181" font-size="10.5" class="mono">10.0.0.0/16  local</text>
+          <text x="389" y="108" font-size="13.5" font-weight="700" style="fill:var(--vpc)">VPC B — 10.1.0.0/16</text>
+          <use href="#ec2" x="389" y="118" width="28" height="28"/>
+          <text x="425" y="137" font-size="11.5" class="mono">10.1.1.10</text>
+          <text x="389" y="166" font-size="10" style="fill:var(--muted)" letter-spacing=".06em">ROUTE TABLE</text>
+          <text x="389" y="181" font-size="10.5" class="mono">10.1.0.0/16  local</text>
+        </g>
+
+        <!-- Step 2: peering A–B with routes on both sides -->
+        <g data-step="2">
+          <g class="fl" id="pAB">
+            <line x1="294" y1="150" x2="371" y2="150" stroke="var(--vpc)" stroke-width="3.5" marker-start="url(#arrowP)" marker-end="url(#arrowP)"/>
+            <rect x="305" y="139" width="55" height="22" rx="11" fill="var(--vpc)"/>
+            <text x="332.5" y="154" font-size="11" font-weight="700" text-anchor="middle" style="fill:#fff">pcx-ab</text>
+          </g>
+          <text x="54" y="195" font-size="10.5" font-weight="700" class="mono">10.1.0.0/16  pcx-ab</text>
+          <text x="389" y="195" font-size="10.5" font-weight="700" class="mono">10.0.0.0/16  pcx-ab</text>
+        </g>
+
+        <!-- Step 3: a third VPC peered with B -->
+        <g data-step="3">
+          <rect x="710" y="85" width="250" height="132" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="724" y="108" font-size="13.5" font-weight="700" style="fill:var(--vpc)">VPC C — 10.2.0.0/16</text>
+          <use href="#ec2" x="724" y="118" width="28" height="28"/>
+          <text x="760" y="137" font-size="11.5" class="mono">10.2.1.10</text>
+          <text x="724" y="166" font-size="10" style="fill:var(--muted)" letter-spacing=".06em">ROUTE TABLE</text>
+          <text x="724" y="181" font-size="10.5" class="mono">10.2.0.0/16  local</text>
+          <text x="724" y="195" font-size="10.5" font-weight="700" class="mono">10.1.0.0/16  pcx-bc</text>
+          <text x="389" y="209" font-size="10.5" font-weight="700" class="mono">10.2.0.0/16  pcx-bc</text>
+          <g class="fl" id="pBC">
+            <line x1="629" y1="150" x2="706" y2="150" stroke="var(--vpc)" stroke-width="3.5" marker-start="url(#arrowP)" marker-end="url(#arrowP)"/>
+            <rect x="640" y="139" width="55" height="22" rx="11" fill="var(--vpc)"/>
+            <text x="667.5" y="154" font-size="11" font-weight="700" text-anchor="middle" style="fill:#fff">pcx-bc</text>
+          </g>
+        </g>
+
+        <!-- Step 4: not transitive -->
+        <g data-step="4" class="fl" id="pAC">
+          <path d="M165 220 Q500 286 835 220" fill="none" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arrowR)"/>
+          <circle cx="500" cy="253" r="12" fill="var(--bad)"/>
+          <text x="500" y="258" font-size="15" font-weight="700" text-anchor="middle" style="fill:#fff">✕</text>
+          <text x="500" y="287" font-size="12" font-weight="700" text-anchor="middle" style="fill:var(--bad)">A cannot reach C through B. Peering is not transitive.</text>
+        </g>
+
+        <!-- Step 5: Transit Gateway hub -->
+        <g data-step="5">
+          <line x1="40" y1="306" x2="960" y2="306" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="40" y="330" font-size="12" font-weight="700" style="fill:var(--muted)">2 · TRANSIT GATEWAY: ONE HUB, ONE ATTACHMENT PER VPC</text>
+          <g fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5">
+            <rect x="40" y="345" width="250" height="88" rx="8"/><rect x="710" y="345" width="250" height="88" rx="8"/>
+            <rect x="40" y="512" width="250" height="88" rx="8"/><rect x="710" y="512" width="250" height="88" rx="8"/>
+          </g>
+          <g font-size="13.5" font-weight="700">
+            <text x="54" y="368" style="fill:var(--vpc)">VPC A — 10.0.0.0/16</text><text x="724" y="368" style="fill:var(--vpc)">VPC B — 10.1.0.0/16</text>
+            <text x="54" y="535" style="fill:var(--vpc)">VPC C — 10.2.0.0/16</text><text x="724" y="535" style="fill:var(--vpc)">VPC D — 10.3.0.0/16</text>
+          </g>
+          <g font-size="10.5">
+            <text x="54" y="390" class="mono">10.0.0.0/16  local</text><text x="724" y="390" class="mono">10.1.0.0/16  local</text>
+            <text x="54" y="557" class="mono">10.2.0.0/16  local</text><text x="724" y="557" class="mono">10.3.0.0/16  local</text>
+          </g>
+          <g stroke="var(--vpc)" stroke-width="3.5" marker-start="url(#arrowP)" marker-end="url(#arrowP)">
+            <line x1="294" y1="395" x2="455" y2="454"/><line x1="706" y1="395" x2="545" y2="454"/>
+            <line x1="294" y1="550" x2="455" y2="491"/><line x1="706" y1="550" x2="545" y2="491"/>
+          </g>
+          <circle cx="500" cy="472" r="48" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="500" y="468" font-size="13.5" font-weight="700" text-anchor="middle" style="fill:#fff">Transit</text>
+          <text x="500" y="485" font-size="13.5" font-weight="700" text-anchor="middle" style="fill:#fff">Gateway</text>
+          <g font-size="10.5" font-weight="700" style="fill:var(--vpc)">
+            <text x="352" y="410" style="fill:var(--vpc)">attachment</text><text x="648" y="410" text-anchor="end" style="fill:var(--vpc)">attachment</text>
+          </g>
+        </g>
+
+        <!-- Step 6: routes through the hub -->
+        <g data-step="6">
+          <g font-size="10.5" font-weight="700">
+            <text x="54" y="405" class="mono">10.0.0.0/8   tgw</text><text x="724" y="405" class="mono">10.0.0.0/8   tgw</text>
+            <text x="54" y="572" class="mono">10.0.0.0/8   tgw</text><text x="724" y="572" class="mono">10.0.0.0/8   tgw</text>
+          </g>
+          <rect x="390" y="536" width="220" height="96" rx="6" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+          <text x="402" y="555" font-size="11.5" font-weight="700" style="fill:var(--vpc)">Transit Gateway route table</text>
+          <g font-size="10.5">
+            <text x="402" y="573" class="mono">10.0.0.0/16  → VPC A</text><text x="402" y="587" class="mono">10.1.0.0/16  → VPC B</text>
+            <text x="402" y="601" class="mono">10.2.0.0/16  → VPC C</text><text x="402" y="615" class="mono">10.3.0.0/16  → VPC D</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption"><b>Top:</b> a peering connection joins exactly two VPCs, and each side needs a route to the other. A is peered with B and B with C, yet A cannot reach C: traffic never passes through a VPC to a third one. <b>Bottom:</b> every VPC attaches once to a <b>Transit Gateway</b>. Each VPC has a single route pointing at the hub, and the hub's own route table sends traffic to the right VPC.</p>
+    <div class="legend">
+      <span style="--c:var(--vpc)">VPCs, peering connections, Transit Gateway</span>
+      <span style="--c:var(--orange)">Instances</span>
+      <span style="--c:var(--bad)">No path</span>
+    </div>
+  </div>
+
+  <h2>Can they talk?</h2>
+  <div class="card">
+    <p>This is the peering half of the diagram: A–B and B–C are peered. Pick two instances and predict whether a packet gets through.</p>
+    <div class="seg" id="segFrom"><b>From</b>
+      <button data-v="A" class="on">VPC A</button><button data-v="B">VPC B</button><button data-v="C">VPC C</button>
+    </div>
+    <div class="seg" id="segTo"><b>To</b>
+      <button data-v="A">VPC A</button><button data-v="B">VPC B</button><button data-v="C" class="on">VPC C</button>
+    </div>
+    <p class="result" id="reach"></p>
+  </div>
+
+  <h2>How fast does it grow?</h2>
+  <div class="card">
+    <p>To let every VPC reach every other with peering you need a connection for each pair. Move the slider and compare with a Transit Gateway.</p>
+    <div class="scale">
+      <div><div class="lbl">Number of VPCs</div><div class="big" id="nVal">4</div><input type="range" id="nVpc" min="2" max="50" value="4" aria-label="Number of VPCs"></div>
+      <div><div class="lbl">Peering connections</div><div class="big" id="nPeer">6</div></div>
+      <div><div class="lbl">Transit Gateway attachments</div><div class="big" id="nTgw">4</div></div>
+      <div><div class="lbl">Routes to maintain in each VPC</div><div class="big" id="nRoutes">3 vs 1</div></div>
+    </div>
+    <div class="bars">
+      <span>Peering</span><div class="track"><i id="barPeer" style="background:var(--bad)"></i></div>
+      <span>Transit Gateway</span><div class="track"><i id="barTgw" style="background:var(--pub)"></i></div>
+    </div>
+    <p style="margin:14px 0 0;color:var(--muted)">Formula: a full mesh of <i>n</i> VPCs needs <i>n × (n − 1) ÷ 2</i> peering connections. A hub needs <i>n</i> attachments.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>VPC peering</h3>
+      <p>A private link between two VPCs. Instances talk using private IPs, as if on one network.</p>
+      <ul>
+        <li>Works across accounts and across Regions.</li>
+        <li>Traffic stays on the AWS network, never the public internet.</li>
+        <li>No hourly charge and no bandwidth limit; you pay only for data transfer.</li>
+        <li>One side requests, the other accepts, then <b>both</b> add a route.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>The three peering rules</h3>
+      <ul>
+        <li><b>No overlapping CIDRs.</b> Two VPCs that both use <code>10.0.0.0/16</code> cannot be peered. This is why Day 2 said to plan ranges early.</li>
+        <li><b>Not transitive.</b> A–B and B–C do not give A–C.</li>
+        <li><b>No sharing of gateways.</b> A cannot use B's Internet Gateway, NAT Gateway or VPN through the peering.</li>
+      </ul>
+      <p style="margin-top:10px">And as always, security groups must still allow the traffic.</p>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Transit Gateway</h3>
+      <p>A managed router that sits in the middle. Everything attaches to it once.</p>
+      <ul>
+        <li><b>Attachments:</b> VPCs, VPN connections, Direct Connect, and other Transit Gateways in other Regions.</li>
+        <li>It <b>is</b> transitive: anything attached can reach anything else, subject to its route tables.</li>
+        <li>Each VPC attachment uses one subnet in every AZ you want covered.</li>
+        <li>Billed per attachment per hour and per GB, so it costs more than peering.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Transit Gateway route tables</h3>
+      <p>The hub has its own route tables, and you can have several. That is how you keep networks apart while sharing one hub.</p>
+      <ul>
+        <li>Production and development VPCs can both reach a shared-services VPC, but not each other.</li>
+        <li>All traffic leaving for the internet can be forced through one inspection VPC.</li>
+        <li>In each VPC, one summary route such as <code>10.0.0.0/8 → tgw</code> covers every other network.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Peering or Transit Gateway?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>VPC peering</th><th>Transit Gateway</th></tr>
+      <tr><td><b>Shape</b></td><td>Point to point</td><td>Hub and spoke</td></tr>
+      <tr><td><b>Transitive</b></td><td>No</td><td>Yes</td></tr>
+      <tr><td><b>Connections for 10 VPCs</b></td><td>45</td><td>10</td></tr>
+      <tr><td><b>Routes per VPC</b></td><td>One per peer</td><td>One summary route</td></tr>
+      <tr><td><b>Also connects</b></td><td>Only VPCs</td><td>VPN and Direct Connect to your offices</td></tr>
+      <tr><td><b>Cost</b></td><td>Data transfer only</td><td>Hourly per attachment, plus per GB</td></tr>
+      <tr><td><b>Choose it for</b></td><td>Two or three VPCs</td><td>Many VPCs, or a link to on-premises</td></tr>
+    </table>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>Draw three VPC boxes in a row with <b>different</b> CIDRs: <code>10.0</code>, <code>10.1</code>, <code>10.2</code>.</li>
+      <li>Draw a two-way arrow A–B labelled <code>pcx-ab</code>, and B–C labelled <code>pcx-bc</code>.</li>
+      <li>Write the route each side needs. B has two.</li>
+      <li>Draw a crossed-out dashed arrow from A to C: “not transitive”.</li>
+      <li>Below, draw a <b>Transit Gateway</b> in the centre and four VPCs around it, each joined by one line labelled “attachment”.</li>
+      <li>Write <code>10.0.0.0/8 → tgw</code> in each VPC, and the hub's route table with one row per VPC.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. Every VPC must show its CIDR; overlapping ranges are the first thing a reviewer checks.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>Why does peering not scale?</summary><p>It is not transitive, so every pair of VPCs that must talk needs its own connection: <i>n × (n − 1) ÷ 2</i> for a full mesh. Ten VPCs need 45 connections and nine routes in every route table. A hub needs ten attachments and one route.</p></details>
+  <details><summary>The peering connection is active, but an instance in A cannot ping one in B. What do you check?</summary><p>Routes and security groups. Both VPCs need a route to the other's CIDR pointing at the peering connection, in the route tables of the subnets involved. Then the security group on the target must allow the traffic from the other VPC's range.</p></details>
+  <details><summary>Two teams each built a VPC with <code>10.0.0.0/16</code>. Can they be connected?</summary><p>Not by peering or a Transit Gateway; overlapping ranges cannot be routed between. One must be re-addressed, or they expose specific services to each other with PrivateLink (Day 24), which does not need unique ranges.</p></details>
+  <details><summary>VPC A has no NAT Gateway but is peered with B, which has one. Can instances in A reach the internet through B?</summary><p>No. Peering only carries traffic whose source and destination are in the two VPCs. It cannot be used to reach another VPC's Internet Gateway, NAT Gateway or VPN.</p></details>
+  <details><summary>Does traffic over a peering connection cross the public internet?</summary><p>No. It travels on the AWS network between private IP addresses, even between Regions.</p></details>
+  <details><summary>All VPCs share one Transit Gateway. How do you stop development from reaching production?</summary><p>Use separate Transit Gateway route tables. Associate the development attachments with a table that has routes only to shared services, and likewise for production, so neither table contains the other's range.</p></details>
+  <details><summary>Two VPCs exchange a very large volume of data. Peering or Transit Gateway?</summary><p>Peering. It has no per-GB processing charge and no bandwidth cap, so for a heavy, fixed pair it is cheaper and faster. You can use both: a Transit Gateway for general connectivity and a peering for that one pair.</p></details>
+  <details><summary>Why have several VPCs at all, instead of one large one?</summary><p>Isolation. Separate VPCs, usually in separate accounts, keep a mistake or a breach in development away from production, let teams work independently, and make costs and permissions clear. Day 29 builds that account structure.</p></details>
+
+  <div class="next">
+    <b>Next — Day 23: Hybrid cloud.</b> The company's own data centre joins the network. You connect it to AWS with a Site-to-Site VPN over the internet and with Direct Connect, a private line, and compare the two.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Two VPCs.</b> Each VPC is isolated by default. Their CIDRs are different, which is a requirement for connecting them.",
+    "<b>Step 2 — Peering connection.</b> Create a peering connection between A and B, then add a route on <b>each</b> side pointing the other's CIDR at it.",
+    "<b>Step 3 — A third VPC.</b> Peer C with B in the same way. B now has two connections and two extra routes.",
+    "<b>Step 4 — Not transitive.</b> A and C are both connected to B, but they cannot reach each other. A packet from A to C has no route, and B will not forward it.",
+    "<b>Step 5 — Transit Gateway.</b> Replace the mesh with a hub. Each VPC gets one attachment to the Transit Gateway, however many VPCs there are.",
+    "<b>Step 6 — Routes.</b> Every VPC needs just one route, for all private ranges, pointing at the hub. The hub's route table knows which attachment leads to which CIDR."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+
+  // ---- Reachability over the two peering connections ----
+  const sel = { from: "A", to: "C" };
+  const ok = t => `<b style="color:var(--pub)">Reachable.</b> ${t}`;
+  const no = t => `<b style="color:var(--bad)">Not reachable.</b> ${t}`;
+  function reach() {
+    const pair = [sel.from, sel.to].sort().join("");
+    let msg, lit = [];
+    if (sel.from === sel.to) { msg = "Same VPC: the local route delivers it. Pick two different VPCs."; }
+    else if (pair === "AB") { lit = ["pAB"]; msg = ok(`VPC ${sel.from}'s route table sends the other VPC's CIDR to <code>pcx-ab</code>, and the reply has a matching route back.`); }
+    else if (pair === "BC") { lit = ["pBC"]; msg = ok(`VPC ${sel.from}'s route table sends the other VPC's CIDR to <code>pcx-bc</code>, and the reply has a matching route back.`); }
+    else { lit = ["pAC"]; msg = no(`VPC ${sel.from} has no route to VPC ${sel.to}'s range. Even if you added one pointing at the peering with B, B would drop the packet: a peering connection only carries traffic that starts and ends in its own two VPCs. You need a third peering, A–C.`); }
+    $("reach").innerHTML = msg;
+    svg.classList.toggle("lit", lit.length > 0);
+    svg.querySelectorAll(".fl").forEach(g => g.classList.toggle("on", lit.includes(g.id)));
+  }
+  for (const [id, key] of [["segFrom", "from"], ["segTo", "to"]]) {
+    const seg = $(id);
+    seg.querySelectorAll("button").forEach(b => b.onclick = () => {
+      seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      sel[key] = b.dataset.v;
+      reach();
+    });
+  }
+  $("reach").innerHTML = "A is peered with B, and B with C. Can A reach C? Press a button to check.";
+
+  // ---- Growth: full mesh vs hub ----
+  function grow() {
+    const n = +$("nVpc").value, mesh = n * (n - 1) / 2, max = 50 * 49 / 2;
+    $("nVal").textContent = n;
+    $("nPeer").textContent = mesh.toLocaleString("en-US");
+    $("nTgw").textContent = n;
+    $("nRoutes").textContent = `${n - 1} vs 1`;
+    $("barPeer").style.width = Math.max(0.5, mesh / max * 100) + "%";
+    $("barTgw").style.width = Math.max(0.5, n / max * 100) + "%";
+  }
+  $("nVpc").oninput = grow;
+  grow();
+</script>
+</body>
+</html>
