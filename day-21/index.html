@@ -167,27 +167,27 @@
           <text x="95" y="301" font-size="14" font-weight="700" text-anchor="middle">Browser</text>
           <text x="95" y="319" font-size="11" text-anchor="middle" style="fill:var(--muted)">single-page app</text>
           <g font-size="12" font-weight="700" text-anchor="middle">
-            <g class="fl" id="f1">
+            <g class="fl" id="fl1">
               <line x1="140" y1="268" x2="226" y2="104" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
               <circle cx="184" cy="184" r="10" fill="var(--orange)"/><text x="184" y="188" style="fill:#fff">1</text>
             </g>
-            <g class="fl" id="f2">
+            <g class="fl" id="fl2">
               <line x1="174" y1="305" x2="225" y2="305" stroke="var(--bad)" stroke-width="3.5" marker-start="url(#arrowR)" marker-end="url(#arrowR)"/>
               <circle cx="199" cy="305" r="10" fill="var(--bad)"/><text x="199" y="309" style="fill:#fff">2</text>
             </g>
-            <g class="fl" id="f3">
+            <g class="fl" id="fl3">
               <line x1="140" y1="342" x2="226" y2="408" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
               <circle cx="182" cy="374" r="10" fill="var(--orange)"/><text x="182" y="378" style="fill:#fff">3</text>
             </g>
-            <g class="fl" id="f4">
+            <g class="fl" id="fl4">
               <line x1="472" y1="415" x2="535" y2="415" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
               <circle cx="502" cy="415" r="10" fill="var(--orange)"/><text x="502" y="419" style="fill:#fff">4</text>
             </g>
-            <g class="fl" id="f5">
+            <g class="fl" id="fl5">
               <line x1="732" y1="415" x2="785" y2="415" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
               <circle cx="757" cy="415" r="10" fill="var(--orange)"/><text x="757" y="419" style="fill:#fff">5</text>
             </g>
-            <g class="fl" id="f6">
+            <g class="fl" id="fl6">
               <line x1="635" y1="457" x2="635" y2="490" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
               <line x1="732" y1="535" x2="785" y2="535" stroke="var(--az)" stroke-width="3.5" marker-end="url(#arrowB)"/>
               <circle cx="655" cy="473" r="10" fill="var(--orange)"/><text x="655" y="477" style="fill:#fff">6</text>
@@ -324,15 +324,15 @@
   const el = id => document.getElementById(id);
   const svg = el("diagram");
   const trace = [
-    [["f1", "fS"], "<b>The page loads.</b> The browser resolves the name to CloudFront and requests <code>index.html</code> and the JavaScript. The nearest edge returns them from its cache, or fetches them from the private S3 bucket using origin access control. So far no API, no function and no sign-in are involved."],
-    [["f2"], "<b>The user signs in.</b> The app, now running in the browser, sends the username and password straight to the Cognito user pool over HTTPS. Your API never sees the password."],
-    [["f2"], "<b>Cognito returns tokens.</b> If the password is right, Cognito sends back signed tokens: an ID token, an access token valid for about an hour, and a refresh token to get new ones. The app keeps them in the browser."],
-    [["f3"], "<b>The app calls the API.</b> It requests <code>GET /notes</code> from API Gateway and attaches the access token in the <code>Authorization</code> header."],
+    [["fl1", "fS"], "<b>The page loads.</b> The browser resolves the name to CloudFront and requests <code>index.html</code> and the JavaScript. The nearest edge returns them from its cache, or fetches them from the private S3 bucket using origin access control. So far no API, no function and no sign-in are involved."],
+    [["fl2"], "<b>The user signs in.</b> The app, now running in the browser, sends the username and password straight to the Cognito user pool over HTTPS. Your API never sees the password."],
+    [["fl2"], "<b>Cognito returns tokens.</b> If the password is right, Cognito sends back signed tokens: an ID token, an access token valid for about an hour, and a refresh token to get new ones. The app keeps them in the browser."],
+    [["fl3"], "<b>The app calls the API.</b> It requests <code>GET /notes</code> from API Gateway and attaches the access token in the <code>Authorization</code> header."],
     [["fV"], "<b>API Gateway checks the token.</b> Its JWT authorizer verifies the signature with the user pool's public keys and checks that the token has not expired. If anything is wrong it answers 401 at once; the function is never invoked."],
-    [["f4"], "<b>The function is invoked.</b> API Gateway passes the request and the verified user ID from the token to the Lambda function. A new execution environment may be created: a cold start."],
-    [["f5"], "<b>The function reads the data.</b> It queries DynamoDB for items whose partition key is that user ID. Its execution role allows this and nothing else."],
-    [["f5", "f4", "f3"], "<b>The answer returns.</b> DynamoDB → function → API Gateway → browser, and the notes appear. The whole round trip is typically well under a second."],
-    [["f6"], "<b>Meanwhile, the welcome email.</b> On a first sign-in the function also drops a message on the SQS queue and does not wait. A second function polls the queue and sends the email. If mail is slow or down, the login above is unaffected."]
+    [["fl4"], "<b>The function is invoked.</b> API Gateway passes the request and the verified user ID from the token to the Lambda function. A new execution environment may be created: a cold start."],
+    [["fl5"], "<b>The function reads the data.</b> It queries DynamoDB for items whose partition key is that user ID. Its execution role allows this and nothing else."],
+    [["fl5", "fl4", "fl3"], "<b>The answer returns.</b> DynamoDB → function → API Gateway → browser, and the notes appear. The whole round trip is typically well under a second."],
+    [["fl6"], "<b>Meanwhile, the welcome email.</b> On a first sign-in the function also drops a message on the SQS queue and does not wait. A second function polls the queue and sends the email. If mail is slow or down, the login above is unaffected."]
   ];
   let ti = -1;
   function paintTrace() {
