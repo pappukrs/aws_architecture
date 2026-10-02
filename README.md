@@ -54,7 +54,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | 18 | **[Containers on ECS Fargate](day-18/index.html)** | ECR, ECS cluster, service + tasks in private subnets, ALB | Task role vs execution role? |
 | 19 | **[Kubernetes on EKS](day-19/index.html)** | EKS control plane (AWS-managed), managed node groups in private subnets, ALB ingress | What does AWS manage vs what do you manage? |
 | 20 | **[Microservices](day-20/index.html)** | API Gateway → multiple services (Lambda / ECS), each with its own database, SQS between services | Why one database per service? |
-| 21 | **Review: serverless web app** | CloudFront + S3 (frontend), Cognito (auth), API Gateway, Lambda, DynamoDB | Trace a login request end to end. |
+| 21 | **[Review: serverless web app](day-21/index.html)** | CloudFront + S3 (frontend), Cognito (auth), API Gateway, Lambda, DynamoDB | Trace a login request end to end. |
 
 ## Week 4 — Enterprise Architecture
 

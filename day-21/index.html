@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 21 — Week 3 Review: Serverless Web Application</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  :root { --msg: #c2255c; --msg-fill: #fdf0f5; }
+  @media (prefers-color-scheme: dark) { :root { --msg: #f783ac; --msg-fill: #2e1722; } }
+  #diagram .fl { transition: opacity .25s; }
+  #diagram.lit .fl { opacity: .1; }
+  #diagram.lit .fl.on { opacity: 1; }
+  .trace-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 4px; }
+  .trace-head .n { font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-20/index.html">← Day 20</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 21 of 30 · Week 3 — Serverless, Decoupling, Containers</div>
+    <h1>Week 3 Review: Serverless Web Application</h1>
+    <p class="lead">You put Week 3 together into one complete application with no servers and no VPC: a static front end, sign-in, an API, a database and a queue. One service is new today, Cognito, which handles the sign-in. Then you trace a login from the first click to the data coming back.</p>
+  </header>
+
+  <h2>New today: Cognito</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Cognito user pool</h3>
+      <p>A managed user directory. It stores accounts and does sign-up, sign-in, password reset and multi-factor login, so you write none of that.</p>
+      <ul>
+        <li>The browser sends the username and password <b>to Cognito</b>, never to your API.</li>
+        <li>On success Cognito returns signed <b>tokens</b>.</li>
+        <li>It can also let people sign in with Google, Apple or a company directory.</li>
+        <li>Regional service: draw it inside the Region, outside any VPC.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Tokens and the authorizer</h3>
+      <p>A token is a small signed document (a JWT) saying who the user is and until when it is valid.</p>
+      <ul>
+        <li>The browser attaches the <b>access token</b> to every API call.</li>
+        <li>API Gateway's <b>JWT authorizer</b> checks the signature and expiry using Cognito's public keys.</li>
+        <li>A bad or expired token gets 401 from API Gateway. Your function never runs and you are not billed for it.</li>
+        <li>Your function receives the verified user ID and trusts only that.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>1. Timed challenge</h2>
+  <div class="card">
+    <p>Press <b>Start</b>, draw the architecture described below without looking at anything, then press <b>Done</b>.</p>
+    <p style="color:var(--muted)"><b>The brief:</b> a note-taking web app. Users open a web page, sign in, and read and write their own notes. A welcome email is sent after the first sign-in, but must not slow the sign-in down. Use no servers and no VPC. Show how the page reaches the browser, how the user proves who they are, and how the API knows whose notes to return.</p>
+    <div class="timer">
+      <div class="clock" id="clock">00:00</div>
+      <button class="primary" id="tStart">Start</button>
+      <button id="tDone" disabled>Done</button>
+      <button id="tReset">Reset</button>
+      <span class="meta" id="tMeta"></span>
+    </div>
+    <p style="margin-bottom:6px"><b>Mark what your drawing contains.</b> Be strict; a box without its label does not count.</p>
+    <ul class="checklist" id="checklist"></ul>
+    <p class="result" id="score"></p>
+  </div>
+
+  <h2>2. Reference diagram</h2>
+  <div class="card practice" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Reveal diagram</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 640" role="img" aria-label="Reference: a browser loads the site from CloudFront and a private S3 bucket, signs in with a Cognito user pool, and calls API Gateway with a token. API Gateway checks the token, invokes a Lambda function that reads DynamoDB and puts a message on an SQS queue for a second function.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--vpc)"/></marker>
+          <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--az)"/></marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <symbol id="s3" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g></symbol>
+          <symbol id="lambda" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--orange)"/><text x="28" y="40" font-size="32" font-weight="700" text-anchor="middle" style="fill:#fff">λ</text></symbol>
+          <symbol id="ddb" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--priv)"/><g fill="none" stroke="#fff" stroke-width="2.5"><rect x="13" y="14" width="30" height="28" rx="3"/><line x1="13" y1="24" x2="43" y2="24"/><line x1="13" y1="33" x2="43" y2="33"/><line x1="25" y1="14" x2="25" y2="42"/></g></symbol>
+          <symbol id="apigw" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--vpc)"/><text x="28" y="36" font-size="20" font-weight="700" text-anchor="middle" style="fill:#fff">&lt;/&gt;</text></symbol>
+          <symbol id="user" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--bad)"/><g fill="#fff"><circle cx="28" cy="21" r="8"/><path d="M12 46 a16 14 0 0 1 32 0 z"/></g></symbol>
+        </defs>
+
+        <rect x="200" y="20" width="780" height="600" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="966" y="43" font-size="15" font-weight="700" text-anchor="end">AWS Cloud</text>
+        <rect x="215" y="150" width="750" height="455" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+        <text x="951" y="173" font-size="13.5" font-weight="700" text-anchor="end" style="fill:var(--region)">Region — ap-south-1 · no VPC</text>
+
+        <!-- Step 1: static front end -->
+        <g data-step="1">
+          <rect x="230" y="58" width="240" height="74" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="244" y="84" font-size="13.5" font-weight="700" style="fill:var(--vpc)">CloudFront</text>
+          <text x="244" y="103" font-size="11.5">global · HTTPS · caches the site</text>
+          <text x="244" y="120" font-size="11" style="fill:var(--muted)">certificate from ACM</text>
+          <rect x="540" y="180" width="220" height="64" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+          <use href="#s3" x="552" y="194" width="36" height="36"/>
+          <text x="598" y="209" font-size="12.5" font-weight="700">S3 bucket</text>
+          <text x="598" y="226" font-size="11" style="fill:var(--muted)">front-end files · private</text>
+          <g class="fl" id="fS">
+            <polyline points="472,95 650,95 650,175" fill="none" stroke="var(--vpc)" stroke-width="3" marker-end="url(#arrowP)"/>
+            <text x="560" y="87" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:var(--vpc)">origin access control</text>
+          </g>
+        </g>
+
+        <!-- Step 2: sign-in -->
+        <g data-step="2">
+          <rect x="230" y="265" width="240" height="80" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2.5"/>
+          <use href="#user" x="242" y="275" width="36" height="36"/>
+          <text x="288" y="290" font-size="12.5" font-weight="700">Cognito user pool</text>
+          <text x="288" y="307" font-size="11" style="fill:var(--muted)">sign-up and sign-in</text>
+          <text x="244" y="333" font-size="11">issues signed tokens (JWT)</text>
+        </g>
+
+        <!-- Step 3: data -->
+        <g data-step="3">
+          <rect x="790" y="375" width="165" height="80" rx="8" fill="var(--card)" stroke="var(--priv)" stroke-width="2.5"/>
+          <use href="#ddb" x="800" y="385" width="36" height="36"/>
+          <text x="846" y="400" font-size="12.5" font-weight="700">DynamoDB</text>
+          <text x="846" y="417" font-size="11" class="mono">Notes</text>
+          <text x="800" y="443" font-size="11" style="fill:var(--muted)">partition key: userId</text>
+        </g>
+
+        <!-- Step 4: function -->
+        <g data-step="4">
+          <rect x="540" y="375" width="190" height="80" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <use href="#lambda" x="552" y="385" width="36" height="36"/>
+          <text x="598" y="400" font-size="12.5" font-weight="700">Lambda</text>
+          <text x="598" y="417" font-size="11" class="mono">notes-api</text>
+          <text x="552" y="443" font-size="11" style="fill:var(--muted)">execution role: this table only</text>
+        </g>
+
+        <!-- Step 5: API Gateway with authorizer -->
+        <g data-step="5">
+          <rect x="230" y="375" width="240" height="80" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <use href="#apigw" x="242" y="385" width="36" height="36"/>
+          <text x="288" y="400" font-size="12.5" font-weight="700">API Gateway</text>
+          <text x="288" y="417" font-size="11" style="fill:var(--muted)">HTTP API</text>
+          <text x="244" y="443" font-size="11">JWT authorizer on every route</text>
+          <g class="fl" id="fV">
+            <line x1="350" y1="371" x2="350" y2="350" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="5 3" marker-start="url(#arrowR)" marker-end="url(#arrowR)"/>
+            <text x="362" y="365" font-size="11" font-weight="700" style="fill:var(--bad)">checks the token</text>
+          </g>
+        </g>
+
+        <!-- Step 6: asynchronous work -->
+        <g data-step="6">
+          <rect x="540" y="495" width="190" height="80" rx="8" fill="var(--msg-fill)" stroke="var(--msg)" stroke-width="2.5"/>
+          <text x="552" y="518" font-size="12.5" font-weight="700" style="fill:var(--msg)">SQS queue</text>
+          <text x="552" y="536" font-size="11" class="mono">welcome-email</text>
+          <text x="552" y="561" font-size="11" style="fill:var(--muted)">+ dead-letter queue</text>
+          <rect x="790" y="495" width="165" height="80" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <use href="#lambda" x="800" y="505" width="36" height="36"/>
+          <text x="846" y="520" font-size="12.5" font-weight="700">Lambda</text>
+          <text x="846" y="537" font-size="11" style="fill:var(--muted)">send email</text>
+          <text x="800" y="563" font-size="11" style="fill:var(--muted)">polls the queue</text>
+        </g>
+
+        <!-- Step 7: the browser and the request paths -->
+        <g data-step="7">
+          <rect x="20" y="270" width="150" height="70" rx="35" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+          <text x="95" y="301" font-size="14" font-weight="700" text-anchor="middle">Browser</text>
+          <text x="95" y="319" font-size="11" text-anchor="middle" style="fill:var(--muted)">single-page app</text>
+          <g font-size="12" font-weight="700" text-anchor="middle">
+            <g class="fl" id="f1">
+              <line x1="140" y1="268" x2="226" y2="104" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+              <circle cx="184" cy="184" r="10" fill="var(--orange)"/><text x="184" y="188" style="fill:#fff">1</text>
+            </g>
+            <g class="fl" id="f2">
+              <line x1="174" y1="305" x2="225" y2="305" stroke="var(--bad)" stroke-width="3.5" marker-start="url(#arrowR)" marker-end="url(#arrowR)"/>
+              <circle cx="199" cy="305" r="10" fill="var(--bad)"/><text x="199" y="309" style="fill:#fff">2</text>
+            </g>
+            <g class="fl" id="f3">
+              <line x1="140" y1="342" x2="226" y2="408" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+              <circle cx="182" cy="374" r="10" fill="var(--orange)"/><text x="182" y="378" style="fill:#fff">3</text>
+            </g>
+            <g class="fl" id="f4">
+              <line x1="472" y1="415" x2="535" y2="415" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+              <circle cx="502" cy="415" r="10" fill="var(--orange)"/><text x="502" y="419" style="fill:#fff">4</text>
+            </g>
+            <g class="fl" id="f5">
+              <line x1="732" y1="415" x2="785" y2="415" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+              <circle cx="757" cy="415" r="10" fill="var(--orange)"/><text x="757" y="419" style="fill:#fff">5</text>
+            </g>
+            <g class="fl" id="f6">
+              <line x1="635" y1="457" x2="635" y2="490" stroke="var(--orange)" stroke-width="3.5" marker-end="url(#arrowO)"/>
+              <line x1="732" y1="535" x2="785" y2="535" stroke="var(--az)" stroke-width="3.5" marker-end="url(#arrowB)"/>
+              <circle cx="655" cy="473" r="10" fill="var(--orange)"/><text x="655" y="477" style="fill:#fff">6</text>
+              <circle cx="757" cy="535" r="10" fill="var(--az)"/><text x="757" y="539" style="fill:#fff">7</text>
+            </g>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Compare your drawing with this one. (1) The page loads from CloudFront, which reads the private bucket. (2) The user signs in with Cognito and gets tokens. (3) The app calls the API with a token. API Gateway checks it, then (4) invokes the function, which (5) reads the user's notes and (6) queues the welcome email for (7) a second function. Nothing here is in a VPC.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Requests and invocations</span>
+      <span style="--c:var(--bad)">Sign-in and token checking</span>
+      <span style="--c:var(--vpc)">CloudFront, API Gateway</span>
+      <span style="--c:var(--msg)">Queue</span>
+      <span style="--c:var(--az)">Polled from the queue</span>
+    </div>
+  </div>
+
+  <h2>3. Trace a login, end to end</h2>
+  <div class="card">
+    <p>This is the question to be able to answer aloud. Before each press of <b>Next</b>, say what happens next; then check. With the reference diagram revealed, the arrow for each step lights up.</p>
+    <div class="trace-head">
+      <button id="trPrev" disabled>← Back</button>
+      <button class="primary" id="trNext">Start the trace</button>
+      <button id="trReset">Reset</button>
+      <span class="n" id="trN"></span>
+    </div>
+    <p class="result" id="trMsg">A user opens <code>https://notes.example.com</code> for the first time. What is the first thing that happens?</p>
+  </div>
+
+  <h2>4. Complete the design</h2>
+  <div class="card">
+    <p>Choose the right value for each blank, then check.</p>
+    <div class="fill" id="fill"></div>
+    <div class="row-actions"><button class="primary" id="fillCheck">Check answers</button><span id="fillScore"></span></div>
+  </div>
+
+  <h2>5. Spot the mistakes</h2>
+  <div class="card">
+    <p>A colleague sends you this design for review. Tick every line that is <b>wrong</b>, then check.</p>
+    <ul class="mistakes" id="mistakes"></ul>
+    <div class="row-actions"><button class="primary" id="mistCheck">Check</button><span id="mistScore"></span></div>
+  </div>
+
+  <h2>Week 3 in one table</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Day</th><th>You added</th><th>The one idea to keep</th></tr>
+      <tr><td><a href="../day-15/index.html">15</a></td><td>API Gateway, Lambda, DynamoDB</td><td>No VPC. IAM roles replace security groups. Nothing runs when idle.</td></tr>
+      <tr><td><a href="../day-16/index.html">16</a></td><td>SQS, SNS, dead-letter queue</td><td>SQS is pull and stores; SNS is push and does not. A queue absorbs spikes and outages.</td></tr>
+      <tr><td><a href="../day-17/index.html">17</a></td><td>S3 events, EventBridge</td><td>Things that happen start your code. Rules route events by their content.</td></tr>
+      <tr><td><a href="../day-18/index.html">18</a></td><td>ECS on Fargate</td><td>Task definition, task, service. Execution role starts it; task role is what it may do.</td></tr>
+      <tr><td><a href="../day-19/index.html">19</a></td><td>EKS</td><td>AWS runs the control plane outside your VPC; you run the nodes and what is on them.</td></tr>
+      <tr><td><a href="../day-20/index.html">20</a></td><td>Microservices</td><td>One database per service. Prefer asynchronous calls between services.</td></tr>
+    </table>
+  </div>
+
+  <h2>6. Explain it out loud</h2>
+  <p class="lead">Answer each one aloud in a few sentences before opening it.</p>
+  <details><summary>It is 3 a.m. and nobody is using the app. What is running, and what are you paying for?</summary><p>Nothing is running: no function, no server. You pay for stored data in S3 and DynamoDB and little else. Compare Day 14, where NAT Gateways, a load balancer, servers and databases are billed every hour regardless.</p></details>
+  <details><summary>Why does the browser send the password to Cognito and not to your API?</summary><p>So your code never handles passwords. Cognito verifies them and hands back a signed token. Your API only has to check a signature, which API Gateway does before your function is invoked.</p></details>
+  <details><summary>How does the function know whose notes to return?</summary><p>From the user ID inside the verified token, which API Gateway passes along. It must not use an ID supplied in the request body or URL, since any caller could change that to read someone else's notes.</p></details>
+  <details><summary>A campaign brings ten thousand sign-ups in a minute. What does each part do?</summary><p>CloudFront serves the page from edge caches. Cognito, API Gateway and DynamoDB on-demand scale by themselves. Lambda runs many copies at once, up to the concurrency limit. The welcome emails queue up and are sent as fast as the second function works, without slowing any sign-up.</p></details>
+  <details><summary>Users ask for “export all my notes as a PDF”, which takes five minutes. How do you add it?</summary><p>Not inside the API request: API Gateway stops waiting after about 30 seconds. The API puts a job on a queue and answers at once. A worker, Lambda or a Fargate task, builds the PDF, saves it to S3 and notifies the user with a link.</p></details>
+  <details><summary>When would you choose the Day 14 architecture instead of this one?</summary><p>When the application needs a relational database with complex queries, long-lived connections, steady heavy traffic that makes always-on servers cheaper, or software that expects a normal server. Many real systems mix both.</p></details>
+  <details><summary>Is anything in this design a single point of failure?</summary><p>Not within the Region; every service runs across several AZs. The Region itself is: Cognito, the API, the functions and the table all live in one. DynamoDB global tables and a second Region address that, on Day 28.</p></details>
+
+  <div class="next">
+    <b>Next — Day 22: Connecting VPCs.</b> Week 4 moves to company-scale architecture. You connect two VPCs with peering, see why that stops working as the number grows, and replace it with a Transit Gateway hub.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Front end.</b> The site's files sit in a private S3 bucket. CloudFront, outside the Region, serves them over HTTPS and reads the bucket through origin access control.",
+    "<b>Step 2 — Sign-in.</b> A Cognito user pool holds the accounts and issues tokens.",
+    "<b>Step 3 — Data.</b> A DynamoDB table of notes, with the user ID as partition key so each user's notes are found together.",
+    "<b>Step 4 — Code.</b> A Lambda function with an execution role limited to that one table.",
+    "<b>Step 5 — API.</b> API Gateway in front of the function, with a JWT authorizer that checks every token against the user pool.",
+    "<b>Step 6 — Work that can wait.</b> A queue and a second function for the welcome email, with a dead-letter queue.",
+    "<b>Step 7 — The browser.</b> Three arrows leave it, in this order: load the site, sign in, call the API."
+  ];
+  window.REVIEW = {
+    target: 720,
+    items: [
+      "CloudFront drawn outside the Region",
+      "Private S3 bucket for the front end, linked by origin access control",
+      "No VPC, subnet or security group anywhere",
+      "Cognito user pool, labelled as issuing tokens",
+      "API Gateway, with an authorizer noted",
+      "A link showing API Gateway checking tokens against Cognito",
+      "Lambda function behind API Gateway",
+      "Execution role noted, limited to one table",
+      "DynamoDB table with its partition key written",
+      "A queue for the welcome email",
+      "A second function that polls the queue",
+      "Dead-letter queue noted",
+      "Browser arrows numbered: site, sign-in, API",
+      "The token shown travelling with the API call",
+      "Push and pull arrows told apart",
+      "The password goes to Cognito only"
+    ],
+    blanks: [
+      ["What delivers the HTML and JavaScript to the browser", ["API Gateway", "CloudFront, from a private S3 bucket", "A Lambda function"], 1],
+      ["Service that checks the username and password", ["Cognito user pool", "API Gateway", "The Lambda function"], 0],
+      ["What the browser attaches to each API call", ["The password", "Nothing", "The access token"], 2],
+      ["What rejects a request whose token has expired", ["The Lambda function", "API Gateway's authorizer", "DynamoDB"], 1],
+      ["What allows the function to read the table", ["A security group", "Its execution role", "The API Gateway route"], 1],
+      ["Number of VPCs in this design", ["One", "Two", "None"], 2],
+      ["Where the welcome email job goes so sign-in stays fast", ["An SQS queue", "The same function, before it answers", "CloudFront"], 0],
+      ["How the email function gets its messages", ["SQS pushes them", "It polls the queue", "API Gateway forwards them"], 1],
+      ["Service for routing events from AWS services by their content", ["SNS", "SQS", "EventBridge"], 2],
+      ["Longest a single Lambda invocation can run", ["30 seconds", "15 minutes", "Unlimited"], 1]
+    ],
+    lines: [
+      ["The front-end bucket is public with static website hosting on, and CloudFront points at it.", true, "Wrong. Keep the bucket private and let CloudFront read it through origin access control, so nobody can bypass CloudFront."],
+      ["The browser sends the user's password to API Gateway on every request.", true, "Wrong. The password goes to Cognito once. After that the browser sends a token, which expires and can be checked without knowing the password."],
+      ["API Gateway validates the token with a JWT authorizer before invoking the function.", false, "Correct. Invalid requests are stopped before any of your code runs."],
+      ["The function keeps the signed-in user in a global variable between requests.", true, "Wrong. Execution environments are created and removed freely and may serve different users. State belongs in DynamoDB; identity comes from each request's token."],
+      ["The function's execution role allows <code>dynamodb:*</code> on all tables.", true, "Wrong. Least privilege: only the actions it needs, on its own table."],
+      ["The welcome email is sent through an SQS queue and a second function.", false, "Correct. The user does not wait for it, and a mail outage does not break sign-in."],
+      ["The function reads <code>userId</code> from the request body to decide whose notes to return.", true, "Wrong. Any caller could put another user's ID there. Use the ID from the verified token."],
+      ["A function triggered by uploads writes its output to the same bucket and prefix.", true, "Wrong. Each output triggers the function again, in an endless loop. Use a different bucket or prefix."],
+      ["The DynamoDB table uses on-demand capacity, with the user ID as partition key.", false, "Correct. It scales with traffic, and one user's notes are found with a single query."],
+      ["The queue has a dead-letter queue with an alarm on it.", false, "Correct. Messages that keep failing are set aside and someone is told."]
+    ]
+  };
+</script>
+<script src="../assets/steps.js"></script>
+<script src="../assets/review.js"></script>
+<script>
+  const el = id => document.getElementById(id);
+  const svg = el("diagram");
+  const trace = [
+    [["f1", "fS"], "<b>The page loads.</b> The browser resolves the name to CloudFront and requests <code>index.html</code> and the JavaScript. The nearest edge returns them from its cache, or fetches them from the private S3 bucket using origin access control. So far no API, no function and no sign-in are involved."],
+    [["f2"], "<b>The user signs in.</b> The app, now running in the browser, sends the username and password straight to the Cognito user pool over HTTPS. Your API never sees the password."],
+    [["f2"], "<b>Cognito returns tokens.</b> If the password is right, Cognito sends back signed tokens: an ID token, an access token valid for about an hour, and a refresh token to get new ones. The app keeps them in the browser."],
+    [["f3"], "<b>The app calls the API.</b> It requests <code>GET /notes</code> from API Gateway and attaches the access token in the <code>Authorization</code> header."],
+    [["fV"], "<b>API Gateway checks the token.</b> Its JWT authorizer verifies the signature with the user pool's public keys and checks that the token has not expired. If anything is wrong it answers 401 at once; the function is never invoked."],
+    [["f4"], "<b>The function is invoked.</b> API Gateway passes the request and the verified user ID from the token to the Lambda function. A new execution environment may be created: a cold start."],
+    [["f5"], "<b>The function reads the data.</b> It queries DynamoDB for items whose partition key is that user ID. Its execution role allows this and nothing else."],
+    [["f5", "f4", "f3"], "<b>The answer returns.</b> DynamoDB → function → API Gateway → browser, and the notes appear. The whole round trip is typically well under a second."],
+    [["f6"], "<b>Meanwhile, the welcome email.</b> On a first sign-in the function also drops a message on the SQS queue and does not wait. A second function polls the queue and sends the email. If mail is slow or down, the login above is unaffected."]
+  ];
+  let ti = -1;
+  function paintTrace() {
+    const on = ti >= 0 ? trace[ti][0] : [];
+    svg.classList.toggle("lit", ti >= 0);
+    svg.querySelectorAll(".fl").forEach(g => g.classList.toggle("on", on.includes(g.id)));
+    el("trMsg").innerHTML = ti < 0
+      ? "A user opens <code>https://notes.example.com</code> for the first time. What is the first thing that happens?"
+      : trace[ti][1];
+    el("trN").textContent = ti < 0 ? "" : `Step ${ti + 1} of ${trace.length}`;
+    el("trPrev").disabled = ti <= 0;
+    el("trNext").disabled = ti >= trace.length - 1;
+    el("trNext").textContent = ti < 0 ? "Start the trace" : ti >= trace.length - 1 ? "End of trace" : "Next →";
+  }
+  el("trNext").onclick = () => { if (ti < trace.length - 1) ti++; paintTrace(); };
+  el("trPrev").onclick = () => { if (ti > 0) ti--; paintTrace(); };
+  el("trReset").onclick = () => { ti = -1; paintTrace(); };
+  paintTrace();
+</script>
+</body>
+</html>
