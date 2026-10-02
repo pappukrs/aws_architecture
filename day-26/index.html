@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 26 — Monitoring and Logging</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  :root { --mon: #c2255c; --mon-fill: #fdf0f5; }
+  @media (prefers-color-scheme: dark) { :root { --mon: #f783ac; --mon-fill: #2e1722; } }
+  #diagram .tool, #diagram .act { transition: opacity .25s; }
+  #diagram.lit .tool { opacity: .16; }
+  #diagram.lit .tool.on { opacity: 1; }
+  #diagram .act { opacity: .55; }
+  #diagram .act.fire { opacity: 1; }
+  .alarm { display: flex; flex-wrap: wrap; gap: 16px 30px; align-items: flex-end; }
+  .alarm input[type=range] { width: 240px; max-width: 100%; accent-color: var(--orange); display: block; }
+  .alarm .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .alarm .lbl { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .points { display: flex; align-items: flex-end; gap: 6px; height: 90px; margin-top: 16px; border-bottom: 2px solid var(--border); position: relative; }
+  .points::before { content: "80% threshold"; position: absolute; left: 0; right: 0; bottom: 72px; border-top: 2px dashed var(--bad); font-size: 11px; color: var(--bad); padding-left: 4px; line-height: 1; }
+  .points i { width: 26px; border-radius: 4px 4px 0 0; background: var(--pub); }
+  .points i.hot { background: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-25/index.html">← Day 25</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 26 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Monitoring and Logging</h1>
+    <p class="lead">An architecture you cannot see into is one you cannot run. When the site is slow, when a setting changed overnight, when an auditor asks who had access, you need records. Four services collect them, and each answers a different question. Today you draw where every record comes from and where it ends up.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 640" role="img" aria-label="Left: sources of data, including servers, load balancer, database, the VPC network, engineers and every resource's settings. Middle: CloudWatch with metrics, logs and alarms, VPC Flow Logs, CloudTrail and AWS Config. Right: a dashboard, alarm actions through SNS and Auto Scaling, and a central S3 bucket that archives all logs.">
+        <defs>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/><line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/><line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+          <symbol id="lb" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--vpc)"/><text x="28" y="35" font-size="18" font-weight="700" text-anchor="middle" style="fill:#fff">LB</text></symbol>
+          <symbol id="net" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--vpc)"/><text x="28" y="34" font-size="15" font-weight="700" text-anchor="middle" style="fill:#fff">VPC</text></symbol>
+          <symbol id="rds" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--priv)"/><g fill="none" stroke="#fff" stroke-width="2.5"><ellipse cx="28" cy="17" rx="14" ry="6"/><path d="M14 17 V39 A14 6 0 0 0 42 39 V17"/><path d="M14 28 A14 6 0 0 0 42 28"/></g></symbol>
+          <symbol id="user" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--bad)"/><g fill="#fff"><circle cx="28" cy="21" r="8"/><path d="M12 46 a16 14 0 0 1 32 0 z"/></g></symbol>
+          <symbol id="cfg" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><text x="28" y="36" font-size="20" font-weight="700" text-anchor="middle" style="fill:#fff">{ }</text></symbol>
+          <symbol id="s3" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g></symbol>
+        </defs>
+
+        <rect x="20" y="20" width="960" height="605" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="34" y="44" font-size="15" font-weight="700">AWS Cloud</text>
+
+        <!-- Step 1: the workload to watch -->
+        <g data-step="1">
+          <g fill="var(--card)" stroke="var(--border)" stroke-width="1.5">
+            <rect x="40" y="70" width="222" height="56" rx="8"/><rect x="40" y="136" width="222" height="56" rx="8"/><rect x="40" y="202" width="222" height="56" rx="8"/>
+          </g>
+          <use href="#ec2" x="50" y="82" width="32" height="32"/>
+          <text x="92" y="94" font-size="12.5" font-weight="700">App servers</text>
+          <text x="92" y="111" font-size="11" style="fill:var(--muted)">CPU, memory, application logs</text>
+          <use href="#lb" x="50" y="148" width="32" height="32"/>
+          <text x="92" y="160" font-size="12.5" font-weight="700">Load balancer</text>
+          <text x="92" y="177" font-size="11" style="fill:var(--muted)">requests, errors, latency</text>
+          <use href="#rds" x="50" y="214" width="32" height="32"/>
+          <text x="92" y="226" font-size="12.5" font-weight="700">RDS database</text>
+          <text x="92" y="243" font-size="11" style="fill:var(--muted)">CPU, connections, free storage</text>
+        </g>
+
+        <!-- Step 2: CloudWatch metrics and logs -->
+        <g data-step="2">
+          <rect x="360" y="60" width="290" height="270" rx="8" fill="var(--mon-fill)" stroke="var(--mon)" stroke-width="2.5"/>
+          <text x="374" y="84" font-size="14" font-weight="700" style="fill:var(--mon)">CloudWatch</text>
+          <text x="374" y="101" font-size="11.5" style="fill:var(--muted)">How is it performing right now?</text>
+          <g class="tool" id="cMet">
+            <rect x="374" y="112" width="262" height="58" rx="6" fill="var(--card)" stroke="var(--mon)" stroke-width="1.5"/>
+            <text x="386" y="133" font-size="12.5" font-weight="700">Metrics</text>
+            <text x="386" y="151" font-size="11" style="fill:var(--muted)">numbers over time: CPU 72%, errors 14</text>
+          </g>
+          <g class="tool" id="cLogs">
+            <rect x="374" y="178" width="262" height="58" rx="6" fill="var(--card)" stroke="var(--mon)" stroke-width="1.5"/>
+            <text x="386" y="199" font-size="12.5" font-weight="700">Logs</text>
+            <text x="386" y="217" font-size="11" style="fill:var(--muted)">text lines written by apps and services</text>
+          </g>
+          <g stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)">
+            <line x1="264" y1="98" x2="355" y2="128"/><line x1="264" y1="164" x2="355" y2="170"/><line x1="264" y1="230" x2="355" y2="212"/>
+          </g>
+          <rect x="730" y="70" width="230" height="56" rx="8" fill="var(--card)" stroke="var(--mon)" stroke-width="2"/>
+          <text x="744" y="93" font-size="12.5" font-weight="700">Dashboard</text>
+          <text x="744" y="110" font-size="11" style="fill:var(--muted)">the key graphs on one screen</text>
+          <line x1="652" y1="135" x2="725" y2="103" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+        </g>
+
+        <!-- Step 3: alarms and their actions -->
+        <g data-step="3">
+          <g class="tool" id="cAlarm">
+            <rect x="374" y="244" width="262" height="74" rx="6" fill="var(--card)" stroke="var(--mon)" stroke-width="1.5"/>
+            <text x="386" y="265" font-size="12.5" font-weight="700">Alarms</text>
+            <text x="386" y="283" font-size="11" style="fill:var(--muted)">CPU above 80% for 3 minutes → act</text>
+            <text id="alarmState" x="386" y="304" font-size="11.5" font-weight="700" style="fill:var(--pub)">state: OK</text>
+          </g>
+          <g class="act" id="actions">
+            <g stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)">
+              <line x1="652" y1="270" x2="725" y2="238"/><line x1="652" y1="292" x2="725" y2="296"/>
+            </g>
+            <g fill="var(--card)" stroke="var(--orange)" stroke-width="2">
+              <rect x="730" y="202" width="230" height="56" rx="8"/><rect x="730" y="268" width="230" height="56" rx="8"/>
+            </g>
+            <text x="744" y="225" font-size="12.5" font-weight="700">SNS → on-call engineer</text>
+            <text x="744" y="242" font-size="11" style="fill:var(--muted)">email, SMS or chat message</text>
+            <text x="744" y="291" font-size="12.5" font-weight="700">Auto Scaling</text>
+            <text x="744" y="308" font-size="11" style="fill:var(--muted)">add servers automatically</text>
+          </g>
+        </g>
+
+        <!-- Step 4: VPC Flow Logs -->
+        <g data-step="4">
+          <rect x="40" y="350" width="222" height="56" rx="8" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"/>
+          <use href="#net" x="50" y="362" width="32" height="32"/>
+          <text x="92" y="374" font-size="12.5" font-weight="700">VPC network</text>
+          <text x="92" y="391" font-size="11" style="fill:var(--muted)">every connection attempt</text>
+          <line x1="264" y1="378" x2="355" y2="378" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+          <g class="tool" id="cFlow">
+            <rect x="360" y="350" width="290" height="56" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="2.5"/>
+            <text x="374" y="373" font-size="13" font-weight="700" style="fill:var(--az)">VPC Flow Logs</text>
+            <text x="374" y="391" font-size="11.5" style="fill:var(--muted)">Who talked to whom on the network?</text>
+          </g>
+        </g>
+
+        <!-- Step 5: CloudTrail -->
+        <g data-step="5">
+          <rect x="40" y="432" width="222" height="56" rx="8" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"/>
+          <use href="#user" x="50" y="444" width="32" height="32"/>
+          <text x="92" y="456" font-size="12.5" font-weight="700">Engineers and tools</text>
+          <text x="92" y="473" font-size="11" style="fill:var(--muted)">console, CLI, automation</text>
+          <line x1="264" y1="460" x2="355" y2="460" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+          <g class="tool" id="cTrail">
+            <rect x="360" y="432" width="290" height="56" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2.5"/>
+            <text x="374" y="455" font-size="13" font-weight="700" style="fill:var(--bad)">CloudTrail</text>
+            <text x="374" y="473" font-size="11.5" style="fill:var(--muted)">Who did what, when and from where?</text>
+          </g>
+        </g>
+
+        <!-- Step 6: AWS Config -->
+        <g data-step="6">
+          <rect x="40" y="520" width="222" height="56" rx="8" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"/>
+          <use href="#cfg" x="50" y="532" width="32" height="32"/>
+          <text x="92" y="544" font-size="12.5" font-weight="700">Every resource</text>
+          <text x="92" y="561" font-size="11" style="fill:var(--muted)">its settings, as they change</text>
+          <line x1="264" y1="548" x2="355" y2="548" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+          <g class="tool" id="cConfig">
+            <rect x="360" y="520" width="290" height="56" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+            <text x="374" y="543" font-size="13" font-weight="700" style="fill:var(--pub)">AWS Config</text>
+            <text x="374" y="561" font-size="11.5" style="fill:var(--muted)">What changed, and does it break a rule?</text>
+          </g>
+        </g>
+
+        <!-- Step 7: central archive -->
+        <g data-step="7">
+          <rect x="730" y="372" width="230" height="188" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+          <use href="#s3" x="744" y="386" width="36" height="36"/>
+          <text x="790" y="401" font-size="13" font-weight="700">Central S3 bucket</text>
+          <text x="790" y="418" font-size="11" style="fill:var(--muted)">in a log archive account</text>
+          <g font-size="11.5">
+            <text x="744" y="450">· logs from every account</text>
+            <text x="744" y="470">· nobody can alter or delete</text>
+            <text x="744" y="490">· old logs move to cheap storage</text>
+            <text x="744" y="510">· searched with Athena</text>
+            <text x="744" y="538" style="fill:var(--muted)">kept for years</text>
+          </g>
+          <g stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)">
+            <line x1="652" y1="378" x2="725" y2="420"/><line x1="652" y1="460" x2="725" y2="462"/><line x1="652" y1="548" x2="725" y2="508"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: on the left, what produces data. In the middle, four collectors, each with the question it answers. <b>CloudWatch</b> turns performance data into graphs and alarms, and alarms into actions. <b>VPC Flow Logs</b>, <b>CloudTrail</b> and <b>AWS Config</b> record network traffic, API activity and configuration. On the right, everything is archived to one <b>central bucket</b> that the teams being logged cannot change.</p>
+    <div class="legend">
+      <span style="--c:var(--mon)">CloudWatch: performance</span>
+      <span style="--c:var(--az)">Flow Logs: network</span>
+      <span style="--c:var(--bad)">CloudTrail: API activity</span>
+      <span style="--c:var(--pub)">Config: settings · central bucket</span>
+      <span style="--c:var(--orange)">Alarm actions</span>
+    </div>
+  </div>
+
+  <h2>Which tool answers the question?</h2>
+  <div class="card">
+    <p>Each button is a question someone will ask you during an incident or an audit. Name the tool first. The diagram above lights it.</p>
+    <div class="seg" id="qBtns"></div>
+    <p class="result" id="qMsg">Pick a question.</p>
+  </div>
+
+  <h2>How an alarm decides</h2>
+  <div class="card">
+    <p>The alarm is “CPU above 80% for 3 minutes in a row”. Set the CPU, press the button to record one minute, and watch when it fires. One spike is not enough.</p>
+    <div class="alarm">
+      <div><div class="lbl">CPU this minute</div><div class="big" id="cpuVal">40%</div><input type="range" id="cpu" min="0" max="100" value="40" aria-label="CPU percent for the next minute"></div>
+      <div><button class="primary" id="tick">Record one minute</button> <button id="alarmReset">Reset</button></div>
+      <div><div class="lbl">Alarm state</div><div class="big" id="stateBig" style="color:var(--pub)">OK</div></div>
+    </div>
+    <div class="points" id="points" aria-label="Last twelve one-minute CPU datapoints"></div>
+    <p class="result" id="alarmMsg">No datapoints yet. The alarm needs data before it can decide.</p>
+  </div>
+
+  <h2>Concepts</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--mon)">
+      <h3>CloudWatch metrics and alarms</h3>
+      <ul>
+        <li>AWS services send <b>metrics</b> automatically: CPU, request counts, latency, queue depth.</li>
+        <li>Not everything is visible from outside a server. <b>Memory and disk use on EC2 need the CloudWatch agent</b> installed.</li>
+        <li>An <b>alarm</b> watches one metric against a threshold over several periods, and has three states: OK, ALARM, INSUFFICIENT_DATA.</li>
+        <li>Alarm actions: notify through SNS, scale a group, stop or reboot an instance.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--mon)">
+      <h3>CloudWatch Logs</h3>
+      <ul>
+        <li>Lambda and many services write here automatically; EC2 needs the agent.</li>
+        <li>Organised into <b>log groups</b>. By default they are kept <b>forever</b>, so set a retention period or the bill grows quietly.</li>
+        <li><b>Logs Insights</b> searches across them with queries.</li>
+        <li>A <b>metric filter</b> counts matching lines, such as <code>ERROR</code>, and turns the count into a metric you can alarm on.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>CloudTrail</h3>
+      <p>A record of every API call in the account: creating, changing, deleting, signing in.</p>
+      <ul>
+        <li>Each event says <b>who</b>, <b>what</b>, <b>when</b>, <b>from which IP</b>.</li>
+        <li>The last 90 days are viewable by default. A <b>trail</b> delivers events to S3 to keep them longer.</li>
+        <li>One organisation-wide trail can cover every account and Region.</li>
+        <li>It is the evidence in any security investigation.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Flow Logs and Config</h3>
+      <ul>
+        <li><b>VPC Flow Logs</b> record each connection: source, destination, port, and whether it was <b>accepted or rejected</b>. They do not contain the data itself.</li>
+        <li><b>AWS Config</b> records each resource's settings and every change, so you can see what something looked like on any past date.</li>
+        <li><b>Config rules</b> check settings continuously: “no security group open to the world on port 22”, “all volumes encrypted”. A broken rule can trigger an automatic fix.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>CloudWatch vs CloudTrail</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>CloudWatch</th><th>CloudTrail</th></tr>
+      <tr><td><b>Watches</b></td><td>How resources behave</td><td>What people and programs do to resources</td></tr>
+      <tr><td><b>Records</b></td><td>Metrics and log lines</td><td>API calls</td></tr>
+      <tr><td><b>A typical entry</b></td><td>“CPU 91% at 14:02”</td><td>“user asha deleted security group rule at 02:13 from 203.0.113.5”</td></tr>
+      <tr><td><b>Used for</b></td><td>Performance, alerting, scaling</td><td>Auditing, security investigation</td></tr>
+      <tr><td><b>Asked by</b></td><td>The engineer on call</td><td>The security team and the auditor</td></tr>
+    </table>
+    <p style="margin:12px 0 0;color:var(--muted)">A way to remember: CloudWatch <b>watches</b> the system; CloudTrail follows the <b>trail</b> people leave.</p>
+  </div>
+
+  <h2>Why a central bucket in another account</h2>
+  <div class="card">
+    <ul>
+      <li><b>Tamper-proof:</b> an attacker, or an employee, who gains control of the application account cannot erase the record of what they did.</li>
+      <li><b>One place to search:</b> an investigation across twenty accounts starts in one bucket.</li>
+      <li><b>Cheap to keep:</b> lifecycle rules move old logs to archival storage; regulations often require years.</li>
+      <li><b>Locked down:</b> services may write, a few security staff may read, nobody may delete.</li>
+    </ul>
+    <p style="margin-top:10px">For requests that cross several services, as in Day 20's microservices, add tracing with <b>X-Ray</b>: it follows one request through every hop and shows where the time went.</p>
+  </div>
+
+  <h2>Draw it yourself</h2>
+  <div class="card">
+    <ol>
+      <li>On the left, list what produces data: servers, load balancer, database, the network, people, and resource settings.</li>
+      <li>In the middle, draw <b>CloudWatch</b> with three parts: metrics, logs, alarms.</li>
+      <li>From alarms, draw two actions: <b>SNS</b> to a person and <b>Auto Scaling</b>.</li>
+      <li>Under CloudWatch, draw <b>VPC Flow Logs</b>, <b>CloudTrail</b> and <b>AWS Config</b>, each fed by its own source.</li>
+      <li>On the right, draw the <b>central S3 bucket</b> with dashed arrows from those three.</li>
+      <li>Write under each collector the question it answers.</li>
+    </ol>
+    <p style="margin-top:12px">Then press <b>Hide diagram</b> and redraw it from memory. On real architecture diagrams this usually shrinks to a small “observability” strip, but you must know what is in it.</p>
+  </div>
+
+  <h2>Check yourself</h2>
+  <details><summary>CloudWatch or CloudTrail: what is the difference?</summary><p>CloudWatch monitors how resources perform: metrics, logs and alarms. CloudTrail records who called which API, when and from where. One tells you the server is overloaded; the other tells you who resized it.</p></details>
+  <details><summary>You look for a memory metric on an EC2 instance and it is not there. Why?</summary><p>AWS can only see what is visible from outside the instance, such as CPU and network. Memory and disk space are inside the operating system, so they are reported only if the CloudWatch agent is installed.</p></details>
+  <details><summary>Can VPC Flow Logs show you what data was sent?</summary><p>No. They record addresses, ports, protocol, byte counts and whether the connection was accepted or rejected, not the contents.</p></details>
+  <details><summary>An alarm fires and clears every few minutes all night. How do you fix it without ignoring real problems?</summary><p>Require the threshold to be breached for several periods in a row, for example 3 out of 3 minutes, and check that the threshold is realistic. Brief spikes then no longer trigger it.</p></details>
+  <details><summary>The auditor wants API activity from three years ago, and the console shows only 90 days. What should have been set up?</summary><p>A trail delivering CloudTrail events to an S3 bucket, ideally the central one, with a lifecycle rule that keeps them for the required period.</p></details>
+  <details><summary>CloudTrail and Config both relate to changes. How do they differ?</summary><p>CloudTrail records the action: who made the API call. Config records the result: what the resource's settings were before and after, and whether they now comply with your rules. You often use both together.</p></details>
+  <details><summary>Why send logs to a separate account instead of a bucket next to the application?</summary><p>So that whoever compromises or misuses the application account cannot delete the evidence. The log archive account has very few users and its bucket does not allow deletion.</p></details>
+  <details><summary>Someone opens port 22 to the whole internet on a security group. How could that be caught within minutes, automatically?</summary><p>An AWS Config rule that checks for unrestricted SSH marks the group non-compliant and can trigger a remediation that removes the rule. CloudTrail then tells you who added it.</p></details>
+
+  <div class="next">
+    <b>Next — Day 27: Data pipeline.</b> Events stream in through Kinesis, land in an S3 data lake, are catalogued by Glue, queried with Athena and shown in QuickSight. You mark where the data is moving and where it is at rest.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — What to watch.</b> The parts of the running application: servers, the load balancer and the database. Each produces numbers and log lines.",
+    "<b>Step 2 — CloudWatch metrics and logs.</b> Metrics are numbers over time; logs are text. Both flow into CloudWatch, and a dashboard shows the important graphs together.",
+    "<b>Step 3 — Alarms.</b> An alarm watches one metric. When it crosses a threshold for long enough, it acts: a message to the on-call engineer through SNS, or a scaling action.",
+    "<b>Step 4 — VPC Flow Logs.</b> A record of every connection attempt in the network, accepted or rejected.",
+    "<b>Step 5 — CloudTrail.</b> A record of every API call: who changed what, when and from where.",
+    "<b>Step 6 — AWS Config.</b> A history of every resource's settings, checked continuously against your rules.",
+    "<b>Step 7 — Central archive.</b> Flow logs, CloudTrail events and Config history are delivered to one S3 bucket in a separate account, kept for years and protected from deletion."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+
+  // ---- Which tool? ----
+  const questions = [
+    ["The site is slow. Is the CPU high?", "cMet", "<b>CloudWatch metrics.</b> Open the CPU graph for the Auto Scaling group and the latency graph for the load balancer."],
+    ["What error did the app print at 14:02?", "cLogs", "<b>CloudWatch Logs.</b> Search the application's log group around that time with Logs Insights."],
+    ["Wake someone if errors pass 1%", "cAlarm", "<b>A CloudWatch alarm.</b> It watches the error-rate metric and, when it is breached, publishes to an SNS topic that messages the on-call engineer."],
+    ["Who deleted that security group rule last night?", "cTrail", "<b>CloudTrail.</b> Find the <code>RevokeSecurityGroupIngress</code> event: it names the user, the time and the source IP address."],
+    ["Which addresses tried port 22 and were rejected?", "cFlow", "<b>VPC Flow Logs.</b> Filter for destination port 22 and action REJECT. You get addresses and counts, not the contents."],
+    ["Was this bucket public last Tuesday?", "cConfig", "<b>AWS Config.</b> Its configuration timeline shows the bucket's settings on any past date, and when they changed."],
+    ["Are all our disks encrypted, in every account?", "cConfig", "<b>An AWS Config rule.</b> It evaluates every volume continuously and lists the ones that are not compliant."],
+    ["Someone created access keys at 3 a.m. Who?", "cTrail", "<b>CloudTrail.</b> The <code>CreateAccessKey</code> event shows the identity and where the call came from. GuardDuty reads the same events to spot this automatically."]
+  ];
+  questions.forEach((q, i) => {
+    const b = document.createElement("button");
+    b.textContent = q[0];
+    b.onclick = () => {
+      [...$("qBtns").children].forEach((x, j) => x.classList.toggle("on", j === i));
+      $("qMsg").innerHTML = q[2];
+      svg.classList.add("lit");
+      svg.querySelectorAll(".tool").forEach(g => g.classList.toggle("on", g.id === q[1]));
+    };
+    $("qBtns").appendChild(b);
+  });
+
+  // ---- Alarm evaluation: 3 consecutive datapoints above the threshold ----
+  const LIMIT = 80, NEED = 3, KEEP = 12;
+  let pts = [];
+  function paintAlarm(msg) {
+    $("points").innerHTML = pts.map(p => `<i class="${p > LIMIT ? "hot" : ""}" style="height:${Math.max(3, p * 0.9)}px" title="${p}%"></i>`).join("");
+    const last = pts.slice(-NEED);
+    const state = !pts.length ? "INSUFFICIENT_DATA" : last.length === NEED && last.every(p => p > LIMIT) ? "ALARM" : "OK";
+    const colour = state === "ALARM" ? "var(--bad)" : state === "OK" ? "var(--pub)" : "var(--muted)";
+    $("stateBig").textContent = state; $("stateBig").style.color = colour;
+    $("alarmState").textContent = "state: " + state; $("alarmState").style.fill = colour;
+    $("actions").classList.toggle("fire", state === "ALARM");
+    if (msg) { $("alarmMsg").innerHTML = msg; return; }
+    const streak = (() => { let n = 0; for (let i = pts.length - 1; i >= 0 && pts[i] > LIMIT; i--) n++; return n; })();
+    $("alarmMsg").innerHTML = state === "ALARM"
+      ? `<b>ALARM.</b> ${streak} minutes in a row above ${LIMIT}%. The alarm's actions run: SNS messages the on-call engineer and Auto Scaling adds servers. Both light up in the diagram above.`
+      : streak > 0
+      ? `<b>Still OK.</b> ${streak} of the ${NEED} minutes needed are above ${LIMIT}%. A short spike does not page anyone.`
+      : `<b>OK.</b> The latest minute is at or below ${LIMIT}%. Any earlier streak is reset.`;
+  }
+  $("cpu").oninput = () => { $("cpuVal").textContent = $("cpu").value + "%"; };
+  $("tick").onclick = () => { pts.push(+$("cpu").value); pts = pts.slice(-KEEP); paintAlarm(); };
+  $("alarmReset").onclick = () => { pts = []; paintAlarm("No datapoints yet. The alarm needs data before it can decide."); };
+  paintAlarm("No datapoints yet. The alarm needs data before it can decide.");
+</script>
+</body>
+</html>
