@@ -68,7 +68,7 @@ Save each drawing as `day-XX/diagram.drawio` (or `.png`) in this repo.
 | 27 | **[Data pipeline](day-27/index.html)** | Kinesis Data Streams → Firehose → S3 data lake → Glue → Athena → QuickSight | Where is the data at each stage — streaming or at rest? |
 | 28 | **[Disaster recovery](day-28/index.html)** | 2 regions; draw all four: backup & restore, pilot light, warm standby, multi-site active-active | Rank the four by RTO/RPO and cost. |
 | 29 | **[Multi-account setup](day-29/index.html)** | AWS Organizations, OUs, SCPs, Control Tower, separate security / logging / workload accounts | Why separate accounts instead of separate VPCs? |
-| 30 | **Capstone: production e-commerce platform** | Combine everything: Route 53, CloudFront, WAF, multi-AZ VPC, ALB, ECS/ASG, RDS Multi-AZ, ElastiCache, SQS, Lambda, S3, monitoring, DR region | Draw it from a blank page in 30 minutes and explain every arrow. |
+| 30 | **[Capstone: production e-commerce platform](day-30/index.html)** | Combine everything: Route 53, CloudFront, WAF, multi-AZ VPC, ALB, ECS/ASG, RDS Multi-AZ, ElastiCache, SQS, Lambda, S3, monitoring, DR region | Draw it from a blank page in 30 minutes and explain every arrow. |
 
 ---
 

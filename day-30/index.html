@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 30 — Capstone: Production E-Commerce Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  :root { --cache: #c2255c; --msg: #c2255c; --msg-fill: #fdf0f5; }
+  @media (prefers-color-scheme: dark) { :root { --cache: #f783ac; --msg: #f783ac; --msg-fill: #2e1722; } }
+  #diagram .fl { transition: opacity .25s; }
+  #diagram.lit .fl { opacity: .13; }
+  #diagram.lit .fl.on { opacity: 1; }
+  .trace-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 4px; }
+  .trace-head .n { font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-29/index.html">← Day 29</a><a href="../README.md">30-day plan</a></nav>
+  <header>
+    <div class="tag">Day 30 of 30 · Week 4 — Enterprise Architecture</div>
+    <h1>Capstone: Production E-Commerce Platform</h1>
+    <p class="lead">No new services. Today you draw one system that uses almost everything from the last 29 days: DNS, a content delivery network with a firewall, a multi-AZ network, containers behind a load balancer, a Multi-AZ database, a cache, a queue with a worker, storage, monitoring and a second Region. You start from a blank page and have 30 minutes. Then you explain every arrow.</p>
+  </header>
+
+  <h2>1. Timed challenge</h2>
+  <div class="card">
+    <p>Open draw.io, Excalidraw or a sheet of paper. Press <b>Start</b>, draw the architecture described below without looking at anything, then press <b>Done</b>.</p>
+    <p style="color:var(--muted)"><b>The brief:</b> an online shop at <code>example.com</code>, hosted in Mumbai. Product pages and images are static. The cart and checkout are dynamic and need a relational database. After an order is placed, an invoice and a confirmation email are produced, and the customer must not wait for them. The shop must block common web attacks before they reach the servers, stay up if one Availability Zone fails, tell an engineer when something breaks, and be running again in Singapore within minutes if the whole Mumbai Region is lost. Show every component, where it lives, and every arrow with its direction.</p>
+    <div class="timer">
+      <div class="clock" id="clock">00:00</div>
+      <button class="primary" id="tStart">Start</button>
+      <button id="tDone" disabled>Done</button>
+      <button id="tReset">Reset</button>
+      <span class="meta" id="tMeta"></span>
+    </div>
+    <p style="margin-bottom:6px"><b>Mark what your drawing contains.</b> Be strict; a box without its label does not count.</p>
+    <ul class="checklist" id="checklist"></ul>
+    <p class="result" id="score"></p>
+  </div>
+
+  <h2>2. Reference diagram</h2>
+  <div class="card practice" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Reveal diagram</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1080 776" role="img" aria-label="Reference: users look up the name in Route 53 and connect to CloudFront, which has WAF and Shield. CloudFront serves static files from a private S3 bucket and forwards dynamic requests to a load balancer in the public subnets of a two-AZ VPC in Mumbai. An ECS service runs tasks in private subnets and uses ElastiCache Redis and an RDS Multi-AZ database in the data subnets. The tasks send order messages to an SQS queue, a Lambda worker polls it and writes invoices to S3, and failed messages go to a dead-letter queue. A monitoring strip holds CloudWatch, SNS, CloudTrail and a log archive bucket. A second Region in Singapore holds a smaller copy: a load balancer, an ECS service, an RDS read replica and replica S3 buckets.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <marker id="arrowI" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--priv)"/></marker>
+          <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--pub)"/></marker>
+          <marker id="arrowM" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--msg)"/></marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <symbol id="task" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round">
+              <rect x="11" y="17" width="34" height="22" rx="2"/><line x1="20" y1="17" x2="20" y2="39"/><line x1="28" y1="17" x2="28" y2="39"/><line x1="36" y1="17" x2="36" y2="39"/>
+            </g>
+          </symbol>
+          <symbol id="nat" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--vpc)"/>
+            <text x="28" y="34" font-size="16" font-weight="700" text-anchor="middle" style="fill:#fff">NAT</text>
+          </symbol>
+          <symbol id="rds" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--priv)"/><g fill="none" stroke="#fff" stroke-width="2.5"><ellipse cx="28" cy="17" rx="14" ry="6"/><path d="M14 17 V39 A14 6 0 0 0 42 39 V17"/><path d="M14 28 A14 6 0 0 0 42 28"/></g></symbol>
+          <symbol id="redis" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--cache)"/><g fill="#fff"><rect x="13" y="13" width="30" height="8" rx="3"/><rect x="13" y="24" width="30" height="8" rx="3"/><rect x="13" y="35" width="30" height="8" rx="3"/></g></symbol>
+          <symbol id="s3" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--pub)"/><g fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"><path d="M14 18 L19 42 H37 L42 18"/><ellipse cx="28" cy="18" rx="14" ry="5"/></g></symbol>
+          <symbol id="lambda" viewBox="0 0 56 56"><rect width="56" height="56" rx="8" fill="var(--orange)"/><text x="28" y="40" font-size="32" font-weight="700" text-anchor="middle" style="fill:#fff">λ</text></symbol>
+        </defs>
+
+        <rect x="12" y="62" width="1056" height="704" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="1054" y="84" font-size="15" font-weight="700" text-anchor="end">AWS Cloud</text>
+
+        <!-- Step 1: network, outside-in -->
+        <g data-step="1">
+          <rect x="28" y="166" width="744" height="590" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="42" y="188" font-size="13.5" font-weight="700" style="fill:var(--region)">Region — ap-south-1 (Mumbai)</text>
+          <rect x="42" y="200" width="504" height="458" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="56" y="222" font-size="13.5" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+          <circle cx="294" cy="200" r="18" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="294" y="204" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <g fill="none" stroke="var(--az)" stroke-width="2" stroke-dasharray="5 4">
+            <rect x="54" y="232" width="234" height="416" rx="6"/><rect x="300" y="232" width="234" height="416" rx="6"/>
+          </g>
+          <text x="66" y="249" font-size="12" font-weight="600" style="fill:var(--az)">AZ ap-south-1a</text>
+          <text x="522" y="249" font-size="12" font-weight="600" text-anchor="end" style="fill:var(--az)">AZ ap-south-1b</text>
+          <g stroke-width="2">
+            <rect x="64" y="258" width="214" height="64" rx="6" fill="var(--pub-fill)" stroke="var(--pub)"/>
+            <rect x="310" y="258" width="214" height="64" rx="6" fill="var(--pub-fill)" stroke="var(--pub)"/>
+            <rect x="64" y="346" width="214" height="100" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="310" y="346" width="214" height="100" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="64" y="470" width="214" height="170" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+            <rect x="310" y="470" width="214" height="170" rx="6" fill="var(--priv-fill)" stroke="var(--priv)"/>
+          </g>
+          <g font-size="11" font-weight="700">
+            <text x="74" y="316" style="fill:var(--pub)">Public A · 10.0.1.0/24</text>
+            <text x="514" y="316" text-anchor="end" style="fill:var(--pub)">Public B · 10.0.3.0/24</text>
+            <text x="74" y="362" style="fill:var(--priv)">App A · 10.0.2.0/24</text>
+            <text x="514" y="362" text-anchor="end" style="fill:var(--priv)">App B · 10.0.4.0/24</text>
+            <text x="268" y="632" text-anchor="end" style="fill:var(--priv)">Data A · 10.0.5.0/24</text>
+            <text x="514" y="632" text-anchor="end" style="fill:var(--priv)">Data B · 10.0.6.0/24</text>
+          </g>
+          <g class="fl" id="nNatA"><use href="#nat" x="72" y="264" width="28" height="28"/></g>
+          <g class="fl" id="nNatB"><use href="#nat" x="488" y="264" width="28" height="28"/></g>
+        </g>
+
+        <!-- Step 2: load balancer -->
+        <g data-step="2">
+          <g class="fl" id="nALB">
+            <rect x="130" y="266" width="328" height="34" rx="10" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+            <text x="294" y="288" font-size="13" font-weight="700" text-anchor="middle" style="fill:#fff">Application Load Balancer</text>
+          </g>
+        </g>
+
+        <!-- Step 3: app tier -->
+        <g data-step="3">
+          <g class="fl" id="nSvc">
+            <rect x="78" y="372" width="432" height="50" rx="10" fill="none" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="9 5"/>
+            <rect x="200" y="412" width="188" height="20" rx="5" fill="var(--orange)"/>
+            <text x="294" y="426" font-size="11" font-weight="700" text-anchor="middle" style="fill:#fff">ECS service · Fargate · 4 tasks</text>
+          </g>
+          <g class="fl" id="nTaskA"><use href="#task" x="150" y="377" width="32" height="32"/><use href="#task" x="198" y="377" width="32" height="32"/></g>
+          <g class="fl" id="nTaskB"><use href="#task" x="358" y="377" width="32" height="32"/><use href="#task" x="406" y="377" width="32" height="32"/></g>
+        </g>
+
+        <!-- Step 4: data tier -->
+        <g data-step="4">
+          <g class="fl" id="nRdsP">
+            <use href="#rds" x="100" y="550" width="40" height="40"/>
+            <text x="120" y="605" font-size="11.5" font-weight="700" text-anchor="middle">RDS primary</text>
+          </g>
+          <g class="fl" id="nRdsS">
+            <use href="#rds" x="330" y="550" width="40" height="40"/>
+            <text x="350" y="605" font-size="11.5" font-weight="700" text-anchor="middle">RDS standby</text>
+          </g>
+          <g class="fl" id="aSync">
+            <line x1="142" y1="570" x2="326" y2="570" stroke="var(--priv)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowI)"/>
+            <rect x="273" y="561" width="42" height="18" rx="9" fill="var(--priv)"/>
+            <text x="294" y="574" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">sync</text>
+          </g>
+          <g class="fl" id="nRedisP">
+            <use href="#redis" x="176" y="482" width="34" height="34"/>
+            <text x="193" y="531" font-size="11.5" font-weight="700" text-anchor="middle">Redis primary</text>
+          </g>
+          <g class="fl" id="nRedisR">
+            <use href="#redis" x="396" y="482" width="34" height="34"/>
+            <text x="413" y="531" font-size="11.5" font-weight="700" text-anchor="middle">Redis replica</text>
+          </g>
+          <g class="fl" id="aRedisRep">
+            <line x1="212" y1="499" x2="392" y2="499" stroke="var(--msg)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowM)"/>
+            <rect x="271" y="490" width="46" height="18" rx="9" fill="var(--msg)"/>
+            <text x="294" y="503" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">async</text>
+          </g>
+        </g>
+
+        <!-- Step 5: static content and the edge -->
+        <g data-step="5">
+          <g class="fl" id="nS3">
+            <rect x="600" y="190" width="158" height="64" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+            <use href="#s3" x="610" y="199" width="30" height="30"/>
+            <text x="648" y="212" font-size="12.5" font-weight="700">S3 buckets</text>
+            <text x="648" y="228" font-size="10.5" style="fill:var(--muted)">private · versioned</text>
+            <text x="612" y="246" font-size="10.5">static files · invoices</text>
+          </g>
+          <g class="fl" id="nCF">
+            <rect x="330" y="80" width="320" height="62" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+            <text x="344" y="104" font-size="13.5" font-weight="700" style="fill:var(--vpc)">CloudFront</text>
+            <text x="344" y="126" font-size="11" style="fill:var(--muted)">edge cache · HTTPS · ACM certificate</text>
+          </g>
+          <g class="fl" id="nWAF">
+            <rect x="524" y="88" width="56" height="20" rx="10" fill="var(--bad)"/>
+            <text x="552" y="102" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">Shield</text>
+            <rect x="586" y="88" width="50" height="20" rx="10" fill="var(--bad)"/>
+            <text x="611" y="102" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:#fff">WAF</text>
+          </g>
+        </g>
+
+        <!-- Step 6: users and DNS -->
+        <g data-step="6">
+          <g class="fl" id="nUsers">
+            <rect x="24" y="4" width="140" height="38" rx="19" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+            <text x="94" y="28" font-size="14" font-weight="700" text-anchor="middle">Users</text>
+          </g>
+          <g class="fl" id="nR53">
+            <rect x="24" y="80" width="276" height="62" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+            <text x="38" y="101" font-size="13.5" font-weight="700" style="fill:var(--vpc)">Route 53</text>
+            <text x="38" y="118" font-size="11">www → CloudFront · alias</text>
+            <text x="38" y="134" font-size="11">app → load balancer · failover + health check</text>
+          </g>
+          <g class="fl" id="aDns">
+            <line x1="94" y1="47" x2="94" y2="76" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-start="url(#arrowD)" marker-end="url(#arrowD)"/>
+            <text x="104" y="58" font-size="11" font-weight="700" style="fill:var(--dc)">1 · DNS</text>
+          </g>
+        </g>
+
+        <!-- Step 7: request paths -->
+        <g data-step="7" font-size="11" font-weight="700">
+          <text x="534" y="222" text-anchor="end" style="fill:var(--bad)">alb-sg → app-sg → db-sg</text>
+          <g class="fl" id="aUser">
+            <polyline points="166,23 490,23 490,75" fill="none" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="328" y="16" text-anchor="middle" style="fill:var(--orange)">2 · HTTPS 443</text>
+          </g>
+          <g class="fl" id="aStatic">
+            <polyline points="652,128 690,128 690,185" fill="none" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="698" y="157" style="fill:var(--orange)">static · OAC</text>
+          </g>
+          <g class="fl" id="aDyn">
+            <line x1="400" y1="145" x2="311" y2="187" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <line x1="294" y1="220" x2="294" y2="261" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="398" y="158" style="fill:var(--orange)">dynamic requests · 443</text>
+          </g>
+          <g class="fl" id="aAlbA">
+            <line x1="236" y1="303" x2="214" y2="367" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="218" y="339" text-anchor="end" style="fill:var(--orange)">8080</text>
+          </g>
+          <g class="fl" id="aAlbB">
+            <line x1="352" y1="303" x2="374" y2="367" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="370" y="339" style="fill:var(--orange)">8080</text>
+          </g>
+          <g class="fl" id="aCache">
+            <line x1="193" y1="425" x2="193" y2="477" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="184" y="463" text-anchor="end" style="fill:var(--orange)">6379</text>
+          </g>
+          <g class="fl" id="aSql">
+            <line x1="120" y1="425" x2="120" y2="545" stroke="var(--orange)" stroke-width="3" marker-end="url(#arrowO)"/>
+            <text x="113" y="463" text-anchor="end" style="fill:var(--orange)">3306</text>
+          </g>
+        </g>
+
+        <!-- Step 8: queue and worker -->
+        <g data-step="8">
+          <g class="fl" id="nSQS">
+            <rect x="600" y="366" width="158" height="52" rx="8" fill="var(--msg-fill)" stroke="var(--msg)" stroke-width="2.5"/>
+            <text x="612" y="387" font-size="12.5" font-weight="700" style="fill:var(--msg)">SQS queue · orders</text>
+            <text x="612" y="405" font-size="10.5" style="fill:var(--muted)">one message per order</text>
+          </g>
+          <g class="fl" id="nLambda">
+            <rect x="600" y="282" width="158" height="54" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+            <use href="#lambda" x="610" y="293" width="32" height="32"/>
+            <text x="650" y="306" font-size="12.5" font-weight="700">Lambda</text>
+            <text x="650" y="323" font-size="10.5" style="fill:var(--muted)">order worker</text>
+          </g>
+          <g class="fl" id="nDLQ">
+            <rect x="600" y="452" width="158" height="44" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2" stroke-dasharray="6 4"/>
+            <text x="612" y="471" font-size="12" font-weight="700" style="fill:var(--bad)">Dead-letter queue</text>
+            <text x="612" y="487" font-size="10.5" style="fill:var(--muted)">orders that keep failing</text>
+          </g>
+          <g font-size="11" font-weight="700">
+            <g class="fl" id="aSend">
+              <line x1="512" y1="392" x2="595" y2="392" stroke="var(--msg)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowM)"/>
+              <text x="573" y="385" text-anchor="middle" style="fill:var(--msg)">send</text>
+            </g>
+            <g class="fl" id="aPoll">
+              <line x1="679" y1="362" x2="679" y2="341" stroke="var(--msg)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowM)"/>
+              <text x="688" y="356" style="fill:var(--msg)">poll</text>
+            </g>
+            <g class="fl" id="aInv">
+              <line x1="679" y1="278" x2="679" y2="259" stroke="var(--msg)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowM)"/>
+              <text x="688" y="273" style="fill:var(--msg)">invoice PDF</text>
+            </g>
+            <g class="fl" id="aDlq">
+              <line x1="679" y1="421" x2="679" y2="447" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="5 3" marker-end="url(#arrowR)"/>
+              <text x="688" y="440" style="fill:var(--bad)">after 3 tries</text>
+            </g>
+          </g>
+        </g>
+
+        <!-- Step 9: secrets, keys and the monitoring strip -->
+        <g data-step="9">
+          <g class="fl" id="nSec">
+            <rect x="600" y="556" width="158" height="64" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+            <text x="612" y="576" font-size="12" font-weight="700" style="fill:var(--bad)">Secrets Manager</text>
+            <text x="612" y="591" font-size="10.5" style="fill:var(--muted)">database password</text>
+            <text x="612" y="610" font-size="10.5" style="fill:var(--muted)"><tspan font-size="12" font-weight="700" style="fill:var(--bad)">KMS</tspan> · encryption keys</text>
+          </g>
+          <rect x="42" y="678" width="716" height="70" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <text x="54" y="695" font-size="11" font-weight="700" style="fill:var(--dc);letter-spacing:.05em">MONITORING<tspan font-weight="400" style="fill:var(--muted);letter-spacing:0"> — every part above sends its metrics and logs here</tspan></text>
+          <g class="fl" id="nCW">
+            <rect x="54" y="703" width="186" height="38" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+            <text x="64" y="719" font-size="12" font-weight="700">CloudWatch</text>
+            <text x="64" y="734" font-size="10.5" style="fill:var(--muted)">metrics · logs · alarms</text>
+          </g>
+          <g class="fl" id="aAlarm">
+            <line x1="242" y1="724" x2="283" y2="724" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+            <text x="262" y="716" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:var(--dc)">alarm</text>
+          </g>
+          <g class="fl" id="nSNS">
+            <rect x="288" y="703" width="150" height="38" rx="6" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <text x="298" y="719" font-size="12" font-weight="700">SNS topic</text>
+            <text x="298" y="734" font-size="10.5" style="fill:var(--muted)">→ on-call engineer</text>
+          </g>
+          <g class="fl" id="nTrail">
+            <rect x="462" y="703" width="140" height="38" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+            <text x="472" y="719" font-size="12" font-weight="700">CloudTrail</text>
+            <text x="472" y="734" font-size="10.5" style="fill:var(--muted)">every API call</text>
+          </g>
+          <g class="fl" id="aTrail">
+            <line x1="604" y1="722" x2="641" y2="722" stroke="var(--dc)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowD)"/>
+          </g>
+          <g class="fl" id="nLog">
+            <rect x="646" y="703" width="104" height="38" rx="6" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+            <text x="655" y="719" font-size="11.5" font-weight="700">S3 log archive</text>
+            <text x="655" y="734" font-size="10.5" style="fill:var(--muted)">separate account</text>
+          </g>
+        </g>
+
+        <!-- Step 10: the second Region -->
+        <g data-step="10">
+          <rect x="788" y="166" width="268" height="590" rx="8" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="800" y="188" font-size="13.5" font-weight="700" style="fill:var(--region)">DR Region — ap-southeast-1</text>
+          <text x="800" y="204" font-size="11" style="fill:var(--muted)">Singapore · warm standby</text>
+          <rect x="800" y="290" width="244" height="312" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+          <text x="812" y="312" font-size="12.5" font-weight="700" style="fill:var(--vpc)">VPC — 10.1.0.0/16 · 2 AZs</text>
+          <circle cx="1010" cy="290" r="14" fill="var(--vpc)" stroke="var(--vpc-fill)" stroke-width="3"/>
+          <text x="1010" y="293.5" font-size="9" font-weight="700" text-anchor="middle" style="fill:#fff">IGW</text>
+          <rect x="812" y="324" width="220" height="56" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <rect x="812" y="396" width="220" height="70" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <rect x="812" y="482" width="220" height="104" rx="6" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <g font-size="10.5" font-weight="700" text-anchor="end">
+            <text x="1022" y="373" style="fill:var(--pub)">public subnets</text>
+            <text x="1022" y="459" style="fill:var(--priv)">app subnets</text>
+            <text x="1022" y="578" style="fill:var(--priv)">data subnets</text>
+          </g>
+          <g class="fl" id="nDrS3">
+            <rect x="800" y="214" width="190" height="52" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2.5"/>
+            <use href="#s3" x="810" y="225" width="30" height="30"/>
+            <text x="848" y="237" font-size="12.5" font-weight="700">S3 replica buckets</text>
+            <text x="848" y="254" font-size="10.5" style="fill:var(--muted)">Cross-Region Replication</text>
+          </g>
+          <g class="fl" id="nDrALB">
+            <rect x="824" y="332" width="196" height="26" rx="8" fill="var(--vpc)"/>
+            <text x="922" y="350" font-size="12" font-weight="700" text-anchor="middle" style="fill:#fff">Load balancer</text>
+          </g>
+          <g class="fl" id="nDrSvc">
+            <use href="#task" x="824" y="406" width="30" height="30"/>
+            <text x="864" y="419" font-size="12" font-weight="700">ECS service</text>
+            <text x="864" y="435" font-size="10.5" style="fill:var(--muted)">1 task · scales out</text>
+          </g>
+          <g class="fl" id="nDrDB">
+            <use href="#rds" x="822" y="494" width="36" height="36"/>
+            <text x="868" y="508" font-size="12" font-weight="700">RDS read replica</text>
+            <text x="868" y="524" font-size="10.5" style="fill:var(--muted)">promote on failover</text>
+          </g>
+          <text x="800" y="716" font-size="10.5" style="fill:var(--muted)">Also deployed here, small or idle:</text>
+          <text x="800" y="732" font-size="10.5" style="fill:var(--muted)">SQS, Lambda, Redis, CloudWatch</text>
+          <g class="fl" id="aCrr">
+            <line x1="760" y1="238" x2="795" y2="238" stroke="var(--pub)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowG)"/>
+          </g>
+          <g class="fl" id="aDbRep">
+            <polyline points="98,570 76,570 76,668 840,668 840,535" fill="none" stroke="var(--priv)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#arrowI)"/>
+            <text x="850" y="634" font-size="11" font-weight="700" style="fill:var(--priv)">async replication</text>
+          </g>
+          <g class="fl" id="aFail">
+            <g fill="none" stroke="var(--orange)" stroke-width="3" stroke-dasharray="8 5" marker-end="url(#arrowO)">
+              <polyline points="652,102 1010,102 1010,271"/>
+              <line x1="1010" y1="306" x2="1010" y2="328"/>
+              <line x1="839" y1="360" x2="839" y2="402"/>
+              <line x1="839" y1="438" x2="839" y2="490"/>
+            </g>
+            <text x="830" y="95" font-size="11" font-weight="700" text-anchor="middle" style="fill:var(--orange)">only if Mumbai fails</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Compare your drawing with this one. Users look up the name in Route 53 (1), then connect to CloudFront (2), where WAF checks each request. Static files come from the private S3 bucket. Dynamic requests go on to the load balancer and a task, which uses the cache and the database. Each order also goes onto a queue for the worker. The strip at the bottom watches everything, and the Region on the right is a smaller copy kept ready. <b>Solid arrows</b> are live request traffic. <b>Dashed arrows</b> are everything else: the DNS lookup, replication, queued work and the path used only on failover.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Request traffic · tasks, Lambda</span>
+      <span style="--c:var(--vpc)">Route 53, CloudFront, load balancer, NAT</span>
+      <span style="--c:var(--pub)">Public subnets · S3 and its replication</span>
+      <span style="--c:var(--priv)">Private subnets · RDS and its replication</span>
+      <span style="--c:var(--msg)">Redis · queue and queued work</span>
+      <span style="--c:var(--bad)">WAF, Shield · security groups, secrets · dead-letter queue</span>
+      <span style="--c:var(--dc)">DNS lookup · alarm and log delivery</span>
+    </div>
+  </div>
+
+  <h2>3. Explain every arrow</h2>
+  <div class="card">
+    <p>This is today's check. Pick a request or a failure. Before each press of <b>Next</b>, say aloud what happens next and why; then check. With the reference diagram revealed, the parts for each step light up. Together the six traces use every arrow in the drawing, and each step names the day that taught it.</p>
+    <div class="seg" id="scBtns"></div>
+    <div class="trace-head">
+      <button id="trPrev" disabled>← Back</button>
+      <button class="primary" id="trNext" disabled>Start the trace</button>
+      <button id="trReset" disabled>Reset</button>
+      <span class="n" id="trN"></span>
+    </div>
+    <p class="result" id="trMsg">Choose a trace.</p>
+  </div>
+
+  <h2>4. Complete the design</h2>
+  <div class="card">
+    <p>Choose the right value for each blank, then check.</p>
+    <div class="fill" id="fill"></div>
+    <div class="row-actions"><button class="primary" id="fillCheck">Check answers</button><span id="fillScore"></span></div>
+  </div>
+
+  <h2>5. Spot the mistakes</h2>
+  <div class="card">
+    <p>A colleague sends you this design for review. Tick every line that is <b>wrong</b>, then check.</p>
+    <ul class="mistakes" id="mistakes"></ul>
+    <div class="row-actions"><button class="primary" id="mistCheck">Check</button><span id="mistScore"></span></div>
+  </div>
+
+  <h2>The 30 days in one table</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Part of the drawing</th><th>Days</th><th>The one idea to keep</th></tr>
+      <tr><td>Region, VPC, AZs, subnets, gateways</td><td><a href="../day-01/index.html">1</a>–<a href="../day-06/index.html">6</a></td><td>Draw outside-in. A subnet is public because of its route to the Internet Gateway. One NAT Gateway per AZ.</td></tr>
+      <tr><td>Security groups</td><td><a href="../day-05/index.html">5</a>, <a href="../day-10/index.html">10</a></td><td>Each tier accepts traffic only from the security group in front of it.</td></tr>
+      <tr><td>Load balancer and app tier</td><td><a href="../day-08/index.html">8</a>, <a href="../day-09/index.html">9</a>, <a href="../day-18/index.html">18</a></td><td>One address, two AZs, healthy targets only. Tasks keep no state, so any of them can be replaced.</td></tr>
+      <tr><td>Database and cache</td><td><a href="../day-10/index.html">10</a>, <a href="../day-11/index.html">11</a></td><td>The standby is synchronous and exists for failure. A replica is asynchronous and serves reads or another Region.</td></tr>
+      <tr><td>S3 and CloudFront</td><td><a href="../day-12/index.html">12</a></td><td>Private bucket, read only through CloudFront.</td></tr>
+      <tr><td>Route 53</td><td><a href="../day-13/index.html">13</a></td><td>DNS answers the lookup; it does not carry the request. Failover records depend on health checks.</td></tr>
+      <tr><td>Queue and worker</td><td><a href="../day-15/index.html">15</a>, <a href="../day-16/index.html">16</a></td><td>The customer waits only for what must happen now. The rest goes onto a queue.</td></tr>
+      <tr><td>WAF, roles, secrets, keys</td><td><a href="../day-25/index.html">25</a></td><td>Stop attacks at the edge. Roles in place of access keys. Encrypt in transit and at rest.</td></tr>
+      <tr><td>Monitoring strip</td><td><a href="../day-26/index.html">26</a></td><td>CloudWatch watches how the system behaves; CloudTrail records who did what.</td></tr>
+      <tr><td>Second Region</td><td><a href="../day-28/index.html">28</a></td><td>Choose the strategy by how much downtime and data loss the business accepts, then pay for that much and no more.</td></tr>
+      <tr><td>Log archive account</td><td><a href="../day-29/index.html">29</a></td><td>An account is the strongest wall. Logs live where the people being logged cannot delete them.</td></tr>
+    </table>
+  </div>
+
+  <h2>6. Explain it out loud</h2>
+  <p class="lead">Answer each one aloud in a few sentences before opening it.</p>
+  <details><summary>Why are some arrows solid and some dashed?</summary><p>A solid arrow carries the customer's request, and the customer waits for it. A dashed arrow is not on that path: the DNS lookup that comes before the request, copies made in the background, work taken from the queue later, and the route that is used only after a failover.</p></details>
+  <details><summary>Why is the load balancer in public subnets while the tasks are in private ones?</summary><p>Only the load balancer has to be reachable from outside, so only it gets a route from the Internet Gateway. The tasks have no public address and accept port 8080 from <code>alb-sg</code> alone. To reach the internet themselves they go out through a NAT Gateway, which does not let connections in.</p></details>
+  <details><summary>Why is there a queue between the app and the worker, instead of a direct call?</summary><p>The customer gets an answer as soon as the order is saved. If the worker or the mail service is down, orders are still accepted and the messages wait. A sudden spike fills the queue instead of overloading the worker. Failed messages are retried, and after three tries set aside in the dead-letter queue.</p></details>
+  <details><summary>The shop has no visitors at 3 a.m. What still costs money?</summary><p>Everything billed by the hour: two NAT Gateways, the load balancer, four tasks, the RDS primary and standby, two Redis nodes, and in Singapore a load balancer, one task, the read replica and a small Redis node. Small fixed charges also continue: the WAF web ACL, the secret, the KMS key and the hosted zone. Lambda, SQS, CloudFront and Route 53 queries cost almost nothing without traffic. S3 charges for what is stored.</p></details>
+  <details><summary>A sale brings ten times the traffic. What grows by itself, and what must you prepare?</summary><p>CloudFront and the load balancer grow by themselves. The ECS service adds tasks when its scaling policy sees the load. Orders pile up in the queue and Lambda runs more copies of the worker. The RDS primary is the limit, because every write goes to one instance: raise the cache hit rate, add read replicas, and move to a larger instance before the sale, not during it.</p></details>
+  <details><summary>How much time and data do you lose when an AZ fails? And when the Region fails?</summary><p>An AZ: one to two minutes of failed writes while RDS fails over, and no data, because the standby is synchronous. The Region: minutes, for health checks to fail, DNS answers to expire, the replica to be promoted and the app tier to scale out; and the last few seconds of writes, because cross-Region replication is asynchronous. The time is the RTO and the data is the RPO.</p></details>
+  <details><summary>The company wants a smaller bill. What do you remove first, and what do you give up?</summary><p>Start with the second Region. Turn warm standby into pilot light: keep the read replica and the S3 copies, but run no tasks until a disaster. Recovery then takes longer, because the app tier must start from nothing. Do not remove the Multi-AZ standby or the second NAT Gateway: an AZ failure is far more likely than a Region failure.</p></details>
+  <details><summary>Is anything in this drawing still a single point of failure?</summary><p>No single AZ, and no single Region. What remains is not infrastructure. A bad deployment reaches every task, and a wrong <code>DELETE</code> is replicated to every copy, so you still need staged rollouts, backups and point-in-time recovery. The database promotion in Singapore is a manual step, so it fails if nobody has practised it.</p></details>
+
+  <div class="next">
+    <b>After Day 30.</b> You can now draw a production architecture from a blank page and say what every box and arrow is for. Redraw this one next week without opening the reference. Then choose a reference architecture from the <a href="https://aws.amazon.com/architecture/">AWS Architecture Center</a>, compare it with your own drawing, and work out why each difference is there. The full list of days is in the <a href="../README.md">30-day plan</a>.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Network, outside-in.</b> Region, VPC, two AZs, then three rows of subnets: public on top, app in the middle, data at the bottom, each with its CIDR. Add the Internet Gateway and one NAT Gateway per AZ. Leave room above the Region, to its right, and below the VPC.",
+    "<b>Step 2 — Load balancer</b> across both public subnets.",
+    "<b>Step 3 — App tier.</b> One ECS service on Fargate, with tasks in both app subnets. An Auto Scaling group of EC2 instances would be drawn in the same place.",
+    "<b>Step 4 — Data tier.</b> RDS primary with a synchronous standby in the other AZ, and ElastiCache Redis with a replica node in the other AZ.",
+    "<b>Step 5 — Static content and the edge.</b> A private S3 bucket inside the Region but outside the VPC. CloudFront outside the Region, with Shield and WAF on it.",
+    "<b>Step 6 — Users and DNS.</b> Route 53, also outside the Region, with two records: <code>www</code> points at CloudFront, <code>app</code> points at the load balancer. The lookup is arrow 1, and it is dashed.",
+    "<b>Step 7 — Request paths.</b> Solid arrows, each with its port: users to CloudFront, CloudFront to S3 or to the load balancer, then a task, then the cache or the database. Write the security group chain beside them.",
+    "<b>Step 8 — Work that can wait.</b> The tasks send each order to an SQS queue. A Lambda function polls it, writes the invoice to S3 and sends the email. A dead-letter queue takes messages that fail three times. All dashed.",
+    "<b>Step 9 — Protect and watch.</b> Secrets Manager and KMS beside the data they protect. Under everything, a monitoring strip: CloudWatch alarms notify through SNS, and CloudTrail delivers to a log archive bucket.",
+    "<b>Step 10 — Second Region.</b> A smaller copy in Singapore: its own VPC with a different CIDR, a load balancer, one task, an RDS read replica and replica buckets. Dashed arrows carry the replication, and one dashed path carries requests only if Mumbai fails."
+  ];
+  window.REVIEW = {
+    target: 1800,
+    items: [
+      "Route 53 outside the Region, with both records: <code>www</code> alias and <code>app</code> failover",
+      "CloudFront outside the Region, with WAF and Shield on it",
+      "DNS lookup arrow drawn separately from the request arrow",
+      "Private S3 bucket inside the Region but outside the VPC, linked by OAC",
+      "Region, VPC with its CIDR, two Availability Zones",
+      "Three rows of subnets: public, app, data, with six CIDRs",
+      "Internet Gateway, and a NAT Gateway in each public subnet",
+      "Load balancer drawn across both public subnets",
+      "ECS service (or Auto Scaling group) box crossing the AZ boundary, with its count",
+      "RDS primary and standby in different AZs, labelled sync",
+      "ElastiCache with a node in each AZ",
+      "Security group chain written: <code>alb-sg</code> → <code>app-sg</code> → <code>db-sg</code>",
+      "Ports on the request path: 443, 8080, 6379, 3306",
+      "SQS queue outside the VPC, with an arrow from the app tier",
+      "Lambda worker that polls the queue",
+      "Dead-letter queue, labelled with the number of tries",
+      "What the worker produces, drawn as an arrow: the invoice to S3",
+      "Secrets Manager and KMS noted",
+      "Monitoring strip with CloudWatch and an alarm → SNS arrow",
+      "CloudTrail → log archive bucket",
+      "Second Region with its own VPC, load balancer and app tier",
+      "Cross-Region RDS read replica, dashed, labelled async",
+      "S3 replication to a bucket in the second Region, dashed",
+      "Failover path marked as used only on failover"
+    ],
+    blanks: [
+      ["Record that points <code>example.com</code>, the top of the zone, at CloudFront", ["CNAME", "Alias A record", "A record with fixed IPs"], 1],
+      ["Where WAF is attached in this design", ["The NAT Gateways", "The RDS database", "The CloudFront distribution"], 2],
+      ["Source that <code>alb-sg</code> allows on port 443", ["CloudFront only", "0.0.0.0/0", "app-sg"], 0],
+      ["Subnets the ECS tasks run in", ["Public subnets", "Private app subnets", "Data subnets"], 1],
+      ["Replication from the RDS primary to its Multi-AZ standby", ["Asynchronous", "Nightly snapshot", "Synchronous"], 2],
+      ["Replication from the RDS primary to the replica in Singapore", ["Asynchronous", "Synchronous", "None; it is restored from a backup"], 0],
+      ["What the app does with work the customer need not wait for", ["Runs it before answering", "Sends a message to the SQS queue", "Writes it to CloudFront"], 1],
+      ["How the Lambda worker gets its messages", ["SQS pushes them", "The load balancer forwards them", "Lambda polls the queue"], 2],
+      ["Where a message goes after failing three times", ["Back to the front of the queue", "The dead-letter queue", "It is deleted"], 1],
+      ["What tells you who deleted a security group rule", ["CloudTrail", "CloudWatch metrics", "VPC Flow Logs"], 0],
+      ["What sends dynamic requests to Singapore when Mumbai fails", ["The NAT Gateway", "A Route 53 failover record with a health check", "RDS Multi-AZ"], 1],
+      ["Smallest sensible number of tasks across two AZs", ["0", "1", "2"], 2]
+    ],
+    lines: [
+      ["WAF is attached to the NAT Gateways to filter incoming requests.", true, "Wrong. WAF attaches to CloudFront, an Application Load Balancer or API Gateway. A NAT Gateway only carries outbound traffic from private subnets."],
+      ["<code>alb-sg</code> allows 443 from <code>0.0.0.0/0</code>, although all users come through CloudFront.", true, "Wrong. Anyone who finds the load balancer's address can then skip CloudFront and WAF. Allow 443 from CloudFront only, using its managed prefix list."],
+      ["The tasks run in private subnets and reach the internet through the NAT Gateway of their own AZ.", false, "Correct. No public addresses, and an AZ failure does not cut off the other AZ."],
+      ["After saving an order, the app builds the invoice and sends the email, then answers the customer.", true, "Wrong. The customer waits for work that can be done later, and a mail outage breaks checkout. Put a message on the queue and answer at once."],
+      ["The order worker checks whether an order ID was already processed before it sends an invoice.", false, "Correct. SQS can deliver a message more than once, so the worker must be idempotent."],
+      ["The carts are kept in the memory of each task, because that is fastest.", true, "Wrong. Tasks are replaced and added at any time, and the next request may reach a different task. Keep carts and sessions in ElastiCache or the database."],
+      ["The database password is an environment variable in the task definition.", true, "Wrong. Anyone who can read the task definition can read the password. Store it in Secrets Manager and let the task fetch it with its role."],
+      ["The replica in Singapore replicates synchronously, so no order can be lost if the Region fails.", true, "Wrong. Cross-Region read replicas are asynchronous. The last few seconds of writes can be missing; that is the RPO."],
+      ["S3 Cross-Region Replication is on, with versioning enabled on both buckets.", false, "Correct. Replication needs versioning on the source and on the destination."],
+      ["The design is called warm standby, and the second Region holds only backups.", true, "Wrong. That is backup and restore. Warm standby means a small copy of the whole system is already running there."],
+      ["CloudTrail delivers to a bucket in the application account, so the app team can manage it.", true, "Wrong. Whoever takes over that account could delete the evidence. Deliver to a bucket in a separate log archive account."],
+      ["A CloudWatch alarm watches the depth of the dead-letter queue and notifies through SNS.", false, "Correct. A message in that queue means an order was not processed, and someone must look."]
+    ]
+  };
+</script>
+<script src="../assets/steps.js"></script>
+<script src="../assets/review.js"></script>
+<script>
+  const el = id => document.getElementById(id);
+  const svg = el("diagram");
+
+  // Last day: there is no "next week" to be ready for.
+  const baseScore = el("checklist").onchange;
+  el("checklist").onchange = () => {
+    baseScore();
+    el("score").innerHTML = el("score").innerHTML.replace("you are ready for the next week", "redraw it once more without the reference");
+  };
+
+  // ---- Explain every arrow: [ids to light, explanation]. Ids starting with "a" are arrows, "n" are parts. ----
+  const day = n => `<a href="../day-${String(n).padStart(2, "0")}/index.html">Day ${n}</a>`;
+  const see = (...d) => ` See ${d.length > 2 ? d.slice(0, -1).map(day).join(", ") + " and " + day(d[d.length - 1]) : d.map(day).join(" and ")}.`;
+  const IN = ["nUsers", "aUser", "nCF", "nWAF"];
+  const TASKS = ["nSvc", "nTaskA", "nTaskB"];
+  const traces = [
+    {
+      name: "Load the home page",
+      ask: "A customer in Delhi types <code>www.example.com</code>. What is the first thing that happens?",
+      steps: [
+        [["nUsers", "aDns", "nR53"], "<b>DNS lookup.</b> The browser's resolver asks Route 53 for <code>www.example.com</code>. An alias record answers with CloudFront addresses. Route 53 only answers the question; the request itself never passes through it." + see(13)],
+        [IN, "<b>HTTPS to the nearest edge.</b> The browser connects to a CloudFront edge location on port 443. The certificate comes from ACM, requested in us-east-1. Shield absorbs floods of traffic and WAF checks the request against its rules here, before anything reaches Mumbai." + see(12, 25)],
+        [["nCF", "aStatic", "nS3"], "<b>Static files.</b> The page, the scripts and the product images are answered from the edge cache. On a miss, CloudFront fetches the file from the private S3 bucket with a request signed by origin access control, and keeps a copy. Nothing in the VPC is involved." + see(12)]
+      ]
+    },
+    {
+      name: "Open a product page",
+      ask: "The page's script calls <code>GET /api/products/42</code>. The answer changes with price and stock, so it cannot come from S3. Where does CloudFront send it?",
+      steps: [
+        [IN, "<b>The same front door.</b> The call goes to the same CloudFront edge, and WAF checks it. CloudFront has a rule for the path <code>/api/*</code>: do not cache, forward to the second origin." + see(12, 25)],
+        [["nCF", "aDyn", "nALB"], "<b>Into the VPC.</b> The second origin is <code>app.example.com</code>, which Route 53 resolves to the Mumbai load balancer. The request enters through the Internet Gateway on port 443. The load balancer has a node in each public subnet, and <code>alb-sg</code> accepts 443 from CloudFront only." + see(8, 25)],
+        [["nALB", "aAlbA", "aAlbB", ...TASKS], "<b>To a task.</b> The load balancer picks a healthy task in either AZ and sends the request on port 8080. The tasks sit in private subnets with no public address, and <code>app-sg</code> accepts 8080 from <code>alb-sg</code> only." + see(18)],
+        [[...TASKS, "aCache", "nRedisP"], "<b>Cache first.</b> The task asks ElastiCache Redis for the product on port 6379. On a hit the answer is back in about a millisecond and the database is not touched." + see(11)],
+        [[...TASKS, "aSql", "nRdsP", "nSec"], "<b>Database on a miss.</b> The task queries the RDS primary on port 3306; <code>db-sg</code> accepts that from <code>app-sg</code> only. It then stores the answer in Redis with an expiry time. The task's code fetched the database password from Secrets Manager at start-up, which its task role allows." + see(10, 25)],
+        [["nUsers", "aUser", "nCF", "aDyn", "nALB", "aAlbA", "aAlbB", ...TASKS], "<b>The answer returns</b> along the same path: task → load balancer → CloudFront → browser. Security groups are stateful, so no rule is needed for the way back." + see(5)]
+      ]
+    },
+    {
+      name: "Place an order",
+      ask: "The customer presses <b>Buy</b>. The shop must save the order, build an invoice and send an email. Which of these does the customer wait for?",
+      steps: [
+        [[...IN, "aDyn", "nALB", "aAlbA", "aAlbB", ...TASKS], "<b><code>POST /api/orders</code></b> takes the same path as any dynamic request: CloudFront and WAF, the load balancer, then a task." + see(8, 18)],
+        [[...TASKS, "aSql", "nRdsP", "aSync", "nRdsS"], "<b>Save the order.</b> The task writes the order to the RDS primary. RDS copies the write to the standby in the other AZ synchronously, before it confirms. A confirmed order is therefore stored in two AZs." + see(10)],
+        [[...TASKS, "aSend", "nSQS", "nNatA", "nNatB"], "<b>Queue the rest.</b> The task sends one small message, the order ID, to the SQS queue and answers the customer: order received. The customer has waited for the database write and nothing else. The task reaches SQS through an interface endpoint, or through its NAT Gateway." + see(16, 24)],
+        [["nSQS", "aPoll", "nLambda"], "<b>The worker picks it up.</b> Lambda polls the queue and runs the worker function with a batch of messages. When the function succeeds, the messages are deleted. If orders arrive faster than they are processed, they wait in the queue and none are lost." + see(16)],
+        [["nLambda", "aInv", "nS3"], "<b>Invoice and email.</b> The worker builds the invoice PDF, saves it to S3 and sends the confirmation email. Its execution role allows reading the queue, writing the invoice to the bucket, sending the email and writing its logs, and nothing else. SQS can deliver a message twice, so the worker checks the order ID first and never sends two invoices." + see(15, 16)],
+        [["nSQS", "aDlq", "nDLQ", "nCW", "aAlarm", "nSNS"], "<b>If the worker keeps failing.</b> After three failed tries SQS moves the message to the dead-letter queue, so one bad order cannot block the others. A CloudWatch alarm on that queue's depth notifies the on-call engineer through SNS." + see(16, 26)]
+      ]
+    },
+    {
+      name: "AZ a fails",
+      ask: "Every subnet in ap-south-1a goes dark at once. Go through the tiers from top to bottom. What does each one do?",
+      steps: [
+        [["nALB", "aAlbB", "nSvc", "nTaskB"], "<b>Load balancer.</b> Its node in AZ b keeps serving, and health checks stop it sending requests to targets in AZ a. This is why it sits in two public subnets." + see(8)],
+        [["nSvc", "nTaskB"], "<b>App tier.</b> The ECS service wants four tasks and sees two. It starts replacements in AZ b and registers them with the load balancer. Until they are ready, two tasks carry all the traffic, so half the service must be able to cope." + see(18)],
+        [["nRdsS", "aSync"], "<b>Database.</b> RDS promotes the standby in AZ b and points the same endpoint at it. Writes fail for about one to two minutes. No confirmed order is lost, because the standby was kept in sync." + see(10)],
+        [["nRedisR", "aRedisRep"], "<b>Cache.</b> ElastiCache promotes the replica node in AZ b. For a moment cache lookups fail and the tasks read from the database instead, which is slower but correct." + see(11)],
+        [["nNatB", "nTaskB"], "<b>Outbound access.</b> Tasks in AZ b go out through NAT Gateway B, using their own route table, so nothing changes for them. With one shared NAT Gateway in AZ a they would now be cut off." + see(6)],
+        [["nR53", "nCF", "nWAF", "nS3", "nSQS", "nLambda", "nDLQ", "nCW", "nSNS"], "<b>Everything outside the VPC.</b> S3, SQS, Lambda and CloudWatch are regional services that already run across several AZs. Route 53 and CloudFront are global. You do nothing for any of them." + see(14, 15, 16)]
+      ]
+    },
+    {
+      name: "The Mumbai Region fails",
+      ask: "All of ap-south-1 is unreachable, so Multi-AZ cannot help. What brings the shop back, and what is lost?",
+      steps: [
+        [["nR53", "nDrALB"], "<b>Route 53 notices.</b> The failover alias record has Evaluate target health turned on, so Route 53 sees that the Mumbai load balancer is unhealthy without having to reach it. The record for <code>app.example.com</code> now answers with the Singapore load balancer, the SECONDARY record." + see(13)],
+        [[...IN, "aFail", "nDrALB"], "<b>CloudFront follows.</b> Users still connect to the same edge locations. When the DNS answer it holds expires, CloudFront resolves its origin name again and sends dynamic requests to Singapore. Route 53 and CloudFront are global, so they did not fail with the Region." + see(13)],
+        [["aFail", "nDrALB", "nDrSvc"], "<b>Warm standby.</b> A small copy of the app tier was already running in Singapore: the same task definition, one task. Raise the desired count and it carries the full load within minutes." + see(28)],
+        [["aDbRep", "nDrDB", "aFail", "nDrSvc"], "<b>Database.</b> The cross-Region read replica is promoted to a standalone primary. You or a runbook must do this; it is not automatic. Replication was asynchronous, so the last few seconds of orders may be missing. That gap is the RPO." + see(11, 28)],
+        [["aCrr", "nDrS3", "nCF"], "<b>Files.</b> Cross-Region Replication has already copied almost all of the static files and invoices to the Singapore buckets; the newest objects may still be on the way. With an origin group, a CloudFront setting that names a second origin, CloudFront reads static files from the replica bucket when the first bucket does not answer. Nothing is copied between Regions unless you set it up." + see(12, 28)],
+        [["nDrS3", "nDrALB", "nDrSvc", "nDrDB", "aFail"], "<b>What it cost.</b> Minutes of downtime, the RTO: the health checks, the DNS expiry, the promotion and the scale-out. Seconds of data, the RPO. Messages still in the Mumbai queue stay there until the Region returns, for as long as the queue keeps them, and the cache starts empty." + see(28)]
+      ]
+    },
+    {
+      name: "An alarm at 3 a.m.",
+      ask: "At night, half of the dynamic requests start to fail. Nobody is watching a screen. How does anyone find out, and how do they find the cause?",
+      steps: [
+        [["nCW", "nALB", ...TASKS, "nRdsP", "nSQS", "nLambda"], "<b>Metrics and logs.</b> Every part reports to CloudWatch: the load balancer's error count and latency, CPU of the tasks, database connections, queue depth. The log lines of the tasks and of the worker go to CloudWatch Logs." + see(26)],
+        [["nCW", "aAlarm", "nSNS"], "<b>Alarm.</b> The load balancer's 5xx errors stay above the threshold for three minutes in a row, and the alarm changes to ALARM. It publishes to an SNS topic, which messages the on-call engineer." + see(26)],
+        [["nTrail", "aTrail", "nLog"], "<b>Who changed what?</b> CloudTrail holds every API call. It shows that a security group rule was removed at 02:13, and by whom. The trail delivers to an S3 bucket in a separate log archive account, where nobody from the application account can delete it." + see(26, 29)],
+        [["nCW", ...TASKS], "<b>An alarm with no human.</b> When the average CPU of the tasks rises above its target, a target tracking policy adds tasks; when it falls, the policy removes them. The same metrics that wake an engineer also drive scaling." + see(9)]
+      ]
+    }
+  ];
+  let sc = -1, ti = -1;
+  function paintTrace() {
+    const t = traces[sc];
+    const on = t && ti >= 0 ? t.steps[ti][0] : [];
+    if (on.length) el("btnAll").click();   // lighting needs the whole diagram, not a half-built one
+    svg.classList.toggle("lit", on.length > 0);
+    svg.querySelectorAll(".fl").forEach(g => g.classList.toggle("on", on.includes(g.id)));
+    [...el("scBtns").children].forEach((b, j) => b.classList.toggle("on", j === sc));
+    el("trMsg").innerHTML = !t ? "Choose a trace." : ti < 0 ? t.ask : t.steps[ti][1];
+    el("trN").textContent = t && ti >= 0 ? `Step ${ti + 1} of ${t.steps.length}` : "";
+    el("trPrev").disabled = !t || ti < 0;
+    el("trNext").disabled = !t || ti >= t.steps.length - 1;
+    el("trNext").textContent = !t || ti < 0 ? "Start the trace" : ti >= t.steps.length - 1 ? "End of trace" : "Next →";
+    el("trReset").disabled = !t;
+  }
+  traces.forEach((t, i) => {
+    const b = document.createElement("button");
+    b.textContent = t.name;
+    b.onclick = () => { sc = i; ti = -1; paintTrace(); };
+    el("scBtns").appendChild(b);
+  });
+  el("trNext").onclick = () => { if (traces[sc] && ti < traces[sc].steps.length - 1) ti++; paintTrace(); };
+  el("trPrev").onclick = () => { if (ti >= 0) ti--; paintTrace(); };
+  el("trReset").onclick = () => { sc = -1; ti = -1; paintTrace(); };
+  // Building the diagram step by step puts a running trace back to its start.
+  ["btnBuild", "btnPrev", "btnNext"].forEach(id => el(id).addEventListener("click", () => { if (ti >= 0) { ti = -1; paintTrace(); } }));
+  paintTrace();
+</script>
+</body>
+</html>
