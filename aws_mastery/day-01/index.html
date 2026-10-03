@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 1 — IAM in Depth</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .tool { transition: opacity .25s; }
+  #diagram.lit .tool { opacity: .16; }
+  #diagram.lit .tool.on { opacity: 1; }
+  #diagram.lit .tool.hot > rect { stroke-width: 4.5; }
+  .sim .seg b { min-width: 132px; font-size: 14px; }
+  .sim .seg { margin-bottom: 8px; }
+  .sim .calc { margin: 16px 0 12px; }
+  .sim .calc .big { font-size: 22px; }
+  .sim tr.decider td { background: var(--bg); font-weight: 600; }
+  .sim .pill { white-space: nowrap; }
+  .sim code.err { display: block; margin-top: 8px; padding: 6px 8px; white-space: normal; word-break: break-word; }
+  td .pill { white-space: nowrap; }
+  h3.sub { margin: 18px 0 8px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><span></span><a href="../README.md">30-day plan</a><a href="../day-02/index.html">Day 2 →</a></nav>
+  <header>
+    <div class="tag">Day 1 of 30 · Week 1 — Identity, Networking, Compute, Storage</div>
+    <h1>IAM in Depth</h1>
+    <p class="lead">You already write policies and attach roles. Today is about what AWS does with them. Every request passes the same checks in the same order, and six kinds of policy take part. You will see why one bucket policy behaves differently for a caller in the same account and a caller in another account, what happens inside <code>AssumeRole</code>, and how to read an <code>AccessDenied</code> message so that you open the right policy first.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 700" role="img" aria-label="Two panels. Panel A shows one request passing seven checks from left to right: an explicit Deny in any policy, resource control policies, service control policies, the resource-based policy, the identity-based policy, the permissions boundary and the session policy. Each check has an exit down to Deny. The last check leads to Allow. A dashed line from the resource-based policy goes straight to Allow: in the same account, a resource-based policy that names the caller can allow the request without the identity-based policy. Panel B shows role assumption across accounts: a role in account A calls AssumeRole on AWS STS, STS checks the caller's identity policy and the trust policy of the role in account B, returns temporary credentials, and the session then calls a bucket in account B.">
+        <defs>
+          <marker id="mDc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+          <marker id="mBad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <marker id="mPub" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--pub)"/></marker>
+          <marker id="mOr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+        </defs>
+
+        <!-- Panel A -->
+        <rect x="10" y="14" width="980" height="296" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="30" y="36" font-size="14" font-weight="700">A · One request, seven checks <tspan font-size="11.5" font-weight="400" style="fill:var(--muted)">· the first check that fails ends the evaluation</tspan></text>
+
+        <!-- Step 1: the request -->
+        <g data-step="1">
+          <g class="tool" id="evReq">
+            <rect x="30" y="46" width="940" height="48" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="2"/>
+            <text x="42" y="65" font-size="12.5" font-weight="700" style="fill:var(--az)">The request <tspan font-size="11" font-weight="400" style="fill:var(--muted)">· signed by the caller, authorised again on every call. Nothing is allowed until a policy allows it.</tspan></text>
+            <text x="42" y="83" font-size="10.5" class="mono">principal = assumed-role/app/i-0ab12   action = s3:GetObject   resource = arn:aws:s3:::reports/q3.csv   + condition keys</text>
+          </g>
+        </g>
+
+        <!-- Step 2: explicit deny, and the two outcomes -->
+        <g data-step="2">
+          <g class="tool" id="evDeny">
+            <line x1="92" y1="94" x2="92" y2="126" stroke="var(--dc)" stroke-width="2" marker-end="url(#mDc)"/>
+            <rect x="31" y="128" width="122" height="100" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+            <circle cx="47" cy="145" r="9" fill="var(--bad)"/><text x="47" y="149" font-size="11" font-weight="700" text-anchor="middle" style="fill:var(--card)">1</text>
+            <text x="61" y="149" font-size="10" style="fill:var(--muted)">all policy types</text>
+            <text x="41" y="170" font-size="12" font-weight="700">Explicit Deny</text>
+            <text x="41" y="185" font-size="12" font-weight="700">anywhere?</text>
+            <text x="41" y="204" font-size="10" style="fill:var(--muted)">looked for in every</text>
+            <text x="41" y="218" font-size="10" style="fill:var(--muted)">policy, before Allow</text>
+            <line x1="47" y1="228" x2="47" y2="260" stroke="var(--bad)" stroke-width="2" marker-end="url(#mBad)"/>
+            <text x="54" y="248" font-size="9.5" style="fill:var(--bad)">Deny found</text>
+          </g>
+          <g class="tool" id="outDeny">
+            <rect x="31" y="262" width="846" height="34" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+            <text x="44" y="284" font-size="12.5" font-weight="700" style="fill:var(--bad)">Deny <tspan font-size="11" font-weight="400" style="fill:var(--muted)">· explicit (a Deny statement matched) or implicit (nothing allowed it). The error names the policy type.</tspan></text>
+          </g>
+          <g class="tool" id="outAllow">
+            <rect x="889" y="262" width="80" height="34" rx="8" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+            <text x="929" y="284" font-size="12.5" font-weight="700" text-anchor="middle" style="fill:var(--pub)">Allow</text>
+          </g>
+        </g>
+
+        <!-- Step 3: organisation limits -->
+        <g data-step="3">
+          <g class="tool" id="evRcp">
+            <line x1="153" y1="178" x2="165" y2="178" stroke="var(--dc)" stroke-width="2" marker-end="url(#mDc)"/>
+            <rect x="167" y="128" width="122" height="100" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2"/>
+            <circle cx="183" cy="145" r="9" fill="var(--region)"/><text x="183" y="149" font-size="11" font-weight="700" text-anchor="middle" style="fill:var(--card)">2</text>
+            <text x="197" y="149" font-size="10" style="fill:var(--muted)">limit · from the org</text>
+            <text x="177" y="170" font-size="12" font-weight="700">RCP</text>
+            <text x="177" y="185" font-size="12" font-weight="700">resource control</text>
+            <text x="177" y="204" font-size="10" style="fill:var(--muted)">on the resources</text>
+            <text x="177" y="218" font-size="10" style="fill:var(--muted)">of an account</text>
+            <line x1="183" y1="228" x2="183" y2="260" stroke="var(--bad)" stroke-width="2" marker-end="url(#mBad)"/>
+            <text x="190" y="248" font-size="9.5" style="fill:var(--bad)">no Allow</text>
+          </g>
+          <g class="tool" id="evScp">
+            <line x1="289" y1="178" x2="301" y2="178" stroke="var(--dc)" stroke-width="2" marker-end="url(#mDc)"/>
+            <rect x="303" y="128" width="122" height="100" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2"/>
+            <circle cx="319" cy="145" r="9" fill="var(--region)"/><text x="319" y="149" font-size="11" font-weight="700" text-anchor="middle" style="fill:var(--card)">3</text>
+            <text x="333" y="149" font-size="10" style="fill:var(--muted)">limit · from the org</text>
+            <text x="313" y="170" font-size="12" font-weight="700">SCP</text>
+            <text x="313" y="185" font-size="12" font-weight="700">service control</text>
+            <text x="313" y="204" font-size="10" style="fill:var(--muted)">on the principals</text>
+            <text x="313" y="218" font-size="10" style="fill:var(--muted)">of an account</text>
+            <line x1="319" y1="228" x2="319" y2="260" stroke="var(--bad)" stroke-width="2" marker-end="url(#mBad)"/>
+            <text x="326" y="248" font-size="9.5" style="fill:var(--bad)">no Allow</text>
+          </g>
+        </g>
+
+        <!-- Step 4: resource-based policy and the direct grant -->
+        <g data-step="4">
+          <g class="tool" id="evRes">
+            <line x1="425" y1="178" x2="437" y2="178" stroke="var(--dc)" stroke-width="2" marker-end="url(#mDc)"/>
+            <rect x="439" y="128" width="122" height="100" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+            <circle cx="455" cy="145" r="9" fill="var(--pub)"/><text x="455" y="149" font-size="11" font-weight="700" text-anchor="middle" style="fill:var(--card)">4</text>
+            <text x="469" y="149" font-size="10" style="fill:var(--muted)">grant</text>
+            <text x="449" y="170" font-size="12" font-weight="700">Resource-based</text>
+            <text x="449" y="185" font-size="12" font-weight="700">policy</text>
+            <text x="449" y="204" font-size="10" style="fill:var(--muted)">on a bucket, queue,</text>
+            <text x="449" y="218" font-size="10" style="fill:var(--muted)">key, or a role (trust)</text>
+            <line x1="455" y1="228" x2="455" y2="260" stroke="var(--bad)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#mBad)"/>
+            <text x="462" y="242" font-size="9.5" style="fill:var(--bad)">no Allow: Deny only</text>
+            <text x="462" y="254" font-size="9.5" style="fill:var(--bad)">if cross-account</text>
+          </g>
+          <g class="tool" id="evBypass">
+            <path d="M500 128 V114 H979 V279 H971" fill="none" stroke="var(--pub)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#mPub)"/>
+            <text x="510" y="109" font-size="10" style="fill:var(--pub)">same account, and the policy names this caller: Allow without check 5</text>
+          </g>
+        </g>
+
+        <!-- Step 5: identity-based policy -->
+        <g data-step="5">
+          <g class="tool" id="evId">
+            <line x1="561" y1="178" x2="573" y2="178" stroke="var(--dc)" stroke-width="2" marker-end="url(#mDc)"/>
+            <rect x="575" y="128" width="122" height="100" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+            <circle cx="591" cy="145" r="9" fill="var(--pub)"/><text x="591" y="149" font-size="11" font-weight="700" text-anchor="middle" style="fill:var(--card)">5</text>
+            <text x="605" y="149" font-size="10" style="fill:var(--muted)">grant</text>
+            <text x="585" y="170" font-size="12" font-weight="700">Identity-based</text>
+            <text x="585" y="185" font-size="12" font-weight="700">policy</text>
+            <text x="585" y="204" font-size="10" style="fill:var(--muted)">on the role, or the</text>
+            <text x="585" y="218" font-size="10" style="fill:var(--muted)">user and its groups</text>
+            <line x1="591" y1="228" x2="591" y2="260" stroke="var(--bad)" stroke-width="2" marker-end="url(#mBad)"/>
+            <text x="598" y="248" font-size="9.5" style="fill:var(--bad)">no Allow</text>
+          </g>
+        </g>
+
+        <!-- Step 6: limits on one identity and one session -->
+        <g data-step="6">
+          <g class="tool" id="evPb">
+            <line x1="697" y1="178" x2="709" y2="178" stroke="var(--dc)" stroke-width="2" marker-end="url(#mDc)"/>
+            <rect x="711" y="128" width="122" height="100" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+            <circle cx="727" cy="145" r="9" fill="var(--vpc)"/><text x="727" y="149" font-size="11" font-weight="700" text-anchor="middle" style="fill:var(--card)">6</text>
+            <text x="741" y="149" font-size="10" style="fill:var(--muted)">limit</text>
+            <text x="721" y="170" font-size="12" font-weight="700">Permissions</text>
+            <text x="721" y="185" font-size="12" font-weight="700">boundary</text>
+            <text x="721" y="204" font-size="10" style="fill:var(--muted)">set on one user</text>
+            <text x="721" y="218" font-size="10" style="fill:var(--muted)">or one role</text>
+            <line x1="727" y1="228" x2="727" y2="260" stroke="var(--bad)" stroke-width="2" marker-end="url(#mBad)"/>
+            <text x="734" y="248" font-size="9.5" style="fill:var(--bad)">no Allow</text>
+          </g>
+          <g class="tool" id="evSp">
+            <line x1="833" y1="178" x2="845" y2="178" stroke="var(--dc)" stroke-width="2" marker-end="url(#mDc)"/>
+            <rect x="847" y="128" width="122" height="100" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2"/>
+            <circle cx="863" cy="145" r="9" fill="var(--vpc)"/><text x="863" y="149" font-size="11" font-weight="700" text-anchor="middle" style="fill:var(--card)">7</text>
+            <text x="877" y="149" font-size="10" style="fill:var(--muted)">limit</text>
+            <text x="857" y="170" font-size="12" font-weight="700">Session</text>
+            <text x="857" y="185" font-size="12" font-weight="700">policy</text>
+            <text x="857" y="204" font-size="10" style="fill:var(--muted)">passed to STS for</text>
+            <text x="857" y="218" font-size="10" style="fill:var(--muted)">one session</text>
+            <line x1="863" y1="228" x2="863" y2="260" stroke="var(--bad)" stroke-width="2" marker-end="url(#mBad)"/>
+            <text x="870" y="248" font-size="9.5" style="fill:var(--bad)">no Allow</text>
+            <line x1="945" y1="228" x2="945" y2="260" stroke="var(--pub)" stroke-width="2" marker-end="url(#mPub)"/>
+          </g>
+        </g>
+
+        <!-- Panel B -->
+        <rect x="10" y="322" width="980" height="366" rx="10" fill="var(--cloud-fill)" stroke="var(--text)" stroke-width="1.5"/>
+        <text x="30" y="345" font-size="14" font-weight="700">B · Role assumption across accounts <tspan font-size="11.5" font-weight="400" style="fill:var(--muted)">· AssumeRole is itself a request, and it passes the checks of panel A</tspan></text>
+
+        <!-- Step 7: the two accounts, the caller, the role -->
+        <g data-step="7">
+          <rect x="30" y="358" width="280" height="316" rx="8" fill="var(--az-fill)" stroke="var(--dc)" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <text x="42" y="378" font-size="12" font-weight="700">Account A · 111111111111</text>
+          <text x="42" y="393" font-size="10.5" style="fill:var(--muted)">trusted: the caller lives here</text>
+          <rect x="690" y="358" width="280" height="316" rx="8" fill="var(--az-fill)" stroke="var(--dc)" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <text x="702" y="378" font-size="12" font-weight="700">Account B · 222222222222</text>
+          <text x="702" y="393" font-size="10.5" style="fill:var(--muted)">trusting: owns the role and the data</text>
+          <g class="tool" id="raCaller">
+            <rect x="44" y="404" width="252" height="112" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="2"/>
+            <text x="56" y="424" font-size="12" font-weight="700">Role collector <tspan font-weight="400" font-size="10.5" style="fill:var(--muted)">· the caller</tspan></text>
+            <text x="56" y="442" font-size="10.5" style="fill:var(--muted)">its identity policy:</text>
+            <text x="56" y="458" font-size="10" class="mono">Allow sts:AssumeRole on</text>
+            <text x="56" y="472" font-size="10" class="mono">arn:aws:iam::222222222222:</text>
+            <text x="56" y="486" font-size="10" class="mono">role/audit-read</text>
+            <text x="56" y="505" font-size="10" style="fill:var(--muted)">needed: the role is in another account</text>
+          </g>
+          <g class="tool" id="raTrust">
+            <rect x="704" y="404" width="252" height="100" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+            <text x="716" y="424" font-size="12" font-weight="700">Role audit-read · trust policy</text>
+            <text x="716" y="440" font-size="10.5" style="fill:var(--muted)">who may assume it (a resource policy)</text>
+            <text x="716" y="459" font-size="10" class="mono">Principal: 1111…:role/collector</text>
+            <text x="716" y="473" font-size="10" class="mono">Action:    sts:AssumeRole</text>
+            <text x="716" y="487" font-size="10" class="mono">Condition: sts:ExternalId=cust-7421</text>
+          </g>
+          <g class="tool" id="raPerm">
+            <rect x="704" y="514" width="252" height="68" rx="8" fill="var(--card)" stroke="var(--pub)" stroke-width="2"/>
+            <text x="716" y="534" font-size="12" font-weight="700">Role audit-read · permissions</text>
+            <text x="716" y="550" font-size="10.5" style="fill:var(--muted)">what the session may do, in B</text>
+            <text x="716" y="568" font-size="10" class="mono">Allow s3:GetObject on reports/*</text>
+          </g>
+          <g class="tool" id="raRes">
+            <rect x="704" y="598" width="252" height="64" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+            <text x="716" y="618" font-size="12" font-weight="700">S3 bucket reports</text>
+            <text x="716" y="635" font-size="10.5" style="fill:var(--muted)">the session is a principal of B, so</text>
+            <text x="716" y="650" font-size="10.5" style="fill:var(--muted)">this is a same-account request</text>
+          </g>
+        </g>
+
+        <!-- Step 8: the AssumeRole call -->
+        <g data-step="8">
+          <g class="tool" id="raSts">
+            <line x1="297" y1="446" x2="368" y2="446" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#mOr)"/>
+            <text x="333" y="438" font-size="10" font-weight="700" text-anchor="middle" style="fill:var(--orange)">AssumeRole</text>
+            <text x="333" y="461" font-size="10" text-anchor="middle" style="fill:var(--muted)">+ ExternalId</text>
+            <rect x="370" y="404" width="260" height="150" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+            <text x="384" y="426" font-size="13.5" font-weight="700" style="fill:var(--orange)">AWS STS <tspan font-size="11" font-weight="400" style="fill:var(--muted)">· AssumeRole</tspan></text>
+            <text x="384" y="447" font-size="11">Across accounts, both must allow:</text>
+            <text x="384" y="466" font-size="11">1 · the caller's identity policy, in A</text>
+            <text x="384" y="483" font-size="11">2 · the role's trust policy, in B,</text>
+            <text x="384" y="498" font-size="11" style="fill:var(--muted)">     with all its conditions</text>
+            <text x="384" y="521" font-size="10.5" style="fill:var(--muted)">Same account: 2 alone is enough when</text>
+            <text x="384" y="536" font-size="10.5" style="fill:var(--muted)">it names the caller, not the account</text>
+            <line x1="630" y1="470" x2="702" y2="470" stroke="var(--orange)" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#mOr)"/>
+            <text x="667" y="462" font-size="10" font-weight="700" text-anchor="middle" style="fill:var(--orange)">reads</text>
+          </g>
+        </g>
+
+        <!-- Step 9: credentials and the session -->
+        <g data-step="9">
+          <g class="tool" id="raCred">
+            <path d="M500 554 V602 H298" fill="none" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#mOr)"/>
+            <text x="404" y="595" font-size="10" font-weight="700" text-anchor="middle" style="fill:var(--orange)">temporary credentials</text>
+            <rect x="44" y="556" width="252" height="106" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <text x="56" y="576" font-size="12" font-weight="700" style="fill:var(--orange)">Role session</text>
+            <text x="56" y="594" font-size="10" class="mono">AccessKeyId      ASIA…</text>
+            <text x="56" y="608" font-size="10" class="mono">SecretAccessKey</text>
+            <text x="56" y="622" font-size="10" class="mono">SessionToken, Expiration</text>
+            <text x="56" y="640" font-size="10" style="fill:var(--muted)">1 hour by default · cannot be deleted,</text>
+            <text x="56" y="653" font-size="10" style="fill:var(--muted)">only left to expire or denied by policy</text>
+          </g>
+          <g class="tool" id="raUse">
+            <line x1="297" y1="640" x2="702" y2="640" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#mDc)"/>
+            <text x="500" y="632" font-size="10" text-anchor="middle">calls as arn:aws:sts::222222222222:assumed-role/audit-read/run-42</text>
+            <text x="500" y="656" font-size="10" text-anchor="middle" style="fill:var(--muted)">checked by panel A, with the policies of account B</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture. <b>Panel A:</b> every request is checked from left to right. An <b>explicit Deny</b> in any policy ends it at once. Then the organisation's limits (<b>RCP</b> for the resource's account, <b>SCP</b> for the caller's account), then the two policy types that can grant (<b>resource-based</b>, <b>identity-based</b>), then the two limits on one identity (<b>permissions boundary</b>, <b>session policy</b>). The dashed green line is the special case: in the same account, a resource-based policy that names the caller allows the request with no identity policy at all. <b>Panel B:</b> to work in another account, a caller asks <b>STS</b> for a session of a role there. The caller's identity policy and the role's <b>trust policy</b> must both allow it. The session then acts as a principal of account B.</p>
+    <div class="legend">
+      <span style="--c:var(--az)">The request, the caller</span>
+      <span style="--c:var(--bad)">Explicit Deny, Deny result</span>
+      <span style="--c:var(--region)">Organisation limits: RCP, SCP</span>
+      <span style="--c:var(--pub)">Policies that grant</span>
+      <span style="--c:var(--vpc)">Limits on one identity or session</span>
+      <span style="--c:var(--orange)">STS and temporary credentials</span>
+      <span style="--c:var(--dc)">Accounts, resources, flow</span>
+    </div>
+  </div>
+
+  <h2>Will the request be allowed?</h2>
+  <div class="card sim" id="simEval">
+    <p>Set what each policy says about one request, <code>s3:GetObject</code> on a bucket. Say the result and the policy that decides it before you read them. The walk through the checks is lit on panel A.</p>
+    <div id="evOpts"></div>
+    <div class="calc">
+      <div><div class="lbl">Decision</div><div class="big" id="evOut"></div></div>
+      <div><div class="lbl">Decided by</div><div class="big" id="evBy"></div></div>
+      <div><div class="lbl">Kind</div><div class="big" id="evKind"></div></div>
+    </div>
+    <div class="table-wrap"><table id="evTable"></table></div>
+    <p class="result" id="evMsg"></p>
+    <p class="note">“No Allow” means the policy exists but has no statement that matches this request. That is an implicit deny. “Explicit Deny” means a <code>Deny</code> statement matches. The SCP row is the caller's account and the RCP row is the bucket's account; in the same account they are one organisation. RCPs have only two states because <code>RCPFullAWSAccess</code> is always attached and cannot be removed, so only a Deny in an RCP can block. The simulator leaves out VPC endpoint policies, which add one more limit when the call goes through an endpoint, and it treats a matching condition as part of “Allows”.</p>
+  </div>
+
+  <h2>Does AssumeRole succeed?</h2>
+  <div class="card sim" id="simAssume">
+    <p>You own account B. A monitoring vendor in account A reads your account through the role <code>audit-read</code>. The vendor serves many customers and gave you the external ID <code>cust-7421</code>. Set the trust policy and the caller, and say what STS answers. Panel B is lit.</p>
+    <div id="arOpts"></div>
+    <div class="calc">
+      <div><div class="lbl">STS answers</div><div class="big" id="arOut"></div></div>
+      <div><div class="lbl">Decided by</div><div class="big" id="arBy"></div></div>
+      <div><div class="lbl">Is this what you wanted?</div><div class="big" id="arRisk"></div></div>
+    </div>
+    <p class="result" id="arMsg"></p>
+    <p class="note">The external ID is not a secret. It is a label that tells STS for which customer the vendor is acting. The vendor chooses it, keeps it unique per customer and sends it on every call. You only require it in the trust policy.</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Two policy types grant, four only limit</h3>
+      <ul>
+        <li><b>Identity-based</b> and <b>resource-based</b> policies are the only ones that give a permission.</li>
+        <li><b>SCP</b>, <b>RCP</b>, <b>permissions boundary</b> and <b>session policy</b> never give anything. An <code>Allow</code> in them only means “not blocked here”.</li>
+        <li>An explicit <code>Deny</code> in any of the six wins over every <code>Allow</code>.</li>
+        <li>In one account, the usual result is: (identity policy or resource policy) and SCP and boundary and session policy. The next card lists the cases where this is not true.</li>
+        <li>Policies are read on every request. Edit a role's policy and sessions that already exist change with it.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Resource policy: who it names matters</h3>
+      <p>Same account, caller is a role session:</p>
+      <ul>
+        <li><b>Names the account</b> (<code>:root</code> or the account ID): it hands the decision to IAM in that account. The identity policy must still allow.</li>
+        <li><b>Names the role ARN:</b> the grant is added to the role. No identity policy is needed, but the boundary and the session policy still limit it.</li>
+        <li><b>Names the session ARN</b> (<code>assumed-role/role/session-name</code>): a direct grant. An implicit deny in the identity policy, the boundary or the session policy does not matter.</li>
+        <li><b>IAM user ARN:</b> also direct. The user's boundary does not limit it.</li>
+        <li><code>Principal: "*"</code> with a condition on <code>aws:PrincipalArn</code> is not limited by the boundary or the session policy either.</li>
+      </ul>
+      <p class="note">Two resource policies are stricter: a role trust policy and a KMS key policy must allow the principal themselves. An identity policy alone is never enough for them. Day 18 covers key policies.</p>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Cross-account: two evaluations</h3>
+      <ul>
+        <li>AWS evaluates the request once in the caller's account and once in the resource's account. <b>Both must return Allow.</b></li>
+        <li>Caller's account: identity policy, limited by its SCPs, boundary and session policy.</li>
+        <li>Resource's account: the resource-based policy, limited by its RCPs.</li>
+        <li>So the same-account shortcut is gone. A bucket policy that names a role in another account does nothing until that role's identity policy also allows the action.</li>
+        <li>If the resource type has no resource-based policy, the only way in is a role in the resource's account (panel B).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Permissions boundary</h3>
+      <ul>
+        <li>A managed policy set on one user or one role as its maximum. It grants nothing.</li>
+        <li>Its use is delegation. Let a team create roles, but only with a condition such as <code>"iam:PermissionsBoundary": "arn:…:policy/team-boundary"</code> on <code>iam:CreateRole</code>, <code>iam:PutRolePolicy</code> and <code>iam:AttachRolePolicy</code>. The team can then never create a role stronger than the boundary.</li>
+        <li>Also deny <code>iam:DeleteRolePermissionsBoundary</code> and edits to the boundary policy itself, or the limit can be removed.</li>
+        <li>It does not limit a direct grant from a resource policy (see the card before).</li>
+        <li>A resource policy with <code>NotPrincipal</code> and <code>Deny</code> always denies a principal that has a boundary. Use a condition on <code>aws:PrincipalArn</code> instead.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>STS and role sessions</h3>
+      <ul>
+        <li><code>AssumeRole</code> returns an access key ID, a secret key, a session token and an expiry time. The principal becomes <code>arn:aws:sts::ACCOUNT:assumed-role/ROLE/SESSION-NAME</code>.</li>
+        <li>The session has the role's permissions only. The caller's own permissions are not added.</li>
+        <li>A <b>session policy</b> passed to <code>AssumeRole</code> narrows one session. Use it to hand out one role with a different scope per tenant or per job.</li>
+        <li><b>Role chaining</b> is using a role session to assume another role. A chained session lasts one hour at most.</li>
+        <li><b>Session tags</b> and the <b>source identity</b> travel with the session and appear in CloudTrail. Tags marked transitive and the source identity survive chaining.</li>
+        <li>You cannot delete temporary credentials. To cut off a stolen session you deny by issue time (see the failure table).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Trust policy details</h3>
+      <ul>
+        <li>When you save a trust policy whose <code>Principal</code> is a role or user ARN, IAM stores the unique ID (<code>AROA…</code>, <code>AIDA…</code>) in its place. Delete and recreate that role and the trust is broken, even with the same name.</li>
+        <li><code>arn:aws:iam::A:root</code> means account A, not its root user. Account A's admins then decide who in A may call <code>sts:AssumeRole</code>.</li>
+        <li>A <code>Principal</code> cannot hold a partial wildcard such as <code>role/ci-*</code>. Name the account and add a condition: <code>ArnLike</code> on <code>aws:PrincipalArn</code>.</li>
+        <li>For a role used by an AWS service the principal is a service, for example <code>lambda.amazonaws.com</code>.</li>
+        <li>Giving a role to a service is a separate permission, <code>iam:PassRole</code>, on the person who configures the service. Without a tight <code>Resource</code> on it, anyone who can create a Lambda function can use your admin role.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>The confused deputy</h3>
+      <ul>
+        <li>A deputy is something with more access than the party that asks it to act. It is confused when it uses that access for the wrong party.</li>
+        <li><b>Across accounts:</b> a vendor assumes roles in many customers' accounts. A customer gives the vendor <i>your</i> role ARN. The fix is <code>sts:ExternalId</code> in your trust policy, with an ID the vendor fixes per customer.</li>
+        <li><b>Across services:</b> you allow a service principal, such as <code>cloudtrail.amazonaws.com</code>, to write to your bucket. Anyone can configure that service in their own account to write to your bucket. The fix is <code>aws:SourceArn</code> or <code>aws:SourceAccount</code> in the resource policy, or <code>aws:SourceOrgID</code> for a whole organisation.</li>
+        <li>The role ARN and the bucket name are not secrets. Design as if the attacker knows them.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Condition keys to know</h3>
+      <ul>
+        <li><code>aws:PrincipalOrgID</code>: the caller's account is in organisation <code>o-…</code>. With <code>Principal: "*"</code> it shares a resource with the whole organisation without a list of accounts.</li>
+        <li><code>aws:PrincipalArn</code>: the ARN of the user or role. For a session it is the role ARN, not the session ARN.</li>
+        <li><code>aws:PrincipalTag/<i>key</i></code>: a tag on the user or role, or a session tag.</li>
+        <li><code>aws:ResourceTag/<i>key</i></code>: a tag on the resource. <code>aws:RequestTag/<i>key</i></code> and <code>aws:TagKeys</code>: tags sent in the request itself.</li>
+        <li><code>aws:SourceArn</code>, <code>aws:SourceAccount</code>: present when an AWS service calls on behalf of one of its resources. They are not present on a call by one of your roles.</li>
+        <li id="missingKey">A key that is missing from the request makes <code>StringEquals</code> false and <code>StringNotEquals</code> true. Check this before you write a <code>Deny</code> with a negated operator.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>ABAC with tags</h3>
+      <ul>
+        <li>One policy for many teams: allow the action when <code>aws:ResourceTag/team</code> equals <code>${aws:PrincipalTag/team}</code>. A new team needs new tags, not a new policy.</li>
+        <li>The principal's tags come from the role, or from session tags set by the identity provider at sign-in. A session tag overrides a role tag with the same key.</li>
+        <li>The tag is now the permission. Control who may set it: restrict tagging actions with <code>aws:RequestTag</code> and <code>aws:TagKeys</code>, or a team can re-tag another team's resource and take it.</li>
+        <li>Check each service first. Not every action supports authorisation by resource tag.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>IAM Access Analyzer</h3>
+      <ul>
+        <li><b>External access findings:</b> it reads resource policies and reports each resource that a principal outside your account or organisation can reach. It reasons about the policy; it does not wait for traffic.</li>
+        <li><b>Unused access findings:</b> roles, access keys and permissions that nobody has used in a period you choose.</li>
+        <li><b>Policy validation:</b> checks a policy document for errors and risky patterns before you save it.</li>
+        <li><b>Custom policy checks:</b> API calls for a pipeline, such as “does this change grant any new access?” and “does this policy allow <code>s3:DeleteBucket</code>?”.</li>
+        <li><b>Policy generation:</b> writes a policy from the CloudTrail activity of a role.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>IAM Identity Center</h3>
+      <ul>
+        <li>The beginner track showed <a href="../../aws_architecture/day-29/index.html">what it is for</a>. Inside, a <b>permission set</b> is a template. For each account you assign it to, Identity Center creates an IAM role named <code>AWSReservedSSO_<i>name</i>_<i>suffix</i></code>.</li>
+        <li>A person signs in once, picks an account and a permission set, and gets a session of that role. There is no IAM user and no long-lived key.</li>
+        <li>A resource policy should not put that role in <code>Principal</code>. Name the account and add <code>ArnLike</code> on <code>aws:PrincipalArn</code> with a wildcard for the suffix.</li>
+        <li>Everything on this page still applies: the role is a normal role, and SCPs and boundaries limit it like any other.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>A global service with a slow edge</h3>
+      <ul>
+        <li>IAM is <b>eventually consistent</b>. A new role, policy or key can take some seconds to be visible everywhere. Code that creates a role and uses it at once must retry.</li>
+        <li>Do not create or change IAM resources in a path that must work during an incident. Create them ahead of time.</li>
+        <li>Use a Regional STS endpoint (<code>sts.<i>region</i>.amazonaws.com</code>), so that getting credentials does not depend on another Region.</li>
+        <li>STS has a request quota. Cache credentials until they are close to expiry. Do not call <code>AssumeRole</code> once per request.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Numbers to remember</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>What</th><th>Limit</th><th>Why it matters</th><th>Can it be raised?</th></tr>
+      <tr><td><b>Managed policy size</b></td><td>6,144 characters</td><td>White space is not counted. A long list of ARNs fills it fast; this is the usual reason to move to tags or to split a policy.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>Inline policies, total per entity</b></td><td>Role 10,240 · group 5,120 · user 2,048 characters</td><td>The sum of all inline policies on the entity, not each one.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>Managed policies per role</b></td><td>20</td><td>Limits how far “one small policy per feature” can go. Per user and per group the default is 10.</td><td><span class="pill yes">Yes</span> role to 25, user to 20; group stays 10</td></tr>
+      <tr><td><b>Role trust policy size</b></td><td>2,048 characters</td><td>A role trusted by many accounts or many OIDC subjects reaches it. Trust the organisation with a condition instead of a list.</td><td><span class="pill yes">Yes</span> to 8,192</td></tr>
+      <tr><td><b>Roles per account</b></td><td>1,000</td><td>One role per service per environment adds up. Customer managed policies: 1,500.</td><td><span class="pill yes">Yes</span> both to 10,000</td></tr>
+      <tr><td><b>Versions of a managed policy</b></td><td>5</td><td>A pipeline that updates a policy must delete the oldest version first, or the sixth update fails.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>IAM users per account</b></td><td>5,000, with 2 access keys each and 10 groups each</td><td>Two keys exist so that you can rotate without downtime.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>Role session length</b></td><td>15 minutes to the role's maximum; 1 hour if you do not ask</td><td>The role's maximum session duration is a setting from 1 to 12 hours, and 1 hour by default. Ask for more than the setting and the call fails.</td><td><span class="pill skip">Setting</span> up to 12 hours</td></tr>
+      <tr><td><b>Role chaining</b></td><td>1 hour maximum</td><td>A session obtained from another role session cannot be longer, whatever the role's setting. A long job behind two roles must refresh.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>GetSessionToken, GetFederationToken</b></td><td>15 minutes to 36 hours; 12 hours by default</td><td>For IAM users. With root user credentials the maximum is 1 hour.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>Session policy</b></td><td>2,048 characters for the inline document and the managed policy ARNs together; up to 10 ARNs</td><td>The session token has a second size limit that policies and tags share. The response field <code>SessionTokenUtilization</code> shows how full it is.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>Session tags</b></td><td>50 tags; key 128, value 256 characters</td><td>The budget for ABAC attributes sent by your identity provider.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>Role name · session name · external ID</b></td><td>64 · 2 to 64 · 2 to 1,224 characters</td><td>Role names made from long stack names get cut. The session name is what you see in CloudTrail, so put the user or the job in it.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>STS requests</b></td><td>600 per second, per account, per Region</td><td>Shared by <code>AssumeRole</code>, <code>GetCallerIdentity</code>, <code>GetSessionToken</code>, <code>GetFederationToken</code> and two more. In a cross-account call only the caller's account is counted.</td><td><span class="pill yes">Yes</span> by a support ticket</td></tr>
+      <tr><td><b>SCP</b></td><td>10,240 characters; 10 attached to each root, OU or account</td><td>Inherited SCPs do not count against the 10.</td><td><span class="pill no">No</span></td></tr>
+      <tr><td><b>RCP</b></td><td>5,120 characters; 5 attached to each root, OU or account</td><td><code>RCPFullAWSAccess</code> uses one of the five.</td><td><span class="pill no">No</span></td></tr>
+    </table>
+    <p class="note">Limits change. These are from the IAM and STS quotas page and the AWS Organizations quotas page. <code>aws iam get-account-summary</code> shows your account's current values and usage.</p>
+  </div>
+
+  <h2>How it fails in production</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Symptom</th><th>Cause</th><th>How you find it</th><th>Fix</th></tr>
+      <tr>
+        <td><code>AccessDenied</code>, and the role has <code>AdministratorAccess</code></td>
+        <td>A limit, not a missing grant: SCP, permissions boundary or session policy.</td>
+        <td>Read the end of the message: <code>with an explicit deny in a service control policy</code>, or <code>because no permissions boundary allows the … action</code>. The same text is in the CloudTrail event, in <code>errorMessage</code>.</td>
+        <td>Change the policy type that the message names. Changing the identity policy does nothing.</td>
+      </tr>
+      <tr>
+        <td>Cross-account read of a bucket fails, and the bucket policy names the role</td>
+        <td>Only one side allows. The role's identity policy must also allow the action on that bucket.</td>
+        <td><code>because no identity-based policy allows</code> means the caller's side. <code>because no resource-based policy allows</code> means the bucket's side. The event is in CloudTrail in the caller's account.</td>
+        <td>Add the missing half. If the objects are encrypted with a KMS key, the key policy needs the same care.</td>
+      </tr>
+      <tr>
+        <td><code>AssumeRole</code> starts to fail after a deploy that recreated the calling role</td>
+        <td>The trust policy stored the old role's unique ID. The new role has the same name and a new ID.</td>
+        <td>Open the trust policy: the <code>Principal</code> shows <code>AROA…</code> where the ARN was. The error is <code>no role trust policy allows the sts:AssumeRole action</code> or a plain access denied.</td>
+        <td>Save the trust policy again with the ARN. To avoid it, trust the account and put the role in a condition on <code>aws:PrincipalArn</code>.</td>
+      </tr>
+      <tr>
+        <td>A long job dies after exactly one hour</td>
+        <td>Its credentials come from role chaining, which is limited to one hour, or from a default one-hour session that nothing refreshes.</td>
+        <td>The calls fail with an expired-token error. In CloudTrail, the <code>AssumeRole</code> event was made by another assumed role.</td>
+        <td>Let the SDK's credential provider refresh the session. Do not copy credentials into environment variables for long jobs. Remove the extra hop if you can.</td>
+      </tr>
+      <tr>
+        <td>A pipeline creates a role and the next step fails: the role “does not exist” or “cannot be assumed”</td>
+        <td>Eventual consistency. The new role is not yet visible to the service that needs it.</td>
+        <td>The same step succeeds when you run it again some seconds later.</td>
+        <td>Retry with backoff. Create roles in an earlier stage, never in the path that serves traffic.</td>
+      </tr>
+      <tr>
+        <td>A role's session credentials are leaked</td>
+        <td>Temporary credentials cannot be deleted, and they stay valid until they expire.</td>
+        <td>CloudTrail shows calls from the session name or an unknown IP address.</td>
+        <td>In the console, choose <b>Revoke active sessions</b> on the role. It adds an inline policy that denies everything to sessions issued before now, using <code>aws:TokenIssueTime</code>. New sessions keep working.</td>
+      </tr>
+      <tr>
+        <td>A policy update or <code>AssumeRole</code> is rejected for size</td>
+        <td>The managed policy passed 6,144 characters, the role has its maximum number of managed policies, or session policy plus tags made the token too large.</td>
+        <td>IAM returns <code>LimitExceeded</code>. STS returns <code>PackedPolicyTooLarge</code>.</td>
+        <td>Group resources by path or tag in place of long ARN lists. Split by role, not by policy. Send fewer or shorter session tags.</td>
+      </tr>
+      <tr>
+        <td>A deploy fails with <code>not authorized to perform: iam:PassRole</code></td>
+        <td>The deployer may create the function or task but may not hand that role to the service.</td>
+        <td>The message names the role in <code>on resource:</code>.</td>
+        <td>Allow <code>iam:PassRole</code> on exactly the roles the deployer may hand out, with a condition on <code>iam:PassedToService</code>. Never on <code>*</code>.</td>
+      </tr>
+      <tr>
+        <td>A stranger's resource appears in your logs bucket, or a vendor reads the wrong customer's data</td>
+        <td>Confused deputy: a service principal allowed with no <code>aws:SourceArn</code> or <code>aws:SourceAccount</code> condition, or a third-party role with no external ID.</td>
+        <td>Access Analyzer external access findings list roles and buckets that are open to other accounts. Review every trust policy that names an account you do not own.</td>
+        <td>Add the condition. For vendors, require <code>sts:ExternalId</code>.</td>
+      </tr>
+      <tr>
+        <td>Throttling errors from STS at peak</td>
+        <td>The code calls <code>AssumeRole</code> or <code>GetCallerIdentity</code> on every request and reaches the STS request quota.</td>
+        <td>CloudTrail shows a very high count of STS events from one role. The SDK logs throttling and retries.</td>
+        <td>Reuse the credential provider and its cached session. Ask for a quota increase only after that.</td>
+      </tr>
+    </table>
+    <p class="note">Tools for a denied request, in the order to try them: the error text; the CloudTrail event (<code>errorCode</code>, <code>errorMessage</code>, and <code>userIdentity</code> for who really called); <code>aws iam simulate-principal-policy</code> for the identity side; Access Analyzer for the resource side. Some services return an encoded message; decode it with <code>aws sts decode-authorization-message</code>.</p>
+  </div>
+
+  <h2>What drives the bill</h2>
+  <div class="card table-wrap">
+    <p>IAM, STS and IAM Identity Center have no charge. Users, roles, policies and <code>AssumeRole</code> calls are free in any number. The cost is in the tools you put around them.</p>
+    <table>
+      <tr><th>Item</th><th>Price</th><th>What makes it grow</th></tr>
+      <tr><td><b>IAM, STS, Identity Center</b></td><td>No charge</td><td>Nothing.</td></tr>
+      <tr><td><b>Access Analyzer: external access findings, policy validation, policy generation</b></td><td>No charge</td><td>Nothing. Turn external access findings on in every Region you use.</td></tr>
+      <tr><td><b>Access Analyzer: unused access findings</b></td><td>$0.20 per IAM role or user analysed, per month</td><td>The number of roles and users. An organisation with 5,000 roles pays $1,000 a month. Exclude accounts that are only sandboxes.</td></tr>
+      <tr><td><b>Access Analyzer: internal access findings</b></td><td>$9.00 per resource monitored, per Region, per month</td><td>The number of resources you choose. Keep it to the few that hold critical data.</td></tr>
+      <tr><td><b>Access Analyzer: custom policy checks</b></td><td>$0.002 per API call</td><td>Calls from pipelines: one per policy per run.</td></tr>
+      <tr><td><b>CloudTrail management events</b></td><td>90 days of event history and the first copy delivered to S3 are free. More copies: $2.00 per 100,000 events.</td><td>A second trail that records the same events. One organisation trail is enough.</td></tr>
+      <tr><td><b>CloudTrail data events</b></td><td>$0.10 per 100,000 events</td><td>You need them to see a denied <code>s3:GetObject</code>, because object-level calls are data events. A busy bucket produces millions. Select the buckets and the event types.</td></tr>
+    </table>
+    <p class="note">Prices are from the IAM Access Analyzer and CloudTrail pricing pages. You also pay S3 storage for the trail's log files.</p>
+  </div>
+
+  <h2>IAM user, role or Identity Center?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Who or what needs access</th><th>Use</th><th>Why</th></tr>
+      <tr><td><b>An employee, in the console or the CLI</b></td><td>IAM Identity Center</td><td>One sign-in for all accounts, short sessions, and removing the person in one place removes all access.</td></tr>
+      <tr><td><b>Code on EC2, ECS, EKS or Lambda</b></td><td>An IAM role given to the compute</td><td>The platform delivers and rotates the credentials. There is no key in the code or the image.</td></tr>
+      <tr><td><b>A pipeline outside AWS, such as GitHub Actions</b></td><td>A role with OIDC federation</td><td>The pipeline exchanges its own signed token for a session. No stored key. Day 16 builds it.</td></tr>
+      <tr><td><b>A server outside AWS with no identity provider</b></td><td>IAM Roles Anywhere, with a certificate</td><td>Sessions in place of a long-lived key. An IAM user is the last choice.</td></tr>
+      <tr><td><b>A vendor's product</b></td><td>A role in your account that trusts the vendor's account, with an external ID</td><td>You can remove the role at any time, and every call is in your CloudTrail.</td></tr>
+      <tr><td><b>Another account of your own</b></td><td>A role, or a resource policy (see below)</td><td></td></tr>
+      <tr><td><b>A legacy tool that only accepts an access key</b></td><td>An IAM user with one narrow policy</td><td>The only case left for IAM users. Rotate the key, and alert when it is used from a new place.</td></tr>
+    </table>
+    <h3 class="sub">Cross-account: resource policy or assume a role?</h3>
+    <table>
+      <tr><th></th><th>Resource-based policy</th><th>Role in the other account</th></tr>
+      <tr><td><b>The caller's own permissions</b></td><td>Kept. It can read a bucket in B and write to a table in A in one piece of code.</td><td>Given up while it uses the role. Copying between accounts needs two sets of credentials.</td></tr>
+      <tr><td><b>Works for</b></td><td>Only resource types that have such a policy</td><td>Every service</td></tr>
+      <tr><td><b>Where access is defined</b></td><td>On each resource, and in the caller's identity policy</td><td>In one role: the trust policy says who, the permissions policy says what</td></tr>
+      <tr><td><b>Sharing with a whole organisation</b></td><td>Simple: <code>Principal: "*"</code> with <code>aws:PrincipalOrgID</code></td><td>The same condition works in a trust policy, but each caller still has to assume the role</td></tr>
+      <tr><td><b>Who appears in the owner's CloudTrail</b></td><td>The foreign principal</td><td>A session of your own role; the <code>AssumeRole</code> event shows who took it</td></tr>
+      <tr><td><b>Choose it when</b></td><td>A few resources are read by many accounts: a central log bucket, a shared KMS key, an ECR repository</td><td>The caller must do many things in the other account: deploy, operate, audit</td></tr>
+    </table>
+  </div>
+
+  <h2>Hands-on lab</h2>
+  <div class="card">
+    <p>You will see four of the seven checks deny a request, and read the policy type in each error. One account is enough. Use an admin role or user in a <b>sandbox</b> account, not the root user, in bash or zsh. <b>Cost:</b> IAM and STS are free. The bucket stays empty, and the handful of S3 list requests round to zero on the bill.</p>
+    <ol>
+      <li>
+        <b>Set up.</b> A bucket, and a role that trusts your own account but only with an external ID.
+<pre class="code">export AWS_PAGER=""
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+BUCKET=m01-lab-$ACCOUNT
+ROLE=arn:aws:iam::$ACCOUNT:role/m01-lab
+aws s3 mb s3://$BUCKET
+
+cat &gt; trust.json &lt;&lt;EOF
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
+  "Principal":{"AWS":"arn:aws:iam::$ACCOUNT:root"},
+  "Action":"sts:AssumeRole",
+  "Condition":{"StringEquals":{"sts:ExternalId":"m01-demo"}}}]}
+EOF
+aws iam create-role --role-name m01-lab --assume-role-policy-document file://trust.json
+sleep 10   # IAM is eventually consistent</pre>
+      </li>
+      <li>
+        <b>The trust policy decides.</b> Without the external ID the call is denied, even for an admin. A trust policy must allow the caller itself.
+<pre class="code">aws sts assume-role --role-arn $ROLE --role-session-name lab        # AccessDenied
+
+login() {   # assume the role; extra arguments are passed to assume-role
+  read AK SK ST &lt; &lt;(aws sts assume-role --role-arn $ROLE --role-session-name lab \
+    --external-id m01-demo "$@" \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+}
+as_role() { AWS_ACCESS_KEY_ID=$AK AWS_SECRET_ACCESS_KEY=$SK AWS_SESSION_TOKEN=$ST "$@"; }
+list() { as_role aws s3api list-objects-v2 --bucket $BUCKET --query KeyCount; }
+
+login
+as_role aws sts get-caller-identity --query Arn   # ...:assumed-role/m01-lab/lab</pre>
+      </li>
+      <li>
+        <b>Check 5, identity policy.</b> The role has no policy yet. Read the end of the error.
+<pre class="code">list   # AccessDenied ... because no identity-based policy allows the s3:ListBucket action</pre>
+      </li>
+      <li>
+        <b>Check 4, the same-account grant.</b> Name the role in the bucket policy. The role still has no identity policy, and the call now works with the same credentials.
+<pre class="code">grant() {   # $1 = the principal the bucket policy names
+  aws s3api put-bucket-policy --bucket $BUCKET --policy "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"$1\"},\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::$BUCKET\"}]}"
+}
+grant $ROLE
+sleep 10
+list   # 0  (the bucket is empty; the call is allowed)</pre>
+      </li>
+      <li>
+        <b>Check 6, permissions boundary.</b> Set a boundary that allows only SQS reads. The grant to the role ARN is now cut. Then grant to the session ARN and it works again: a direct grant to the session is not limited by the boundary.
+<pre class="code">aws iam put-role-permissions-boundary --role-name m01-lab \
+  --permissions-boundary arn:aws:iam::aws:policy/AmazonSQSReadOnlyAccess
+sleep 10
+list   # AccessDenied ... because no permissions boundary allows the s3:ListBucket action
+
+grant arn:aws:sts::$ACCOUNT:assumed-role/m01-lab/lab
+sleep 10
+list   # 0</pre>
+      </li>
+      <li>
+        <b>Check 7, session policy.</b> Remove the boundary and the bucket policy. Give the role a normal identity policy, then take a session that carries a narrower session policy.
+<pre class="code">aws iam delete-role-permissions-boundary --role-name m01-lab
+aws s3api delete-bucket-policy --bucket $BUCKET
+aws iam put-role-policy --role-name m01-lab --policy-name list --policy-document \
+  "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::$BUCKET\"}]}"
+sleep 10
+list   # 0  (identity policy allows)
+
+login --policy '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetBucketLocation","Resource":"*"}]}'
+list   # AccessDenied ... because no session policy allows the s3:ListBucket action
+login  # a session without a session policy
+list   # 0</pre>
+      </li>
+      <li>
+        <b>Ask the tools.</b> The simulator evaluates the role's identity policies without making the call. Access Analyzer validates a policy document; this one should return a security warning about <code>iam:PassRole</code> on every resource.
+<pre class="code">aws iam simulate-principal-policy --policy-source-arn $ROLE \
+  --action-names s3:ListBucket s3:DeleteBucket --resource-arns arn:aws:s3:::$BUCKET \
+  --query 'EvaluationResults[].[EvalActionName,EvalDecision]' --output text
+# s3:ListBucket    allowed
+# s3:DeleteBucket  implicitDeny
+
+aws accessanalyzer validate-policy --policy-type IDENTITY_POLICY \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iam:PassRole","Resource":"*"}]}' \
+  --query 'findings[].[findingType,issueCode]' --output text</pre>
+      </li>
+      <li>
+        <b>Clean up.</b>
+<pre class="code">aws iam delete-role-policy --role-name m01-lab --policy-name list
+aws iam delete-role --role-name m01-lab
+aws s3 rb s3://$BUCKET
+rm trust.json
+unset AK SK ST</pre>
+      </li>
+    </ol>
+    <p class="note">If a result looks one step behind, wait a few seconds and run <code>list</code> again. The change has not reached every IAM endpoint yet. Some services do not put the policy type in the error; S3 does for requests in the same account.</p>
+  </div>
+
+  <h2>Interview questions</h2>
+  <details><summary>A request is denied. In what order do you check SCP, boundary, identity policy and resource policy?</summary><p>First read the error: it usually names the policy type and says whether the deny is explicit or implicit. If it does not, follow the evaluation order. One: look for an explicit <code>Deny</code> in all of them, because it ends the evaluation wherever it is. Two: the SCPs on the path from the root to the account, since without an Allow there nothing else matters. Three: the resource policy. Across accounts it must allow; in the same account it may be the whole grant. Four: the identity policy. Five: the permissions boundary, and after it the session policy if the caller is a role session. In each one, check the conditions and the exact resource ARN, not only the action.</p></details>
+  <details><summary>Same account. A role has no identity policy for <code>s3:GetObject</code>, but the bucket policy allows that role. Does the read work? What changes if the role has a permissions boundary that does not include S3?</summary><p>It works. In one account an Allow in either the identity policy or the resource policy is enough. With the boundary it depends on what the bucket policy names. If it names the role ARN, the boundary limits the grant and the read is denied. If it names the session ARN, the grant goes directly to the session and an implicit deny in the boundary does not apply. An explicit Deny in the boundary would block both.</p></details>
+  <details><summary>The same bucket policy, but now the role is in another account. Why does the read fail?</summary><p>A cross-account request is evaluated twice, once in each account, and both must allow. The bucket policy is the Allow of the bucket's account. The caller's account has said nothing yet: the role needs an identity policy that allows <code>s3:GetObject</code> on that bucket, inside its own SCPs and boundary. The reason is ownership. An account's admins decide what their principals may do, and another account's policy cannot decide that for them.</p></details>
+  <details><summary>What is the confused deputy problem, and what exactly does an external ID do?</summary><p>A vendor's account can assume roles in many customers' accounts. If the vendor's product assumes whatever role ARN a customer enters, customer X can enter the ARN of customer Y's role and read Y's data through the vendor. The vendor is the deputy. With an external ID, the vendor creates one ID per customer and sends that customer's ID on every <code>AssumeRole</code> call it makes for them. Y's trust policy requires Y's ID in <code>sts:ExternalId</code>, so a call made for X carries X's ID and fails. The ID is not a secret and must be chosen by the vendor, not by the customer.</p></details>
+  <details><summary>A trust policy has <code>"Principal": {"AWS": "arn:aws:iam::111111111111:root"}</code>. Who can assume the role?</summary><p>Not only the root user. It means the whole account 111111111111, by delegation: any user or role there whose identity policy allows <code>sts:AssumeRole</code> on this role. You have handed the choice to that account's administrators. To narrow it, name one role, or keep the account and add a condition on <code>aws:PrincipalArn</code>, an external ID or <code>aws:PrincipalOrgID</code>.</p></details>
+  <details><summary>Permissions boundary and SCP both set a maximum. When do you use which?</summary><p>An SCP is set by the organisation on whole accounts and binds every principal in them, the account's own admins included. Use it for rules with no exceptions inside the account: Regions, protecting the audit trail. A boundary is set inside an account on single users or roles. Use it to delegate: developers may create roles for their workloads, on the condition that each new role carries the boundary, so they cannot create anything stronger than the limit you chose. Neither grants a permission.</p></details>
+  <details><summary>What is role chaining, and what breaks because of it?</summary><p>Using the credentials of one role session to assume a second role. The chained session can last one hour at most, whatever the second role's maximum session duration is, and asking for more makes the call fail. Long jobs behind two hops therefore need automatic refresh. The original identity is also harder to trace, so set a source identity or transitive session tags, which carry through the chain into CloudTrail.</p></details>
+  <details><summary>Temporary credentials of a production role were posted in a public chat. What do you do?</summary><p>They cannot be deleted. Revoke the role's active sessions: this attaches a policy to the role that denies all actions when <code>aws:TokenIssueTime</code> is before now. The stolen session is dead, and workloads get new sessions and continue. Then look in CloudTrail for what the session did, by its access key ID or session name, and fix how it leaked. Deleting the role would also work, but it breaks the workload and every trust policy that names the role.</p></details>
+  <details><summary>You want one policy for all teams with ABAC. How does it work, and what can go wrong?</summary><p>The policy allows an action when the resource's tag equals the principal's tag, for example <code>aws:ResourceTag/team</code> and <code>${aws:PrincipalTag/team}</code>. Principal tags come from the role or from session tags set by the identity provider. What goes wrong: someone who may change tags can move a resource into their own team, so tagging must be restricted with <code>aws:RequestTag</code> and <code>aws:TagKeys</code>; a role that may pass any session tag can claim any team, so <code>sts:TagSession</code> needs conditions too; untagged resources are reachable by nobody, or by everybody if the policy was written with a negated condition; and not every service supports tag conditions on every action.</p></details>
+  <details><summary>A central S3 bucket must accept logs from every account in the organisation, and from an AWS service. How do you write the bucket policy?</summary><p>Two statements. For your own accounts: <code>Principal: "*"</code> with a condition <code>aws:PrincipalOrgID</code> equal to the organisation ID. New accounts are covered without an edit, and nobody outside the organisation matches. For the service: its service principal, with <code>aws:SourceArn</code> or <code>aws:SourceAccount</code>, or <code>aws:SourceOrgID</code> for the whole organisation, so that the same service configured in a stranger's account cannot write to your bucket. Each sending role still needs an identity policy, because this is cross-account.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-02/index.html">Day 2: VPC internals</a>.</b> IP planning, route priority, security group references, NAT vs egress-only gateways, Network Firewall, Reachability Analyzer, and reading Flow Logs.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The request.</b> Each API call carries a signature that proves who the principal is. The service then asks IAM: may this principal do this action on this resource, given these condition keys? The answer starts as “no”. This happens again on every call. A session holds no decision from earlier.",
+    "<b>Step 2 — Explicit Deny.</b> AWS first looks at every policy that applies, of every type, for a <code>Deny</code> statement that matches. One match ends the evaluation. No <code>Allow</code> anywhere can undo it. There are only two outcomes, and Deny is the one you get when nothing else is said.",
+    "<b>Step 3 — Organisation limits.</b> RCPs apply to the resources of the account they are attached to, whoever calls. SCPs apply to the principals of the account they are attached to, wherever they call. Neither grants anything. If no SCP on the path from the root allows the action, the request is denied here.",
+    "<b>Step 4 — Resource-based policy.</b> A policy on the resource itself, with a <code>Principal</code> element. In the same account it can allow the request alone: if it names the caller, the evaluation jumps to Allow and the identity policy is not needed. Across accounts it is one of two Allows that are both required, so a missing Allow here is a Deny.",
+    "<b>Step 5 — Identity-based policy.</b> The policies on the role, or on the user and its groups. This is the grant in most requests. No matching <code>Allow</code> here, and no grant from check 4, means an implicit deny.",
+    "<b>Step 6 — Boundary and session policy.</b> Two limits on one identity. A permissions boundary is attached to a user or a role. A session policy is passed to STS when the session is created. Each must also allow the action, or the request is denied. If both do, the result is Allow.",
+    "<b>Step 7 — Two accounts.</b> The role <code>audit-read</code> lives in account B. It has two policies. The trust policy is a resource-based policy on the role and says who may assume it. The permissions policy says what a session of the role may do. The caller in account A has an identity policy that allows <code>sts:AssumeRole</code> on that role.",
+    "<b>Step 8 — AssumeRole.</b> The caller sends <code>AssumeRole</code> to STS with the role ARN and, here, an external ID. This is a cross-account request for the action <code>sts:AssumeRole</code> on the role. So both sides must allow it: the caller's identity policy in A, and the trust policy in B with its condition.",
+    "<b>Step 9 — The session.</b> STS returns temporary credentials. Calls signed with them come from the principal <code>assumed-role/audit-read/run-42</code>, which belongs to account B. The caller's permissions in A are not part of the session. Each call goes through panel A with account B's policies."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+
+  // Lighting needs the whole diagram, so it leaves the step-by-step build first.
+  let lighting = false;
+  function light(ids, hot) {
+    lighting = true; $("btnAll").click(); lighting = false;
+    svg.classList.add("lit");
+    svg.querySelectorAll(".tool").forEach(g => {
+      g.classList.toggle("on", ids.includes(g.id));
+      g.classList.toggle("hot", g.id === hot);
+    });
+  }
+  // Any diagram button pressed by the learner clears the lighting.
+  ["btnBuild", "btnPrev", "btnNext", "btnAll"].forEach(id => $(id).addEventListener("click", () => {
+    if (lighting) return;
+    svg.classList.remove("lit");
+    svg.querySelectorAll(".tool").forEach(g => g.classList.remove("on", "hot"));
+  }));
+
+  const pill = (kind, text) => `<span class="pill ${kind}">${text}</span>`;
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+
+  // Builds one row of buttons per option and keeps the chosen values in `pick`.
+  function buildOptions(holder, opts, pick, onChange) {
+    opts.forEach(([key, label, choices]) => {
+      const row = document.createElement("div");
+      row.className = "seg";
+      row.dataset.key = key;
+      row.innerHTML = `<b>${label}</b>`;
+      choices.forEach(([value, text]) => {
+        const b = document.createElement("button");
+        b.textContent = text;
+        b.dataset.value = value;
+        b.onclick = () => { pick[key] = value; onChange(true); };
+        row.appendChild(b);
+      });
+      $(holder).appendChild(row);
+    });
+  }
+  function paintOptions(holder, pick) {
+    [...$(holder).children].forEach(row => row.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.value === pick[row.dataset.key])));
+  }
+
+  // ---- Policy evaluation ----
+  const EV_OPTS = [
+    ["acct", "Accounts", [["same", "Caller and bucket in one account"], ["cross", "Bucket in another account"]]],
+    ["who", "Caller", [["role", "Role session"], ["user", "IAM user"]]],
+    ["rcp", "RCP", [["ok", "No Deny"], ["deny", "Explicit Deny"]]],
+    ["scp", "SCP", [["allow", "Allows"], ["none", "No Allow"], ["deny", "Explicit Deny"]]],
+    ["res", "Bucket policy", [["none", "No Allow for the caller"], ["acct", "Allows the caller's account"], ["arn", "Allows the role ARN"], ["sess", "Allows the session ARN"], ["deny", "Explicit Deny"]]],
+    ["id", "Identity policy", [["allow", "Allows"], ["none", "No Allow"], ["deny", "Explicit Deny"]]],
+    ["pb", "Boundary", [["off", "Not set"], ["allow", "Allows"], ["none", "No Allow"], ["deny", "Explicit Deny"]]],
+    ["sp", "Session policy", [["off", "Not passed"], ["allow", "Allows"], ["none", "No Allow"], ["deny", "Explicit Deny"]]]
+  ];
+  const TYPE = {
+    rcp: ["RCP", "resource control policy", "evRcp"], scp: ["SCP", "service control policy", "evScp"],
+    res: ["Bucket policy", "resource-based policy", "evRes"], id: ["Identity policy", "identity-based policy", "evId"],
+    pb: ["Boundary", "permissions boundary", "evPb"], sp: ["Session policy", "session policy", "evSp"]
+  };
+  const ORDER = ["rcp", "scp", "res", "id", "pb", "sp"];
+
+  // The evaluation, in the order of panel A. Returns the decision, the policy that decided and the checks walked.
+  function evaluate(s) {
+    const same = s.acct === "same", role = s.who === "role";
+    const sp = role ? s.sp : "off";                       // an IAM user has no session policy
+    const v = { rcp: s.rcp, scp: s.scp, res: s.res, id: s.id, pb: s.pb, sp };
+    // What the bucket policy does for this caller in the same account.
+    const direct = same && (s.res === "sess" || (s.res === "arn" && !role));   // straight to the session or the user
+    const toRole = same && s.res === "arn" && role;                             // added to the role; limits still apply
+    const walk = ["evReq", "evDeny"];
+    const out = { v, same, role, direct, toRole, walk };
+    const done = (decision, kind, by, hot, end) => Object.assign(out, { decision, kind, by, hot, walk: walk.concat(end) });
+
+    // 1. An explicit Deny in any policy type.
+    const denies = ORDER.filter(k => v[k] === "deny");
+    if (denies.length) return done("deny", "explicit", denies, "evDeny", ["outDeny"]);
+    // 2. RCP: RCPFullAWSAccess always allows, so without a Deny it passes.
+    walk.push("evRcp");
+    // 3. SCP: needs an Allow.
+    walk.push("evScp");
+    if (v.scp === "none") return done("deny", "implicit", ["scp"], "evScp", ["outDeny"]);
+    // 4. Resource-based policy.
+    walk.push("evRes");
+    if (!same && v.res === "none") return done("deny", "implicit", ["res"], "evRes", ["outDeny"]);
+    if (direct) return done("allow", "allow", ["res"], "evRes", ["evBypass", "outAllow"]);
+    // 5. Identity-based policy. Not needed when the bucket policy already granted to the role.
+    if (!toRole || v.id === "allow") walk.push("evId");
+    if (!toRole && v.id === "none") return done("deny", "implicit", ["id"], "evId", ["outDeny"]);
+    // 6. Permissions boundary.
+    if (v.pb !== "off") walk.push("evPb");
+    if (v.pb === "none") return done("deny", "implicit", ["pb"], "evPb", ["outDeny"]);
+    // 7. Session policy.
+    if (v.sp !== "off") walk.push("evSp");
+    if (v.sp === "none") return done("deny", "implicit", ["sp"], "evSp", ["outDeny"]);
+    const by = !same ? ["id", "res"] : toRole ? (v.id === "allow" ? ["id", "res"] : ["res"]) : ["id"];
+    return done("allow", "allow", by, by.length === 1 && by[0] === "res" ? "evRes" : "evId", ["outAllow"]);
+  }
+
+  const evPick = { acct: "same", who: "role", rcp: "ok", scp: "allow", res: "none", id: "allow", pb: "off", sp: "off" };
+  const SAYS = { allow: "Allows", none: "No Allow", deny: "Explicit Deny", off: "Not used", ok: "No Deny" };
+
+  function paintEval(lightUp) {
+    // An IAM user has no session, so two choices do not exist for it.
+    const role = evPick.who === "role";
+    if (!role) { evPick.sp = "off"; if (evPick.res === "sess") evPick.res = "arn"; }
+    const rows = [...$("evOpts").children];
+    rows.find(r => r.dataset.key === "sp").querySelectorAll("button").forEach(b => b.disabled = !role && b.dataset.value !== "off");
+    rows.find(r => r.dataset.key === "res").querySelectorAll("button").forEach(b => {
+      if (b.dataset.value === "sess") b.disabled = !role;
+      if (b.dataset.value === "arn") b.textContent = role ? "Allows the role ARN" : "Allows the user ARN";
+    });
+    paintOptions("evOpts", evPick);
+
+    const e = evaluate(evPick), v = e.v, same = e.same;
+    const anyDeny = e.kind === "explicit";
+    const who = role ? "role" : "user";
+
+    // One table row per check: what the policy says, and what that means for this request.
+    const resNote = { none: same ? "Nothing for this caller. In one account that is not a deny; the identity policy can still grant." : "Nothing for this caller. Across accounts the bucket's account must allow, so this is a deny.",
+      acct: same ? "Names the account. That hands the decision to IAM: the identity policy must allow." : "Names the caller's account. This is the Allow of the bucket's account. The caller's account must allow too.",
+      arn: !same ? `Names the ${who}. This is the Allow of the bucket's account. The caller's account must allow too.` : role ? "Names the role ARN. The grant is added to the role: no identity policy needed, but boundary and session policy still limit it." : "Names the user ARN. A direct grant: an implicit deny in the identity policy or the boundary does not matter.",
+      sess: same ? "Names the session ARN. A direct grant: an implicit deny in the identity policy, boundary or session policy does not matter." : "Names the session. This is the Allow of the bucket's account. The caller's account must allow too.",
+      deny: "A Deny statement matches." }[v.res];
+    const skipped = k => e.direct || (k === "id" && e.toRole);        // an implicit deny here does not count
+    const state = k => {
+      if (v[k] === "deny") return ["no", "Deny"];
+      if (k === "rcp") return ["yes", "Pass"];
+      if (k === "res") return v.res === "none" ? (same ? ["skip", "No grant"] : ["no", "No Allow"]) : v.res === "acct" && same ? ["skip", "Delegates"] : ["yes", "Allow"];
+      if (v[k] === "off") return ["skip", k === "sp" && !role ? "Not applicable" : "Not used"];
+      if (v[k] === "none") return skipped(k) ? ["skip", "Not needed"] : ["no", "No Allow"];
+      return ["yes", k === "id" ? "Allow" : "Pass"];
+    };
+    const note = {
+      rcp: v.rcp === "deny" ? "A Deny statement matches." : "<code>RCPFullAWSAccess</code> is always attached, so there is always an Allow.",
+      scp: { allow: "An SCP at every level allows the action, for example <code>FullAWSAccess</code>.", none: "Some level of the tree has an allow list without this action.", deny: "A Deny statement matches." }[v.scp],
+      res: resNote,
+      id: { allow: `The ${who}'s policy allows the action on this bucket.`, none: skipped("id") ? "No statement matches, and none is needed: the bucket policy already granted." : "No statement matches.", deny: "A Deny statement matches." }[v.id],
+      pb: { off: `No boundary is set on the ${who}.`, allow: "The boundary includes the action.", none: e.direct ? "The boundary does not include the action, but it does not limit a direct grant from a resource policy." : "The boundary does not include the action.", deny: "A Deny statement in the boundary matches." }[v.pb],
+      sp: !role ? "An IAM user's long-term credentials carry no session policy." : { off: "None was passed to <code>AssumeRole</code>.", allow: "The session policy includes the action.", none: e.direct ? "The session policy does not include the action, but it does not limit a grant made to the session itself." : "The session policy does not include the action.", deny: "A Deny statement in the session policy matches." }[v.sp]
+    };
+    const denyList = ORDER.filter(k => v[k] === "deny").map(k => TYPE[k][0]).join(", ");
+    let html = "<tr><th>#</th><th>Check</th><th>In this request</th><th>Says</th></tr>";
+    html += `<tr class="${anyDeny ? "decider" : ""}"><td>1</td><td><b>Explicit Deny anywhere</b></td><td>${anyDeny ? "Found in: " + denyList + "." : "None of the six policies has a matching Deny."}</td><td>${anyDeny ? pill("no", "Deny") : pill("yes", "Pass")}</td></tr>`;
+    ORDER.forEach((k, i) => {
+      const [kind, text] = state(k);
+      const decides = !anyDeny && e.by.includes(k);
+      html += `<tr class="${decides ? "decider" : ""}"><td>${i + 2}</td><td><b>${TYPE[k][0]}</b></td><td>${note[k]}</td><td>${pill(kind, text)}</td></tr>`;
+    });
+    $("evTable").innerHTML = html;
+
+    const allowed = e.decision === "allow";
+    big("evOut", allowed ? "Allowed" : "Denied", allowed ? "pub" : "bad");
+    big("evBy", e.by.map(k => TYPE[k][0]).join(allowed && e.by.length > 1 && same ? " or " : " + "), allowed ? "pub" : "bad");
+    big("evKind", allowed ? "Allow" : anyDeny ? "Explicit deny" : "Implicit deny", allowed ? "pub" : "bad");
+
+    const errUser = role ? "arn:aws:sts::111111111111:assumed-role/app/i-0ab12" : "arn:aws:iam::111111111111:user/app";
+    const err = tail => `<code class="err">User: ${errUser} is not authorized to perform: s3:GetObject on resource: "arn:aws:s3:::reports/q3.csv" ${tail}</code>`;
+    let msg;
+    if (anyDeny) {
+      msg = `<b>Denied by an explicit Deny</b> in: ${denyList}. This is check 1. Nothing else is read, and no Allow in any policy can win over it.`;
+      msg += e.by.length > 1 ? " When several policy types deny, the error names only one of them." : "";
+      msg += err(`with an explicit deny in a ${TYPE[e.by[0]][1]}`);
+    } else if (!allowed) {
+      const k = e.by[0];
+      msg = {
+        scp: "<b>Denied at check 3.</b> No SCP allows the action, so nothing below can help. An SCP never grants, but without its Allow the grants of the account do not count.",
+        res: "<b>Denied at check 4.</b> The bucket is in another account, and that account has not allowed this caller. Across accounts the resource-based policy is required. An identity policy alone works only inside one account.",
+        id: same
+          ? (v.res === "acct" ? "<b>Denied at check 5.</b> The bucket policy names the account, not the caller. That only delegates: the account's IAM policies must then allow, and the identity policy does not." : "<b>Denied at check 5.</b> Nothing grants the action: the bucket policy has no Allow for this caller and the identity policy has none either.")
+          : "<b>Denied at check 5.</b> The bucket's account allows the caller, but the caller's own account does not. Across accounts both must allow. The same-account shortcut from the bucket policy does not exist here.",
+        pb: e.toRole && v.id !== "allow"
+          ? "<b>Denied at check 6.</b> The bucket policy granted to the role ARN, so no identity policy was needed. But a grant to the role ARN is still limited by the role's boundary, and the boundary does not include the action. Naming the session ARN would not be limited."
+          : "<b>Denied at check 6.</b> There is a grant, but the permissions boundary does not include the action. What the identity can do is only what the grant and the boundary both allow.",
+        sp: "<b>Denied at check 7.</b> The role may do this, but this session was created with a session policy that does not include the action. A session policy can only narrow the role."
+      }[k];
+      msg += err(`because no ${TYPE[k][1]} allows the s3:GetObject action`);
+    } else if (e.direct) {
+      msg = `<b>Allowed by the bucket policy alone.</b> Same account, and the policy names the ${role ? "session" : "user"} itself. This is the dashed green line: the evaluation ends at check 4.`;
+      const ignored = [v.id === "none" && "identity policy", v.pb === "none" && "permissions boundary", v.sp === "none" && "session policy"].filter(Boolean);
+      msg += ignored.length ? ` The implicit deny in the ${ignored.join(" and the ")} does not count against a direct grant. An explicit Deny there would.` : "";
+    } else if (!same) {
+      msg = "<b>Allowed, by two Allows.</b> The bucket's account allows the caller in the bucket policy. The caller's account allows the action in the identity policy" + (v.pb === "allow" || v.sp === "allow" ? ", and its limits include it" : "") + ". Take either one away and the request is denied.";
+    } else if (e.toRole) {
+      msg = v.id === "allow"
+        ? "<b>Allowed.</b> Both the identity policy and the bucket policy grant it. In one account either one would be enough."
+        : "<b>Allowed by the bucket policy.</b> Same account, and the policy names the role ARN. The identity policy has no Allow and none is needed.";
+      msg += v.pb === "allow" || v.sp === "allow" ? " The boundary and session policy that are in use include the action; a grant to the role ARN needs that." : "";
+    } else {
+      msg = "<b>Allowed by the identity policy.</b> No Deny, the SCPs allow it, and every limit that is in use includes the action. " + (v.res === "acct" ? "The bucket policy names the account, which adds nothing in the same account." : "In one account the bucket policy does not need to say anything.");
+    }
+    $("evMsg").innerHTML = msg;
+    $("evMsg").dataset.verdict = e.decision + ":" + e.kind + ":" + e.by.join("+");
+    if (lightUp) light(e.walk, e.hot);
+  }
+  buildOptions("evOpts", EV_OPTS, evPick, paintEval);
+  paintEval(false);
+
+  // ---- AssumeRole across accounts ----
+  const AR_OPTS = [
+    ["caller", "Caller", [["col", "The vendor's collector role"], ["dev", "Another role in the vendor's account"]]],
+    ["idp", "Caller's identity policy", [["allow", "Allows sts:AssumeRole on your role"], ["none", "No Allow"]]],
+    ["prin", "Trust: Principal", [["acct", "The vendor's account (:root)"], ["role", "Only role/collector"]]],
+    ["cond", "Trust: Condition", [["none", "None"], ["ext", "sts:ExternalId = cust-7421"]]],
+    ["ext", "External ID sent", [["mine", "cust-7421 (yours)"], ["other", "cust-9033 (another customer's)"], ["nil", "None"]]]
+  ];
+  const arPick = { caller: "col", idp: "allow", prin: "acct", cond: "none", ext: "mine" };
+
+  function assume(s) {
+    if (s.idp === "none") return { ok: false, by: "id", risk: false };
+    if (s.prin === "role" && s.caller !== "col") return { ok: false, by: "principal", risk: false };
+    if (s.cond === "ext" && s.ext !== "mine") return { ok: false, by: "condition", risk: false };
+    // Credentials are issued. Is it the call you meant to allow?
+    const risk = s.caller !== "col" ? "insider" : s.ext === "other" ? "deputy" : s.cond === "none" ? "open" : false;
+    return { ok: true, by: "both", risk };
+  }
+
+  function paintAssume(lightUp) {
+    paintOptions("arOpts", arPick);
+    const s = arPick, r = assume(s);
+    big("arOut", r.ok ? "Credentials" : "AccessDenied", r.ok ? "pub" : "bad");
+    big("arBy", { id: "Caller's identity policy", principal: "Trust policy: Principal", condition: "Trust policy: Condition", both: "Both sides allow" }[r.by], r.ok ? "pub" : "bad");
+    big("arRisk", !r.ok ? "Yes, blocked" : r.risk === "deputy" ? "No: confused deputy" : r.risk === "insider" ? "No: wrong caller" : r.risk === "open" ? "Works, but open" : "Yes", !r.ok || !r.risk ? "pub" : "bad");
+    const sent = { mine: "your ID, <code>cust-7421</code>", other: "another customer's ID, <code>cust-9033</code>", nil: "no external ID" }[s.ext];
+    let msg;
+    if (r.by === "id") {
+      msg = "<b>Denied in account A.</b> The role is in another account, so the caller's own account must allow <code>sts:AssumeRole</code> on it. The identity policy does not. The trust policy is never the whole answer across accounts.";
+    } else if (r.by === "principal") {
+      msg = "<b>Denied by the trust policy.</b> It names only <code>role/collector</code>, and the caller is a different role. Its identity policy in account A allows the call, but that is one of two Allows.";
+    } else if (r.by === "condition") {
+      msg = `<b>Denied by the trust policy.</b> The condition needs <code>sts:ExternalId</code> to equal <code>cust-7421</code>, and the call carries ${sent}. ` +
+        (s.ext === "other" ? "This is the confused deputy, stopped: another customer gave the vendor your role ARN, the vendor sent that customer's ID, and it does not match yours." : "A key that is missing from the request makes <code>StringEquals</code> false.");
+    } else if (r.risk === "deputy") {
+      msg = "<b>Credentials issued, to the wrong party.</b> Another customer entered your role ARN in the vendor's product. The vendor's role is trusted, and nothing in your trust policy asks on whose behalf it calls. The other customer now reads your account through the vendor. Require the external ID.";
+    } else if (r.risk === "insider") {
+      msg = "<b>Credentials issued, to a caller you did not mean.</b> <code>:root</code> trusts the whole vendor account: every role there that the vendor's admins allow. " +
+        (s.cond === "ext" ? "The external ID did not stop it, because it is not a secret and this caller sent it. It protects against the wrong customer, not against the wrong role. " : "") + "Name <code>role/collector</code> in the Principal.";
+    } else if (r.risk === "open") {
+      msg = `<b>Credentials issued.</b> The call is the one you wanted, with ${sent}. But the trust policy has no condition, so it would answer the same way if the vendor called for another customer. Try “cust-9033”.`;
+    } else {
+      msg = "<b>Credentials issued, as intended.</b> The caller's identity policy allows the call" + (s.prin === "role" ? ", the trust policy names this role" : ", the trust policy names its account") + " and the external ID is yours. The session can now do what the role's permissions policy allows, in account B.";
+    }
+    $("arMsg").innerHTML = msg;
+    $("arMsg").dataset.verdict = (r.ok ? "ok" : "deny") + ":" + r.by + ":" + (r.risk || "none");
+    if (lightUp) light(r.by === "id" ? ["raCaller", "raSts"] : r.ok ? ["raCaller", "raSts", "raTrust", "raCred", "raUse", "raPerm", "raRes"] : ["raCaller", "raSts", "raTrust"],
+      r.by === "id" ? "raCaller" : r.ok ? "raCred" : "raTrust");
+  }
+  buildOptions("arOpts", AR_OPTS, arPick, paintAssume);
+  paintAssume(false);
+</script>
+</body>
+</html>

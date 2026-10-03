@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 2 — VPC Internals</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  #diagram .tool { transition: opacity .25s; }
+  #diagram.lit .tool { opacity: .16; }
+  #diagram.lit .tool.on { opacity: 1; }
+  #diagram.lit .tool.stop .box { stroke: var(--bad); stroke-width: 3.5; }
+  #dropMark { display: none; }
+  #diagram.lit #dropMark.show { display: block; }
+  .dbg .calc { margin: 14px 0 12px; }
+  .dbg .calc .big { font-size: 21px; }
+  .dbg h3, .rt h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .rt input { font: inherit; font-size: 14px; width: 150px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  .rt tr.lose td { color: var(--muted); }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .lab li { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-01/index.html">← Day 1</a><a href="../README.md">30-day plan</a><a href="../day-03/index.html">Day 3 →</a></nav>
+  <header>
+    <div class="tag">Day 2 of 30 · Week 1 — Identity, Networking, Compute, Storage</div>
+    <h1>VPC Internals</h1>
+    <p class="lead">The architecture track taught you which boxes to draw: subnet, route table, NAT gateway, security group. Today you follow one packet through those boxes. At each hop you see what is checked, what is rewritten and what is remembered. Then you break the path in six ways and learn to tell the breaks apart from a Flow Log record and a Reachability Analyzer result.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 698" role="img" aria-label="One HTTPS request and its reply. Left lane, top to bottom: an EC2 instance in a private subnet sends a packet through its security group, the subnet's network ACL and a route table lookup, then through a NAT gateway in a public subnet, a second route table lookup and the internet gateway, to a server on the internet. Right lane, bottom to top: the reply returns through the internet gateway and the NAT gateway, then the private subnet's network ACL and the security group. Two dashed boxes show the state that is kept: the security group's tracked connection and the NAT gateway's translation table.">
+        <defs>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowT" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--region)"/></marker>
+          <symbol id="ec2" viewBox="0 0 56 56">
+            <rect width="56" height="56" rx="8" fill="var(--orange)"/>
+            <rect x="14" y="14" width="28" height="28" rx="3" fill="none" stroke="#fff" stroke-width="2.5"/>
+            <g stroke="#fff" stroke-width="2.5" stroke-linecap="round">
+              <line x1="22" y1="7" x2="22" y2="14"/><line x1="34" y1="7" x2="34" y2="14"/>
+              <line x1="22" y1="42" x2="22" y2="49"/><line x1="34" y1="42" x2="34" y2="49"/>
+              <line x1="7" y1="22" x2="14" y2="22"/><line x1="7" y1="34" x2="14" y2="34"/>
+              <line x1="42" y1="22" x2="49" y2="22"/><line x1="42" y1="34" x2="49" y2="34"/>
+            </g>
+          </symbol>
+        </defs>
+
+        <!-- Always visible: VPC and the two subnets -->
+        <rect x="14" y="14" width="972" height="570" rx="10" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2.5"/>
+        <text x="28" y="37" font-size="14" font-weight="700" style="fill:var(--vpc)">VPC — 10.0.0.0/16</text>
+        <rect x="28" y="48" width="944" height="294" rx="8" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+        <text x="42" y="69" font-size="13.5" font-weight="700" style="fill:var(--priv)">Private subnet — 10.0.2.0/24</text>
+        <text x="958" y="69" font-size="11" text-anchor="end" style="fill:var(--muted)">route table rtb-private · network ACL acl-private (custom)</text>
+        <rect x="28" y="384" width="944" height="156" rx="8" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+        <text x="42" y="405" font-size="13.5" font-weight="700" style="fill:var(--pub)">Public subnet — 10.0.1.0/24</text>
+        <text x="958" y="405" font-size="11" text-anchor="end" style="fill:var(--muted)">route table rtb-public · network ACL acl-public (default: allows all)</text>
+
+        <!-- Step 1: the instance and its ENI -->
+        <g data-step="1">
+          <g class="tool" id="hInst">
+            <rect class="box" x="40" y="80" width="920" height="46" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <use href="#ec2" x="50" y="87" width="32" height="32"/>
+            <text x="92" y="100" font-size="13" font-weight="700">EC2 instance i-app · network interface eni-app</text>
+            <text x="92" y="116" font-size="11" style="fill:var(--muted)">private IP 10.0.2.10 · no public IP · security group sg-app · runs: curl https://api.example.com</text>
+          </g>
+        </g>
+
+        <!-- Step 2: security group, outbound, and the tracked connection -->
+        <g data-step="2">
+          <g class="tool" id="wSgOut" data-from="hInst" data-to="hSgOut">
+            <line x1="463" y1="127" x2="463" y2="148" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrowO)"/>
+            <text x="452" y="143" font-size="11" font-weight="700" text-anchor="end" style="fill:var(--orange)">request ↓</text>
+          </g>
+          <g class="tool" id="hSgOut">
+            <rect class="box" x="40" y="150" width="446" height="50" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <circle cx="58" cy="175" r="11" fill="var(--orange)"/><text x="58" y="179" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">1</text>
+            <text x="78" y="170" font-size="12.5" font-weight="700">Security group sg-app · outbound rules</text>
+            <text x="78" y="187" font-size="11" style="fill:var(--muted)">allows tcp 443 to 0.0.0.0/0, and starts tracking the connection</text>
+          </g>
+          <g class="tool" id="sTrack">
+            <rect class="box" x="560" y="282" width="400" height="50" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="1.5" stroke-dasharray="6 4"/>
+            <text x="574" y="302" font-size="11" font-weight="700">Tracked connection · kept by the security group</text>
+            <text x="574" y="320" font-size="10.5" class="mono">tcp 10.0.2.10:49152 ↔ 203.0.113.50:443</text>
+          </g>
+        </g>
+
+        <!-- Step 3: network ACL, outbound -->
+        <g data-step="3">
+          <g class="tool" id="wNaclOut" data-from="hSgOut" data-to="hNaclOut">
+            <line x1="463" y1="201" x2="463" y2="214" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrowO)"/>
+          </g>
+          <g class="tool" id="hNaclOut">
+            <rect class="box" x="40" y="216" width="446" height="50" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <circle cx="58" cy="241" r="11" fill="var(--orange)"/><text x="58" y="245" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">2</text>
+            <text x="78" y="236" font-size="12.5" font-weight="700">Network ACL acl-private · outbound rules</text>
+            <text x="78" y="253" font-size="11" style="fill:var(--muted)">keeps no state · lowest number first: rule 100 allows tcp 443</text>
+          </g>
+        </g>
+
+        <!-- Step 4: route lookup in the private subnet's route table -->
+        <g data-step="4">
+          <g class="tool" id="wRtbPriv" data-from="hNaclOut" data-to="hRtbPriv">
+            <line x1="463" y1="267" x2="463" y2="280" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrowO)"/>
+          </g>
+          <g class="tool" id="hRtbPriv">
+            <rect class="box" x="40" y="282" width="446" height="50" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <circle cx="58" cy="307" r="11" fill="var(--orange)"/><text x="58" y="311" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">3</text>
+            <text x="78" y="302" font-size="12.5" font-weight="700">Route table rtb-private · longest prefix wins</text>
+            <text x="78" y="319" font-size="11" style="fill:var(--muted)">not in 10.0.0.0/16 (local), so 0.0.0.0/0 → nat-1 is used</text>
+          </g>
+        </g>
+
+        <!-- Step 5: NAT gateway and its translation table -->
+        <g data-step="5">
+          <g class="tool" id="wNat" data-from="hRtbPriv" data-to="hNat">
+            <line x1="463" y1="333" x2="463" y2="412" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrowO)"/>
+            <text x="452" y="367" font-size="10.5" text-anchor="end" class="mono">10.0.2.10:49152 → 203.0.113.50:443</text>
+          </g>
+          <g class="tool" id="hNat">
+            <rect class="box" x="40" y="414" width="446" height="50" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2.5"/>
+            <circle cx="58" cy="439" r="11" fill="var(--orange)"/><text x="58" y="443" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">4</text>
+            <text x="78" y="434" font-size="12.5" font-weight="700" style="fill:var(--vpc)">NAT gateway nat-1 · private IP 10.0.1.5</text>
+            <text x="78" y="451" font-size="11" style="fill:var(--muted)">new source 10.0.1.5:31544 · 55,000 connections per destination</text>
+          </g>
+          <g class="tool" id="sNatTab">
+            <rect class="box" x="560" y="480" width="400" height="50" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="1.5" stroke-dasharray="6 4"/>
+            <text x="574" y="500" font-size="11" font-weight="700">Translation table · kept by the NAT gateway</text>
+            <text x="574" y="518" font-size="10.5" class="mono">10.0.2.10:49152 ↔ 10.0.1.5:31544 → 203.0.113.50:443</text>
+          </g>
+        </g>
+
+        <!-- Step 6: route lookup in the NAT gateway's subnet -->
+        <g data-step="6">
+          <g class="tool" id="wRtbPub" data-from="hNat" data-to="hRtbPub">
+            <line x1="463" y1="465" x2="463" y2="478" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrowO)"/>
+          </g>
+          <g class="tool" id="hRtbPub">
+            <rect class="box" x="40" y="480" width="446" height="50" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+            <circle cx="58" cy="505" r="11" fill="var(--orange)"/><text x="58" y="509" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">5</text>
+            <text x="78" y="500" font-size="12.5" font-weight="700">Route table rtb-public · the NAT gateway's subnet</text>
+            <text x="78" y="517" font-size="11" style="fill:var(--muted)">0.0.0.0/0 → igw-1: this route is what makes the subnet public</text>
+          </g>
+        </g>
+
+        <!-- Step 7: internet gateway and the server -->
+        <g data-step="7">
+          <g class="tool" id="wIgw" data-from="hRtbPub" data-to="hIgw">
+            <line x1="463" y1="531" x2="463" y2="558" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrowO)"/>
+            <text x="452" y="554" font-size="10.5" text-anchor="end" class="mono">10.0.1.5:31544 → 203.0.113.50:443</text>
+          </g>
+          <g class="tool" id="hIgw">
+            <rect class="box" x="40" y="560" width="920" height="48" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2.5"/>
+            <circle cx="58" cy="584" r="11" fill="var(--orange)"/><text x="58" y="588" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">6</text>
+            <text x="78" y="579" font-size="12.5" font-weight="700" style="fill:var(--vpc)">Internet gateway igw-1 · one-to-one NAT</text>
+            <text x="78" y="596" font-size="11" style="fill:var(--muted)">out: source 10.0.1.5 → Elastic IP 198.51.100.7 · back: destination 198.51.100.7 → 10.0.1.5 · no public IPv4 for the source: dropped</text>
+          </g>
+          <g class="tool" id="wNet" data-from="hIgw" data-to="hNet">
+            <line x1="463" y1="609" x2="463" y2="634" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrowO)"/>
+            <text x="452" y="626" font-size="10.5" text-anchor="end" class="mono">198.51.100.7:31544 → 203.0.113.50:443</text>
+          </g>
+          <g class="tool" id="hNet">
+            <rect class="box" x="40" y="636" width="920" height="48" rx="8" fill="var(--card)" stroke="var(--text)" stroke-width="1.5"/>
+            <circle cx="58" cy="660" r="11" fill="var(--orange)"/><text x="58" y="664" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">7</text>
+            <text x="78" y="655" font-size="12.5" font-weight="700">api.example.com · 203.0.113.50:443 · a server on the internet</text>
+            <text x="78" y="672" font-size="11" style="fill:var(--muted)">sees a connection from 198.51.100.7:31544 and replies to that address. It never learns 10.0.2.10 or 10.0.1.5.</text>
+          </g>
+        </g>
+
+        <!-- Step 8: the reply returns through the internet gateway and the NAT gateway -->
+        <g data-step="8">
+          <g class="tool" id="wIgwBack" data-from="hNet" data-to="hIgw">
+            <line x1="537" y1="635" x2="537" y2="610" stroke="var(--region)" stroke-width="2.5" marker-end="url(#arrowT)"/>
+            <text x="548" y="626" font-size="10.5" class="mono">203.0.113.50:443 → 198.51.100.7:31544</text>
+          </g>
+          <g class="tool" id="wNatBack" data-from="hIgw" data-to="hNatBack">
+            <line x1="537" y1="559" x2="537" y2="466" stroke="var(--region)" stroke-width="2.5" marker-end="url(#arrowT)"/>
+            <text x="548" y="554" font-size="10.5" class="mono">203.0.113.50:443 → 10.0.1.5:31544</text>
+          </g>
+          <g class="tool" id="hNatBack">
+            <rect class="box" x="514" y="414" width="446" height="50" rx="8" fill="var(--card)" stroke="var(--vpc)" stroke-width="2.5"/>
+            <circle cx="532" cy="439" r="11" fill="var(--region)"/><text x="532" y="443" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">8</text>
+            <text x="552" y="434" font-size="12.5" font-weight="700" style="fill:var(--vpc)">NAT gateway nat-1 · reverse lookup</text>
+            <text x="552" y="451" font-size="11" style="fill:var(--muted)">port 31544 is in its table: destination becomes 10.0.2.10:49152</text>
+          </g>
+        </g>
+
+        <!-- Step 9: network ACL, inbound -->
+        <g data-step="9">
+          <g class="tool" id="wNaclIn" data-from="hNatBack" data-to="hNaclIn">
+            <line x1="537" y1="413" x2="537" y2="268" stroke="var(--region)" stroke-width="2.5" marker-end="url(#arrowT)"/>
+            <text x="548" y="367" font-size="10.5" class="mono">203.0.113.50:443 → 10.0.2.10:49152</text>
+          </g>
+          <g class="tool" id="hNaclIn">
+            <rect class="box" x="514" y="216" width="446" height="50" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2"/>
+            <circle cx="532" cy="241" r="11" fill="var(--region)"/><text x="532" y="245" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">9</text>
+            <text x="552" y="236" font-size="12.5" font-weight="700">Network ACL acl-private · inbound rules</text>
+            <text x="552" y="253" font-size="11" style="fill:var(--muted)">needs its own rule: allow tcp 1024–65535 from 0.0.0.0/0</text>
+          </g>
+        </g>
+
+        <!-- Step 10: security group, tracked connection -->
+        <g data-step="10">
+          <g class="tool" id="wSgIn" data-from="hNaclIn" data-to="hSgIn">
+            <line x1="537" y1="215" x2="537" y2="202" stroke="var(--region)" stroke-width="2.5" marker-end="url(#arrowT)"/>
+          </g>
+          <g class="tool" id="hSgIn">
+            <rect class="box" x="514" y="150" width="446" height="50" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2"/>
+            <circle cx="532" cy="175" r="11" fill="var(--region)"/><text x="532" y="179" font-size="11.5" font-weight="700" text-anchor="middle" style="fill:#fff">10</text>
+            <text x="552" y="170" font-size="12.5" font-weight="700">Security group sg-app · tracked connection</text>
+            <text x="552" y="187" font-size="11" style="fill:var(--muted)">a reply to a tracked connection passes; inbound rules are not read</text>
+          </g>
+          <g class="tool" id="wInstBack" data-from="hSgIn" data-to="hInst">
+            <line x1="537" y1="149" x2="537" y2="128" stroke="var(--region)" stroke-width="2.5" marker-end="url(#arrowT)"/>
+            <text x="548" y="143" font-size="11" font-weight="700" style="fill:var(--region)">reply ↑</text>
+          </g>
+        </g>
+
+        <!-- Placed by the debugger on the hop where the packet stops -->
+        <g id="dropMark">
+          <rect width="116" height="18" rx="9" fill="var(--bad)"/>
+          <text x="58" y="13" font-size="10.5" font-weight="700" text-anchor="middle" style="fill:var(--card)">✕ packet dropped</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: one HTTPS request from an instance in a private subnet, and its reply. Read the left lane downwards, then the right lane upwards. The request passes the <b>security group</b>, the subnet's <b>network ACL</b> and a <b>route lookup</b>. Then the <b>NAT gateway</b> rewrites the source address, and the <b>internet gateway</b> rewrites it again. The reply comes back through the same two gateways in reverse. Two things remember the connection: the security group and the NAT gateway (dashed boxes). The network ACLs and the route tables remember nothing. The monospace lines show the packet's addresses on each stretch.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Request: steps 1–7</span>
+      <span style="--c:var(--region)">Reply: steps 8–10</span>
+      <span style="--c:var(--vpc)">Gateways that rewrite addresses</span>
+      <span style="--c:var(--dc)">State that is remembered</span>
+      <span style="--c:var(--priv)">Private subnet</span>
+      <span style="--c:var(--pub)">Public subnet</span>
+    </div>
+  </div>
+
+  <h2>Why can't it connect?</h2>
+  <div class="card dbg">
+    <p>The instance runs <code>curl https://api.example.com</code> and it hangs. Each button breaks one thing in the setup above. Before you read the answer, say where the packet stops and what the flow log on the instance's network interface will show. The diagram lights the hops the packet reached.</p>
+    <div class="seg" id="faultBtns"></div>
+    <p class="note" id="dbgChange"></p>
+    <div class="calc">
+      <div><div class="lbl">Packet stops at</div><div class="big" id="dbgStop"></div></div>
+      <div><div class="lbl">Flow log on eni-app</div><div class="big" id="dbgFlow"></div></div>
+      <div><div class="lbl">Reachability Analyzer</div><div class="big" id="dbgRa"></div></div>
+    </div>
+    <div class="table-wrap"><table id="dbgTable"></table></div>
+    <h3>Flow log records for eni-app</h3>
+    <pre class="code" id="dbgLog"></pre>
+    <h3>Reachability Analyzer · path from i-app to igw-1, tcp 443</h3>
+    <pre class="code" id="dbgRaOut"></pre>
+    <p class="result" id="dbgMsg"></p>
+    <p class="note">The records use the default format. Packet and byte counts are examples. Reachability Analyzer reads configuration and sends no packets; the explanation codes and their meanings are the ones in the AWS documentation. A real result also names the exact resource IDs.</p>
+  </div>
+
+  <h2>Which route wins?</h2>
+  <div class="card rt">
+    <p>One route table, with routes that overlap on purpose. Pick a destination address, or type one, and say which target the packet goes to before you read the table.</p>
+    <div class="seg" id="rtBtns"></div>
+    <div class="seg"><b>Other</b><input id="rtIp" type="text" inputmode="decimal" aria-label="Destination IPv4 address" placeholder="10.50.8.4"><button id="rtGo">Look up</button></div>
+    <div class="table-wrap"><table id="rtTable"></table></div>
+    <p class="result" id="rtMsg"></p>
+    <p class="note">The order of the rules: the longest matching prefix wins. Only when two routes have the same destination does the type decide: a static route beats a prefix-list route, and both beat a propagated route. Among propagated routes, Direct Connect BGP beats VPN static, which beats VPN BGP. The S3 prefix list holds many ranges; one example range is shown.</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>IP planning and secondary CIDRs</h3>
+      <ul>
+        <li>A VPC CIDR and a subnet CIDR must each be between <code>/16</code> and <code>/28</code>. You cannot resize either one later.</li>
+        <li>When a VPC runs out of addresses, you add a <b>secondary CIDR</b> and create new subnets in it. A local route for it appears in every route table.</li>
+        <li>There are rules. If the primary CIDR is in <code>10.0.0.0/8</code>, you cannot add a block from <code>172.16.0.0/12</code> or <code>192.168.0.0/16</code>. You can add another <code>10.x</code> block or one from <code>100.64.0.0/10</code>.</li>
+        <li>The new block cannot be the same as, or larger than, the destination of a route that already exists in any route table of the VPC.</li>
+        <li>You cannot remove the primary CIDR. You can remove a secondary one.</li>
+        <li>Plan so that no two VPCs overlap, in any account or Region. Overlap blocks peering, and it cannot be fixed without rebuilding.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>IPv6 and dual-stack</h3>
+      <ul>
+        <li>An Amazon-provided IPv6 block for a VPC is a <code>/56</code>. A subnet usually gets a <code>/64</code>. You do not choose the range.</li>
+        <li>Every IPv6 address is globally unique, so it is public. There is no private range and no address translation.</li>
+        <li>What makes an IPv6 subnet private is only its route: <code>::/0</code> to an <b>egress-only internet gateway</b> instead of the internet gateway.</li>
+        <li>IPv4 and IPv6 are separate everywhere: separate routes, separate security group rules (<code>::/0</code>), separate network ACL rules. Opening one does not open the other.</li>
+        <li>An IPv6-only subnet reaches IPv4-only services with <b>DNS64</b> on the subnet and a route for <code>64:ff9b::/96</code> to a NAT gateway, which does NAT64.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Network interfaces (ENIs)</h3>
+      <ul>
+        <li>The private IP, the security groups, the MAC address and the source/destination check belong to the <b>ENI</b>, not to the instance.</li>
+        <li>An ENI stays in its subnet, so it stays in one AZ. A secondary ENI can move to another instance in the same AZ and takes its addresses and security groups with it. The primary ENI cannot be detached.</li>
+        <li><b>Source/destination check</b> drops packets that are not from or to the ENI's own addresses. Turn it off on anything that forwards traffic: a NAT instance, a firewall, a router.</li>
+        <li>AWS services create <b>requester-managed ENIs</b> in your subnets: NAT gateways, load balancers, interface endpoints, Lambda. They use your addresses and appear in your Flow Logs.</li>
+        <li>An auto-assigned public IPv4 address is released when the instance stops. An Elastic IP stays.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Route priority</h3>
+      <ul>
+        <li>The router uses the <b>most specific</b> route that matches the destination. This is longest prefix match.</li>
+        <li>If two routes have the same destination, a <b>static</b> route beats a <b>propagated</b> one. A prefix-list route sits between them.</li>
+        <li>The <b>local</b> route covers the VPC CIDR. You may add a more specific route, but its destination must be the whole CIDR of one subnet. This is how you send traffic between two subnets through a firewall.</li>
+        <li>A subnet uses exactly one route table. With no explicit association it uses the <b>main</b> route table. Editing a table that is not associated changes nothing.</li>
+        <li>A route table can also be associated with the internet gateway. It then steers traffic that <b>enters</b> the VPC, for example to a firewall endpoint.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Prefix lists</h3>
+      <ul>
+        <li>A <b>prefix list</b> is a named set of CIDR blocks. You use its ID in security group rules and in routes. Change the list once and every rule that uses it follows.</li>
+        <li>A <b>customer-managed</b> list has a maximum size that you set. In a security group or route table it counts as that maximum, not as the number of entries in use. A list sized for 20 entries costs 20 rules.</li>
+        <li>An <b>AWS-managed</b> list has a fixed weight. S3 and DynamoDB weigh 1. The CloudFront origin-facing list weighs 55, so one rule with it uses 55 of the 60 rules a security group has by default.</li>
+        <li>The S3 and DynamoDB lists are also what a gateway endpoint puts into your route tables (<a href="../../aws_architecture/day-24/index.html">architecture Day 24</a>).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Security group references</h3>
+      <ul>
+        <li>A rule can name another security group as its source. It then allows traffic from the <b>private IP addresses</b> of the network interfaces that have that group.</li>
+        <li>It copies no rules from the other group, and it counts as one rule however many instances are in that group.</li>
+        <li>It matches private addresses only. If the client calls the server's public IP, the packet arrives with a public source address and the rule does not match.</li>
+        <li>It works inside a VPC and across a peering connection in the same Region. Across a transit gateway it works for inbound rules only, and only when security group referencing is enabled on the gateway.</li>
+        <li>It does not work when the traffic between the two instances is routed through a middlebox. Use CIDR blocks there.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Stateful in practice: connection tracking</h3>
+      <ul>
+        <li>A security group lets a reply through because it <b>tracks</b> the connection, not because a rule matches.</li>
+        <li>Not every flow is tracked. If a rule allows TCP or UDP from <code>0.0.0.0/0</code> and the other direction allows all traffic to <code>0.0.0.0/0</code> on all ports, the flow is <b>untracked</b>. Flows through a NAT gateway, a Network Load Balancer or an interface endpoint are always tracked.</li>
+        <li>Remove a rule, and a tracked connection keeps working until it ends or times out. An untracked one is cut at once.</li>
+        <li>An idle tracked TCP connection is forgotten after a timeout. The default is 5 days, and 350 seconds on the newest (Nitro v6) instance types. You can set it per ENI.</li>
+        <li>Each instance type can track a limited number of connections. Past that limit, packets are dropped.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Stateless in practice: ephemeral ports</h3>
+      <ul>
+        <li>A network ACL judges every packet alone, in both directions. A reply needs its own rule (<a href="../../aws_architecture/day-05/index.html">architecture Day 5</a>).</li>
+        <li>The rule must cover the port the <b>client</b> chose. Many Linux kernels use 32768–61000. Windows Server 2008 and later use 49152–65535. NAT gateways, load balancers and Lambda use 1024–65535. In practice you allow 1024–65535.</li>
+        <li>The rule must also match the reply's <b>source address</b>. Behind a NAT gateway that is still the internet host, not the NAT gateway.</li>
+        <li>A network ACL is read when a packet enters or leaves the subnet. Traffic between two hosts in one subnet never meets it.</li>
+        <li>Neither a network ACL nor a security group can block DNS queries to the Amazon resolver. A network ACL also cannot block the instance metadata service.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>NAT gateway and egress-only gateway</h3>
+      <ul>
+        <li>A <b>NAT gateway</b> maps many private sources to one address by giving each connection its own source port. That is why its limit is per destination: 55,000 connections at once to one destination address, port and protocol, for each of its addresses.</li>
+        <li>It handles TCP, UDP and ICMP only. It has no security group. It closes a connection that is idle for 350 seconds without telling either side.</li>
+        <li>A standard NAT gateway lives in one subnet, so in one AZ (<a href="../../aws_architecture/day-04/index.html">architecture Day 4</a>). The newer <b>regional</b> mode spans the AZs you use and needs no public subnet.</li>
+        <li>An <b>egress-only internet gateway</b> is the IPv6 answer. It is stateful, it allows connections that start inside and blocks those that start outside, and it translates nothing.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Network Firewall and Gateway Load Balancer</h3>
+      <ul>
+        <li><b>AWS Network Firewall</b> puts a firewall endpoint in a subnet of its own in each AZ. It inspects only what your route tables send through that endpoint.</li>
+        <li>It has two engines. The stateless engine reads each packet alone and can pass it, drop it or hand it on. The stateful engine reads the flow, takes Suricata-compatible rules and domain lists, and writes logs.</li>
+        <li>A <b>Gateway Load Balancer</b> does the same job for third-party appliances. It works at layer 3, takes every packet on every port and sends it to an appliance inside a GENEVE tunnel on port 6081. A Gateway Load Balancer endpoint is the route target.</li>
+        <li>Both need to see <b>both directions</b> of a flow. Update the route tables for the request and for the reply.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Reachability Analyzer</h3>
+      <ul>
+        <li>It builds a model from your configuration and checks whether a path exists. It sends no packets, so it works even when the instance is stopped, and it cannot see the operating system's firewall.</li>
+        <li>A reachable result lists every hop: security group rule, network ACL rule, route. An unreachable result gives an <b>explanation code</b> and the component that blocks.</li>
+        <li>It reports the first blocker it finds. Fix it and run again; there may be another one behind it.</li>
+        <li>It analyses IPv4 only. Source and destination must be in the same Region.</li>
+        <li>You pay for each analysis you run.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Flow Logs</h3>
+      <ul>
+        <li>A flow log records metadata per network interface: addresses, ports, protocol, packets, bytes, and <code>ACCEPT</code> or <code>REJECT</code>. It has no payload.</li>
+        <li><code>ACCEPT</code> and <code>REJECT</code> are the verdict of the security group and the network ACL together. The record does not say which of the two rejected. The direction pattern tells you.</li>
+        <li>One connection gives two records, one per direction. Records are aggregated over an interval, so they arrive minutes later. This is not a live view.</li>
+        <li>Not logged: DNS to the Amazon resolver, the instance metadata service, the Amazon Time Sync Service, DHCP.</li>
+        <li>The default format hides NAT. Add <code>pkt-srcaddr</code> and <code>pkt-dstaddr</code> to see the original addresses, and <code>tcp-flags</code>, <code>flow-direction</code> and <code>traffic-path</code> to see who started a connection and where it left the VPC.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Numbers to remember</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>What</th><th>Number</th><th>Why it matters</th><th>Can it be raised?</th></tr>
+      <tr><td>VPC and subnet IPv4 CIDR size</td><td class="num">/16 to /28</td><td>A VPC block holds at most 65,536 addresses. For more, add CIDR blocks.</td><td>No</td></tr>
+      <tr><td>Reserved addresses per subnet</td><td class="num">5</td><td>The first four and the last (<a href="../../aws_architecture/day-02/index.html">architecture Day 2</a>). A <code>/28</code> has 16 addresses and 11 you can use.</td><td>No</td></tr>
+      <tr><td>IPv4 CIDR blocks per VPC</td><td class="num">5</td><td>The primary block counts. This is your room to grow a full VPC.</td><td>Yes, up to 50</td></tr>
+      <tr><td>IPv6 subnet size</td><td class="num">/44 to /64</td><td>In steps of <code>/4</code>. The first four addresses and the last are reserved here too.</td><td>No</td></tr>
+      <tr><td>Subnets per VPC</td><td class="num">200</td><td>Small subnets for many teams reach this sooner than you expect.</td><td>Yes</td></tr>
+      <tr><td>Routes per route table, not propagated</td><td class="num">500</td><td>Counted separately for IPv4 and IPv6. A prefix list counts as its maximum size.</td><td>Yes, up to 1,000</td></tr>
+      <tr><td>Propagated routes per route table</td><td class="num">100</td><td>If on-premises advertises more, summarise the routes or advertise a default route.</td><td>No</td></tr>
+      <tr><td>Rules per security group</td><td class="num">60 in + 60 out</td><td>Counted separately for IPv4 and IPv6. Prefix lists use up rules quickly.</td><td>Yes, see next row</td></tr>
+      <tr><td>Security groups per network interface</td><td class="num">5</td><td>Rules per group × groups per interface cannot exceed 1,000. Raising one may force you to lower the other.</td><td>Yes, up to 16</td></tr>
+      <tr><td>Rules per network ACL</td><td class="num">20 in + 20 out</td><td>Rule numbers go from 1 to 32766. More rules can cost network performance.</td><td>Yes, up to 40 + 40</td></tr>
+      <tr><td>Entries per prefix list</td><td class="num">1,000</td><td>The most you can size a customer-managed list to.</td><td>By support case</td></tr>
+      <tr><td>NAT gateway: connections to one destination</td><td class="num">55,000</td><td>Per NAT address, at the same time, to one destination address, port and protocol. Past it, new connections fail.</td><td>Add addresses: up to 8 per gateway (440,000)</td></tr>
+      <tr><td>NAT gateway: idle timeout</td><td class="num">350 s</td><td>The idle connection is dropped silently. The next packet from your side gets a reset (RST).</td><td>No. Send keepalives sooner.</td></tr>
+      <tr><td>NAT gateway: throughput</td><td class="num">5 → 100 Gbps</td><td>Starts at 5 Gbps and 1 million packets per second, scales by itself to 100 Gbps and 10 million.</td><td>No. Use more gateways.</td></tr>
+      <tr><td>NAT gateways per AZ</td><td class="num">5</td><td>Elastic IPs per public NAT gateway default to 2; ask for up to 8.</td><td>Yes</td></tr>
+      <tr><td>Tracked TCP connection, idle timeout</td><td class="num">432,000 s</td><td>5 days. On Nitro v6 instance types the default is 350 s, which can cut an idle database connection.</td><td>Set per ENI: 60 to 432,000 s</td></tr>
+      <tr><td>Tracked UDP flow, idle timeout</td><td class="num">30 s / 180 s</td><td>30 s for one-way or single request-and-reply flows, 180 s for streams.</td><td>Set per ENI, within small ranges</td></tr>
+      <tr><td>DNS queries to the Amazon resolver</td><td class="num">1,024 packets/s</td><td>Per network interface. Above it, queries are dropped and look like random DNS failures.</td><td>No. Cache DNS locally.</td></tr>
+      <tr><td>Flow Logs aggregation interval</td><td class="num">10 min or 1 min</td><td>10 minutes by default. On Nitro instances it is always 1 minute or less. Delivery adds about 5 minutes to CloudWatch Logs and about 10 to S3.</td><td>Choose 1 min when you create the flow log</td></tr>
+      <tr><td>Elastic IP addresses per Region</td><td class="num">5</td><td>A surprise on the day you add the third NAT gateway.</td><td>Yes</td></tr>
+      <tr><td>VPCs per Region</td><td class="num">5</td><td>One internet gateway per VPC; the two quotas rise together.</td><td>Yes</td></tr>
+    </table>
+    <p class="note">Defaults from the Amazon VPC quotas page and the NAT gateway, security group and Flow Logs guides. AWS changes these; check Service Quotas in your own account before you design against a number.</p>
+  </div>
+
+  <h2>How it fails in production</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Symptom</th><th>Cause</th><th>How you find it</th><th>Fix</th></tr>
+      <tr>
+        <td><b>Launches fail in one subnet.</b> Auto Scaling cannot add instances, new pods or tasks stay pending, the error is <code>InsufficientFreeAddressesInSubnet</code>.</td>
+        <td>The subnet has no free addresses. Every ENI takes one: instances, pods, Lambda, endpoints, load balancers.</td>
+        <td><code>aws ec2 describe-subnets</code> and read <code>AvailableIpAddressCount</code>. Alarm on it before it reaches zero.</td>
+        <td>You cannot resize a subnet. Add a secondary CIDR to the VPC, create larger subnets in it and move the workload. Delete unused ENIs.</td>
+      </tr>
+      <tr>
+        <td><b>Some new connections to one external API time out at peak.</b> Existing connections are fine. Other destinations are fine.</td>
+        <td>NAT port exhaustion: more than 55,000 connections at once to the same destination address and port through one NAT address.</td>
+        <td>CloudWatch metric <code>ErrorPortAllocation</code> above zero on the NAT gateway. Check <code>ActiveConnectionCount</code> too.</td>
+        <td>Reuse connections (keep-alive, pooling). Add secondary addresses to the NAT gateway. Spread subnets over more NAT gateways. For AWS services, use an endpoint and skip the NAT gateway.</td>
+      </tr>
+      <tr>
+        <td><b>A connection that was idle for some minutes fails on its next use</b> with “connection reset by peer”.</td>
+        <td>The NAT gateway dropped it after 350 seconds of silence. It sends no FIN, so both ends still think it is open.</td>
+        <td>CloudWatch metric <code>IdleTimeoutCount</code> rises. The application log shows resets on the first query after a quiet period.</td>
+        <td>TCP keepalive below 350 seconds, or a connection pool that tests and retires idle connections.</td>
+      </tr>
+      <tr>
+        <td><b>Connections hang after a network ACL change.</b> Nothing is refused; calls simply time out.</td>
+        <td>The reply is dropped. The inbound rule for ephemeral ports is missing, too narrow in ports, or limited to the VPC CIDR.</td>
+        <td>Flow Logs: <code>ACCEPT</code> for the request, then <code>REJECT</code> for the reply with the two addresses swapped. Reachability Analyzer: <code>SUBNET_ACL_RESTRICTION</code>.</td>
+        <td>Allow TCP 1024–65535 inbound from the addresses you call. Do the same check on the NAT gateway's subnet.</td>
+      </tr>
+      <tr>
+        <td><b>Traffic through a firewall works for some flows and not for others,</b> often depending on the AZ.</td>
+        <td>Asymmetric routing. The request passes the firewall in one AZ and the reply returns through another AZ, or around the firewall. The stateful engine sees half a flow and drops it.</td>
+        <td>Flow Logs on the firewall endpoint ENIs: one direction on one ENI, the other direction elsewhere. The firewall's own flow and alert logs.</td>
+        <td>Route both directions through the same endpoint, in the AZ of the workload. Behind a transit gateway, turn on appliance mode for the inspection VPC attachment (Day 3).</td>
+      </tr>
+      <tr>
+        <td><b>A peering request to a partner VPC cannot be created,</b> or two networks cannot be routed to each other.</td>
+        <td>Overlapping CIDR blocks. Peering is refused if any block of one VPC overlaps any block of the other, even blocks you do not plan to use.</td>
+        <td><code>aws ec2 describe-vpcs</code> and compare every entry in <code>CidrBlockAssociationSet</code> on both sides.</td>
+        <td>Expose the one service through PrivateLink (Day 3), or use a private NAT gateway with a small routable range on each side. Long term: one address plan, enforced with IPAM.</td>
+      </tr>
+      <tr>
+        <td><b>You removed a security group rule during an incident and the session is still alive.</b></td>
+        <td>The connection is tracked. A tracked connection keeps flowing until it ends or its idle timeout passes.</td>
+        <td>The rule is gone, yet Flow Logs still show <code>ACCEPT</code> for that address and port.</td>
+        <td>Add a network ACL deny for the address. It is stateless and cuts the connection at once. Or replace the security groups on the ENI.</td>
+      </tr>
+      <tr>
+        <td><b>A busy proxy or gateway instance drops packets while CPU and bandwidth look fine.</b></td>
+        <td>The instance has reached the number of connections it can track.</td>
+        <td>On the instance, <code>ethtool -S eth0</code> shows <code>conntrack_allowance_exceeded</code> rising.</td>
+        <td>A larger instance type or more instances. A shorter idle timeout on the ENI. Or rules that leave the flow untracked.</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2>What drives the bill</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Item</th><th>How it is charged</th><th>Figure</th><th>How to pay less</th></tr>
+      <tr><td><b>NAT gateway</b></td><td>Per hour that it exists, plus per GB that passes through it in either direction. Normal data transfer charges come on top.</td><td class="num">$0.045 / hour<br>$0.045 / GB</td><td>S3 and DynamoDB through gateway endpoints. Heavy AWS API traffic through interface endpoints. One gateway about $33 a month before any traffic; 1 TB through it about $46 more.</td></tr>
+      <tr><td><b>Data across AZs</b></td><td>Per GB, charged in each direction, when traffic crosses an AZ boundary inside a Region.</td><td class="num">$0.01 / GB each way</td><td>Keep each subnet on the NAT gateway of its own AZ. Keep chatty services in the same AZ when the design allows.</td></tr>
+      <tr><td><b>Public IPv4 address</b></td><td>Per hour for every public IPv4 address, in use or idle. This includes the Elastic IP of each NAT gateway.</td><td class="num">$0.005 / hour</td><td>About $3.65 a month each. Release idle Elastic IPs. Put instances behind a load balancer instead of giving each a public address. Use IPv6 where clients support it.</td></tr>
+      <tr><td><b>Interface endpoint</b></td><td>Per hour for each endpoint in each AZ, plus per GB processed.</td><td class="num">hourly fee<br>$0.01 / GB</td><td>It is one endpoint per service per AZ, so count before you add twenty. Share endpoints from a central VPC (Day 3). Below a few GB a day the NAT gateway may be cheaper.</td></tr>
+      <tr><td><b>Gateway endpoint</b></td><td>No charge for the endpoint.</td><td class="num">—</td><td>Always add it for S3 and DynamoDB.</td></tr>
+      <tr><td><b>Network Firewall</b></td><td>Per hour for each firewall endpoint, plus per GB inspected.</td><td class="num">$0.395 / hour<br>$0.065 / GB</td><td>One endpoint per AZ adds up to about $290 a month each. Inspect centrally, not in every VPC. NAT gateway charges are waived one-for-one when the NAT gateway is used with the firewall.</td></tr>
+      <tr><td><b>Flow Logs</b></td><td>Per GB of log data delivered, at the vended-logs rate, plus storage.</td><td class="num">$0.50 / GB to CloudWatch Logs</td><td>Send to S3 instead of CloudWatch Logs for bulk storage. Log only <code>REJECT</code>, or only the subnets you need. Use a custom format with fewer fields.</td></tr>
+      <tr><td><b>Reachability Analyzer</b></td><td>Per analysis that you run.</td><td class="num">$0.10 each</td><td>Cheap by hand. Count it when a pipeline runs hundreds of analyses on every change.</td></tr>
+      <tr><td><b>Free</b></td><td colspan="3">VPCs, subnets, route tables, security groups, network ACLs, internet gateways and egress-only internet gateways have no charge of their own.</td></tr>
+    </table>
+    <p class="note">Figures are list prices from the AWS pricing pages when this page was written: NAT gateway for US East (Ohio), Network Firewall and Flow Logs (first 10 TB a month) for US East (N. Virginia), interface endpoint data for the first petabyte a month. Prices differ by Region and change over time. Check the pricing page for your Region.</p>
+  </div>
+
+  <h2>NAT gateway, egress-only gateway or endpoint?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>NAT gateway</th><th>Egress-only internet gateway</th><th>Gateway endpoint</th><th>Interface endpoint</th></tr>
+      <tr><td><b>Carries</b></td><td>IPv4 to any destination</td><td>IPv6 to the internet</td><td>S3 and DynamoDB only</td><td>One AWS service or one PrivateLink service per endpoint</td></tr>
+      <tr><td><b>How traffic reaches it</b></td><td>Route <code>0.0.0.0/0</code> to the NAT gateway</td><td>Route <code>::/0</code> to the gateway</td><td>A prefix-list route, added to the route tables you choose</td><td>The service's DNS name resolves to an ENI in your subnet</td></tr>
+      <tr><td><b>Rewrites addresses</b></td><td>Yes, many sources to one</td><td>No</td><td>No</td><td>No</td></tr>
+      <tr><td><b>Who can start a connection</b></td><td>Your side only</td><td>Your side only</td><td>Your side only</td><td>Your side only</td></tr>
+      <tr><td><b>Controlled by</b></td><td>Route tables and network ACLs. No security group.</td><td>Route tables and network ACLs. No security group.</td><td>Endpoint policy, route tables</td><td>Security group on the endpoint ENI, endpoint policy</td></tr>
+      <tr><td><b>Usable from on-premises or a peered VPC</b></td><td>No from a peered VPC</td><td>No</td><td>No</td><td>Yes</td></tr>
+      <tr><td><b>Cost</b></td><td>Per hour and per GB</td><td>No charge</td><td>No charge</td><td>Per hour per AZ and per GB</td></tr>
+      <tr><td><b>Choose it when</b></td><td>Private IPv4 hosts must call arbitrary internet addresses</td><td>IPv6 hosts must call out and must not be reachable</td><td>The traffic is S3 or DynamoDB from inside the VPC</td><td>Traffic to a service must not leave AWS's network, or the volume makes the NAT gateway's GB charge larger than the endpoint's</td></tr>
+    </table>
+    <p class="note">They combine. A common private subnet has a gateway endpoint for S3, a few interface endpoints for the busiest APIs, and a NAT gateway for everything else. The more specific routes win, so only the remainder pays the NAT gateway's per-GB charge.</p>
+  </div>
+
+  <h2>Security group, network ACL or Network Firewall?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Security group</th><th>Network ACL</th><th>Network Firewall</th></tr>
+      <tr><td><b>Sits on</b></td><td>A network interface</td><td>A subnet boundary</td><td>A firewall endpoint that route tables send traffic through</td></tr>
+      <tr><td><b>State</b></td><td>Stateful: tracks connections</td><td>Stateless: every packet alone</td><td>A stateless engine, then a stateful engine</td></tr>
+      <tr><td><b>Rules</b></td><td>Allow only. All rules are read together.</td><td>Allow and deny. Number order, first match wins.</td><td>Stateless 5-tuple rules; stateful Suricata-compatible rules and domain lists</td></tr>
+      <tr><td><b>Can match on</b></td><td>Protocol, port, CIDR, prefix list, another security group</td><td>Protocol, port, CIDR</td><td>The same, plus domain names and protocol content</td></tr>
+      <tr><td><b>Sees traffic inside one subnet</b></td><td>Yes</td><td>No</td><td>No. Only what is routed to it.</td></tr>
+      <tr><td><b>Effect of a rule change on open connections</b></td><td>Tracked connections continue</td><td>Immediate</td><td>Depends on the rule and the engine</td></tr>
+      <tr><td><b>Logs</b></td><td>Flow Logs (<code>ACCEPT</code>/<code>REJECT</code> only)</td><td>Flow Logs (<code>ACCEPT</code>/<code>REJECT</code> only)</td><td>Its own flow and alert logs, with the rule that matched</td></tr>
+      <tr><td><b>Cost</b></td><td>None</td><td>None</td><td>Per endpoint-hour and per GB</td></tr>
+      <tr><td><b>Choose it when</b></td><td>Always. It is the main control, written per role: “app may call database on 5432”.</td><td>You need a deny: block one CIDR, cut a connection now, or put a coarse guard around a subnet.</td><td>You must filter by domain name, detect intrusions, or inspect traffic for many VPCs in one place.</td></tr>
+    </table>
+  </div>
+
+  <h2>Hands-on lab</h2>
+  <div class="card lab">
+    <p><b>Goal:</b> build a small VPC, prove a path with Reachability Analyzer, break one route, read the explanation, then read real Flow Log records. About 40 minutes.</p>
+    <p><b>Cost:</b> about $0.30. Three analyses at $0.10 each are most of it. The <code>t3.micro</code> instance and its public IPv4 address add a cent or two for an hour, and the log data is a few kilobytes. Use a sandbox account, and run the cleanup step at the end.</p>
+    <ol>
+      <li>Choose a Region and build the network: a VPC, one subnet, an internet gateway and a route table with a default route.
+<pre class="code">export AWS_DEFAULT_REGION=ap-south-1
+
+VPC=$(aws ec2 create-vpc --cidr-block 10.20.0.0/16 \
+  --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=mastery-day02}]' \
+  --query Vpc.VpcId --output text)
+SUBNET=$(aws ec2 create-subnet --vpc-id $VPC --cidr-block 10.20.1.0/24 \
+  --query Subnet.SubnetId --output text)
+IGW=$(aws ec2 create-internet-gateway \
+  --query InternetGateway.InternetGatewayId --output text)
+aws ec2 attach-internet-gateway --internet-gateway-id $IGW --vpc-id $VPC
+RTB=$(aws ec2 create-route-table --vpc-id $VPC \
+  --query RouteTable.RouteTableId --output text)
+aws ec2 create-route --route-table-id $RTB \
+  --destination-cidr-block 0.0.0.0/0 --gateway-id $IGW
+ASSOC=$(aws ec2 associate-route-table --route-table-id $RTB --subnet-id $SUBNET \
+  --query AssociationId --output text)</pre>
+      </li>
+      <li>Launch one instance with a public IPv4 address. It gets the VPC's default security group: all outbound allowed, nothing inbound from outside. No key pair is needed; you will not log in.
+<pre class="code">INSTANCE=$(aws ec2 run-instances \
+  --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
+  --instance-type t3.micro \
+  --network-interfaces "DeviceIndex=0,SubnetId=$SUBNET,AssociatePublicIpAddress=true" \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=mastery-day02}]' \
+  --query 'Instances[0].InstanceId' --output text)
+aws ec2 wait instance-running --instance-ids $INSTANCE</pre>
+      </li>
+      <li>Turn on Flow Logs for the VPC, delivered to CloudWatch Logs with a 1-minute interval. The service needs a role it can assume.
+<pre class="code">aws logs create-log-group --log-group-name /mastery/day02/flow
+
+cat > trust.json &lt;&lt;'EOF'
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
+  "Principal":{"Service":"vpc-flow-logs.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+EOF
+cat > perms.json &lt;&lt;'EOF'
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":[
+  "logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents",
+  "logs:DescribeLogGroups","logs:DescribeLogStreams"],"Resource":"*"}]}
+EOF
+ROLE_ARN=$(aws iam create-role --role-name mastery-day02-flowlogs \
+  --assume-role-policy-document file://trust.json --query Role.Arn --output text)
+aws iam put-role-policy --role-name mastery-day02-flowlogs \
+  --policy-name publish --policy-document file://perms.json
+sleep 15   # give IAM time to make the new role usable
+
+FLOWLOG=$(aws ec2 create-flow-logs --resource-type VPC --resource-ids $VPC \
+  --traffic-type ALL --log-destination-type cloud-watch-logs \
+  --log-group-name /mastery/day02/flow --deliver-logs-permission-arn $ROLE_ARN \
+  --max-aggregation-interval 60 --query 'FlowLogIds[0]' --output text)</pre>
+      </li>
+      <li>Create a Reachability Analyzer path from the instance to the internet gateway and analyse it. Repeat the last command until <code>status</code> is <code>succeeded</code>.
+<pre class="code">NIP=$(aws ec2 create-network-insights-path --source $INSTANCE --destination $IGW \
+  --protocol tcp --destination-port 443 \
+  --query NetworkInsightsPath.NetworkInsightsPathId --output text)
+
+NIA1=$(aws ec2 start-network-insights-analysis --network-insights-path-id $NIP \
+  --query NetworkInsightsAnalysis.NetworkInsightsAnalysisId --output text)
+aws ec2 describe-network-insights-analyses --network-insights-analysis-ids $NIA1 \
+  --query 'NetworkInsightsAnalyses[0].{status:Status,found:NetworkPathFound,hops:ForwardPathComponents[].Component.Id,why:Explanations[].ExplanationCode}'</pre>
+        Expect <code>found: true</code>. Read <code>hops</code>: the network interface, the security group, the network ACL, the route table and the internet gateway appear in the order the packet meets them.
+      </li>
+      <li>Break the route and analyse the same path again. No packet is sent; only the configuration changed.
+<pre class="code">aws ec2 delete-route --route-table-id $RTB --destination-cidr-block 0.0.0.0/0
+
+NIA2=$(aws ec2 start-network-insights-analysis --network-insights-path-id $NIP \
+  --query NetworkInsightsAnalysis.NetworkInsightsAnalysisId --output text)
+aws ec2 describe-network-insights-analyses --network-insights-analysis-ids $NIA2 \
+  --query 'NetworkInsightsAnalyses[0].{status:Status,found:NetworkPathFound,hops:ForwardPathComponents[].Component.Id,why:Explanations[].ExplanationCode}'</pre>
+        Expect <code>found: false</code> and <code>NO_ROUTE_TO_DESTINATION</code>. Run the command once more without <code>--query</code> and find the route table that the explanation names.
+      </li>
+      <li>Put the route back. Then break something else and predict the code before you run a third analysis. For example, remove the outbound rule of the default security group with <code>aws ec2 revoke-security-group-egress</code>.
+<pre class="code">aws ec2 create-route --route-table-id $RTB \
+  --destination-cidr-block 0.0.0.0/0 --gateway-id $IGW</pre>
+      </li>
+      <li>Read the Flow Logs. The instance has been running for about ten minutes with a public address, which is enough for records to arrive. Repeat the second command until <code>status</code> is <code>Complete</code>.
+<pre class="code">QID=$(aws logs start-query --log-group-name /mastery/day02/flow \
+  --start-time $(( $(date +%s) - 3600 )) --end-time $(date +%s) \
+  --query-string 'stats count(*) as flows, sum(packets) as packets by action, srcAddr, dstPort | sort flows desc | limit 15' \
+  --query queryId --output text)
+aws logs get-query-results --query-id $QID</pre>
+        The <code>REJECT</code> rows have source addresses you do not know and ports such as 22, 23 or 3389. These are scanners on the internet that found your new public address within minutes. The security group dropped them. The <code>ACCEPT</code> rows are connections the instance opened itself, and their replies. Notice what is missing: nothing about DNS, and nothing about the metadata service.
+      </li>
+      <li>Clean up. The order matters: the instance first, the VPC last.
+<pre class="code">aws ec2 terminate-instances --instance-ids $INSTANCE
+aws ec2 wait instance-terminated --instance-ids $INSTANCE
+
+aws ec2 delete-flow-logs --flow-log-ids $FLOWLOG
+aws logs delete-log-group --log-group-name /mastery/day02/flow
+aws iam delete-role-policy --role-name mastery-day02-flowlogs --policy-name publish
+aws iam delete-role --role-name mastery-day02-flowlogs
+rm trust.json perms.json
+
+aws ec2 delete-network-insights-analysis --network-insights-analysis-id $NIA1
+aws ec2 delete-network-insights-analysis --network-insights-analysis-id $NIA2
+aws ec2 delete-network-insights-path --network-insights-path-id $NIP
+
+aws ec2 detach-internet-gateway --internet-gateway-id $IGW --vpc-id $VPC
+aws ec2 delete-internet-gateway --internet-gateway-id $IGW
+aws ec2 disassociate-route-table --association-id $ASSOC
+aws ec2 delete-route-table --route-table-id $RTB
+aws ec2 delete-subnet --subnet-id $SUBNET
+aws ec2 delete-vpc --vpc-id $VPC</pre>
+        If you ran a third analysis, delete it before the path: list them with <code>aws ec2 describe-network-insights-analyses --network-insights-path-id $NIP</code>. The last command fails if anything is still inside the VPC, which is a useful check.
+      </li>
+    </ol>
+  </div>
+
+  <h2>Interview questions</h2>
+  <details><summary>An instance cannot reach the internet. List the six things you check, in order.</summary><p>(1) The route: which route table the subnet really uses, explicit or main, and whether it has <code>0.0.0.0/0</code> to an internet gateway or a NAT gateway. (2) The target of that route: the internet gateway is attached, or the NAT gateway is <code>available</code> and sits in a subnet whose own route table points to the internet gateway. (3) The public address: the instance has a public IPv4 address if it goes straight to the internet gateway, or the NAT gateway has its Elastic IP. (4) The security group's outbound rules for the destination port. (5) The network ACLs in both directions, including inbound ephemeral ports for the reply, on the instance's subnet and on the NAT gateway's subnet. (6) DNS and the host: the name resolves, and no proxy setting or operating-system firewall is in the way. I confirm with Reachability Analyzer for the configuration and Flow Logs for the real traffic.</p></details>
+  <details><summary>The security group allows all outbound traffic and the network ACL allows outbound 443. HTTPS calls still hang. Why, and what do the Flow Logs show?</summary><p>The network ACL is stateless, so the reply needs an inbound rule of its own. The reply arrives on the client's ephemeral port, from the server's address. Without an inbound allow for TCP 1024–65535 from that address, it is dropped. The flow log on the instance's network interface shows <code>ACCEPT</code> for the outgoing record and <code>REJECT</code> for the incoming one. A security group would never produce that pair, because it lets the reply of a tracked connection through.</p></details>
+  <details><summary>A route table has <code>10.0.0.0/8</code> to a transit gateway, <code>10.50.0.0/16</code> to a peering connection, the same <code>10.50.0.0/16</code> propagated from a virtual private gateway, and a propagated <code>10.50.8.0/24</code>. Where do packets for 10.50.1.9 and 10.50.8.4 go?</summary><p>10.50.1.9 goes to the peering connection. The longest match is the <code>/16</code>, two routes have it, and a static route beats a propagated one. 10.50.8.4 goes to the virtual private gateway. The <code>/24</code> is the longest match, and prefix length is compared first; static against propagated matters only when the destinations are identical.</p></details>
+  <details><summary>During an incident you remove the inbound SSH rule from a security group. The attacker's session stays open. Why, and how do you cut it now?</summary><p>The session is a tracked connection. Removing the rule stops new connections, but a tracked one continues until it closes or its idle timeout passes, which can be days. To cut it at once, add a network ACL deny for the attacker's address on that subnet. It is stateless and applies to the next packet. If the rule had allowed SSH from <code>0.0.0.0/0</code> and outbound was open to everything, the flow would have been untracked and removing the rule would have cut it immediately.</p></details>
+  <details><summary>A service behind a NAT gateway calls one payment API very often. At peak, some new connections time out. What do you check, and what are the fixes?</summary><p>I check the NAT gateway's <code>ErrorPortAllocation</code> metric. Above zero means it could not allocate a source port: more than 55,000 connections at once to the same destination address and port through one NAT address. Fixes, in order of preference: reuse connections with keep-alive and a pool, so fewer exist; add secondary IP addresses to the NAT gateway, each adds 55,000; split the subnets over more NAT gateways. I also look at <code>IdleTimeoutCount</code>, because idle connections that are never closed hold ports.</p></details>
+  <details><summary>Why does IPv6 need no NAT gateway, and what keeps an IPv6 instance private?</summary><p>NAT exists for IPv4 because private addresses are not routable and public ones are scarce. Every IPv6 address in a VPC is globally unique and routable, so nothing needs translating. Privacy comes from routing instead: the private subnet sends <code>::/0</code> to an egress-only internet gateway. It is stateful, lets connections out and their replies back, and refuses connections that start from the internet. Security groups still apply and need their own IPv6 rules.</p></details>
+  <details><summary>Your VPC is 10.0.0.0/16 and nearly full. What are your options, and what can you not do?</summary><p>I cannot resize the VPC CIDR or any subnet. I can associate a secondary CIDR, up to five blocks by default, and create new subnets there. Because the primary block is in <code>10.0.0.0/8</code>, the new block must also be a <code>10.x</code> range, a <code>100.64.0.0/10</code> range or a public range; <code>172.16.0.0/12</code> and <code>192.168.0.0/16</code> are refused. It must not overlap any peered VPC, and it must not be the same as or larger than the destination of an existing route. I also look for waste first: unused ENIs, oversized subnets that sit empty, and workloads that could move to IPv6.</p></details>
+  <details><summary>What does a Flow Log record not tell you?</summary><p>It has no payload, only addresses, ports, protocol, counters and <code>ACCEPT</code> or <code>REJECT</code>. It does not say whether the security group or the network ACL rejected; I work that out from which direction was rejected. It is the verdict of those two only, so a packet lost to a missing route or at the internet gateway still shows as accepted. It leaves out DNS to the Amazon resolver, the metadata service, time sync and DHCP. It is aggregated and delayed by minutes. And in the default format it shows the NAT gateway's address, not the original one, unless I add <code>pkt-srcaddr</code> and <code>pkt-dstaddr</code>.</p></details>
+  <details><summary>When do you add Network Firewall on top of security groups and network ACLs, and what must be true of the routing?</summary><p>When the rule cannot be written as address and port: allow outbound HTTPS only to a list of domain names, detect known attack patterns, or log which rule matched each flow. Also when many VPCs need one inspection point. The firewall inspects only what the route tables send through its endpoint, so I change the routes for both directions: the workload subnet's default route to the endpoint, and a route table on the internet gateway that sends return traffic for that subnet to the same endpoint. Both directions must pass the same endpoint, or the stateful engine sees half a flow.</p></details>
+  <details><summary>A security group rule names another security group as its source. When does that work, and when does it fail?</summary><p>It allows traffic from the private IP addresses of the network interfaces that have the named group. It works inside one VPC and across a peering connection in the same Region. Across a transit gateway it works only for inbound rules and only with security group referencing enabled. It fails across an inter-Region peering connection, when the client uses the server's public IP address, and when the traffic is routed through a middlebox appliance. In those cases I use CIDR blocks or a prefix list.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-03/index.html">Day 3: Networking at scale</a>.</b> One VPC is the easy case. Tomorrow: Transit Gateway route tables and how they separate environments, Direct Connect, VPN with BGP, Route 53 Resolver endpoints, shared VPCs, PrivateLink, VPC Lattice and Cloud WAN.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The packet is created.</b> The application opens a TCP connection to 203.0.113.50 on port 443. The operating system picks a free source port, here 49152. The instance knows only its private address. Everything the VPC does to this packet happens at the network interface (ENI) or after it, never inside the instance.",
+    "<b>Step 2 — Security group, outbound.</b> The security group belongs to the ENI. It has only allow rules, and they are all read together. One rule allows TCP 443 to anywhere, so the packet passes. The security group now tracks the connection: it stores both addresses, both ports and the protocol.",
+    "<b>Step 3 — Network ACL, outbound.</b> The packet is leaving the subnet, so the subnet's network ACL is read. Rules are tried from the lowest number, and the first match decides. Nothing is stored. A packet that stays inside the subnet never meets the network ACL.",
+    "<b>Step 4 — Route lookup.</b> The VPC router reads the route table associated with the instance's subnet. If none is associated explicitly, it reads the main route table. The most specific matching route wins. 203.0.113.50 is outside 10.0.0.0/16, so the only match is 0.0.0.0/0, and its target is the NAT gateway.",
+    "<b>Step 5 — NAT gateway.</b> The packet enters the public subnet, and that subnet's network ACL is read on the way in. The NAT gateway replaces the source with its own private address and a port it picks from 1024–65535, and stores the mapping. One NAT address can hold 55,000 connections at once to one destination address and port. The NAT gateway has no security group.",
+    "<b>Step 6 — Second route lookup.</b> The NAT gateway's packet is routed by the table of the subnet the gateway lives in. That table must send 0.0.0.0/0 to the internet gateway. This one route is what makes a subnet public. Put the NAT gateway in a subnet without it, and the packet stops here.",
+    "<b>Step 7 — Internet gateway.</b> The internet gateway swaps the private source 10.0.1.5 for the Elastic IP that belongs to it. It changes the address and leaves the port alone. If the source has no public IPv4 address, the packet is dropped. The server on the internet sees 198.51.100.7 and nothing else.",
+    "<b>Step 8 — The reply returns.</b> The server answers to 198.51.100.7:31544. The internet gateway changes the destination back to 10.0.1.5. The public subnet's network ACL is read again, this time for an inbound packet to a high port. The NAT gateway finds port 31544 in its table and restores the destination 10.0.2.10:49152. The local route delivers it.",
+    "<b>Step 9 — Network ACL, inbound.</b> The reply enters the private subnet. The network ACL does not know it is a reply, so it needs a rule that allows TCP to the client's port range. Look at the source: it is still 203.0.113.50, the server on the internet. The NAT gateway restored the destination and left the source alone. A rule that allows high ports only from 10.0.0.0/16 does not match.",
+    "<b>Step 10 — Security group, tracked.</b> The reply matches the connection stored in step 2, so it passes. The inbound rules are not read at all. The packet reaches the ENI and the application gets its answer."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const svg = $("diagram");
+  const tools = [...svg.querySelectorAll(".tool")];
+
+  // ---- Diagram lighting. It needs the whole diagram, so it leaves the step-by-step build first. ----
+  let lighting = false;
+  function light(ids, stop) {
+    lighting = true; $("btnAll").click(); lighting = false;
+    svg.classList.add("lit");
+    tools.forEach(g => {
+      // A wire is lit when the hops at both of its ends are lit.
+      const on = g.dataset.to ? ids.includes(g.dataset.from) && ids.includes(g.dataset.to) : ids.includes(g.id);
+      g.classList.toggle("on", on);
+      g.classList.toggle("stop", g.id === stop);
+    });
+    const mark = $("dropMark");
+    mark.classList.toggle("show", !!stop);
+    if (stop) {
+      const b = $(stop).querySelector(".box").getBBox();
+      mark.setAttribute("transform", `translate(${b.x + b.width - 164} ${b.y - 9})`);
+    }
+  }
+  function clearLight() {
+    svg.classList.remove("lit");
+    tools.forEach(g => g.classList.remove("on", "stop"));
+    $("dropMark").classList.remove("show");
+  }
+  // Any diagram button pressed by the learner clears the lighting and resets the debugger.
+  ["btnBuild", "btnPrev", "btnNext", "btnAll"].forEach(id => $(id).addEventListener("click", () => {
+    if (lighting) return;
+    clearLight();
+    paintFault("none", false);
+  }));
+
+  // ---- IPv4 helpers ----
+  const ipNum = ip => ip.split(".").reduce((n, o) => n * 256 + Number(o), 0);
+  const prefixLen = cidr => Number(cidr.split("/")[1]);
+  const inCidr = (ip, cidr) => {
+    const size = 2 ** (32 - prefixLen(cidr));
+    return Math.floor(ipNum(ip) / size) === Math.floor(ipNum(cidr.split("/")[0]) / size);
+  };
+
+  // ---- Route selection: longest prefix first; for the same prefix, static (and local) > prefix list > propagated ----
+  const KIND_RANK = { local: 0, static: 0, "prefix list": 1, propagated: 2 };
+  function pickRoute(routes, ip) {
+    const matches = routes.filter(r => inCidr(ip, r.dest))
+      .sort((a, b) => prefixLen(b.dest) - prefixLen(a.dest) || KIND_RANK[a.kind] - KIND_RANK[b.kind]);
+    return { matches, best: matches[0] || null };
+  }
+  // ---- Network ACL: rules in number order, first match decides, otherwise the * rule denies ----
+  function naclDecide(rules, ip, port) {
+    const hit = [...rules].sort((a, b) => a.n - b.n).find(r => inCidr(ip, r.cidr) && port >= r.from && port <= r.to);
+    return hit || { n: "*", allow: false };
+  }
+  // ---- Security group: allow rules only, all read together ----
+  const sgFind = (rules, ip, port) => rules.find(r => inCidr(ip, r.cidr) && port >= r.from && port <= r.to) || null;
+  const ports = r => r.from === r.to ? String(r.from) : `${r.from}–${r.to}`;
+
+  // ---- The setup drawn in the diagram ----
+  const LOCAL = { dest: "10.0.0.0/16", target: "local", kind: "local" };
+  const baseConfig = () => ({
+    eni: { ip: "10.0.2.10", port: 49152, publicIp: null },
+    dst: { ip: "203.0.113.50", port: 443 },
+    sgOut: [{ from: 443, to: 443, cidr: "0.0.0.0/0" }],
+    privAssoc: "rtb-private",                    // null = no explicit association: the main route table is used
+    rtb: {
+      "rtb-main": [LOCAL],
+      "rtb-private": [LOCAL, { dest: "0.0.0.0/0", target: "nat-1", kind: "static" }],
+      "rtb-public": [LOCAL, { dest: "0.0.0.0/0", target: "igw-1", kind: "static" }]
+    },
+    aclPriv: {
+      out: [{ n: 100, allow: true, from: 443, to: 443, cidr: "0.0.0.0/0" }, { n: 110, allow: true, from: 1024, to: 65535, cidr: "10.0.0.0/16" }],
+      in: [{ n: 100, allow: true, from: 8080, to: 8080, cidr: "10.0.0.0/16" }, { n: 110, allow: true, from: 1024, to: 65535, cidr: "0.0.0.0/0" }]
+    },
+    aclPub: { in: [{ n: 100, allow: true, from: 0, to: 65535, cidr: "0.0.0.0/0" }], out: [{ n: 100, allow: true, from: 0, to: 65535, cidr: "0.0.0.0/0" }] },
+    nat: { id: "nat-1", ip: "10.0.1.5", port: 31544, eip: "198.51.100.7" }
+  });
+
+  // ---- Walk one request and its reply through a configuration ----
+  function simulate(c) {
+    const out = { rows: {}, lit: ["hInst"], stop: null, flow: [], ra: null };
+    const hop = (id, ok, note) => { out.rows[id] = { ok, note }; out.lit.push(id); if (!ok) out.stop = id; return ok; };
+    const blocked = (code, comp, dir) => { out.ra = { found: false, code, comp, dir }; return out; };
+    const d = c.dst, me = c.eni;
+
+    // 1. Security group on the ENI, outbound
+    const sg = sgFind(c.sgOut, d.ip, d.port);
+    if (!hop("hSgOut", !!sg, sg ? `Rule “tcp ${ports(sg)} to ${sg.cidr}” allows it. The connection is now tracked.`
+        : `No outbound rule covers tcp ${d.port} to ${d.ip}. A security group has no deny rules: no match means drop.`)) {
+      out.flow.push(["out", "REJECT"]);
+      return blocked("ENI_SG_RULES_MISMATCH", "sg-app", "egress");
+    }
+    out.lit.push("sTrack");
+
+    // 2. Network ACL of the instance's subnet, outbound
+    const no = naclDecide(c.aclPriv.out, d.ip, d.port);
+    if (!hop("hNaclOut", no.allow, no.allow ? `Rule ${no.n} allows tcp ${d.port} to ${d.ip}.` : `No rule allows it, so rule * denies.`)) {
+      out.flow.push(["out", "REJECT"]);
+      return blocked("SUBNET_ACL_RESTRICTION", "acl-private", "egress");
+    }
+    out.flow.push(["out", "ACCEPT"]);            // the security group and the network ACL both said yes
+
+    // 3. Route table that the instance's subnet really uses
+    const table = c.privAssoc || "rtb-main";
+    const r1 = pickRoute(c.rtb[table], d.ip).best;
+    if (!hop("hRtbPriv", !!r1, r1 ? `${table}: ${r1.dest} → ${r1.target} is the most specific match.`
+        : `${table} has no route that matches ${d.ip}. The packet is dropped.`)) {
+      return blocked("NO_ROUTE_TO_DESTINATION", table, "egress");
+    }
+
+    let src = { ip: me.ip, port: me.port }, viaNat = false;
+    if (r1.target === c.nat.id) {
+      // 4. NAT gateway (the packet enters its subnet through that subnet's network ACL)
+      viaNat = naclDecide(c.aclPub.in, d.ip, d.port).allow;
+      src = { ip: c.nat.ip, port: c.nat.port };
+      hop("hNat", true, `Source ${me.ip}:${me.port} becomes ${src.ip}:${src.port}. The mapping is stored.`);
+      out.lit.push("sNatTab");
+      // 5. Route table of the NAT gateway's subnet
+      const r2 = pickRoute(c.rtb["rtb-public"], d.ip).best;
+      if (!hop("hRtbPub", !!r2, r2 ? `rtb-public: ${r2.dest} → ${r2.target}.`
+          : `rtb-public has no route that matches ${d.ip}. The NAT gateway has nowhere to send the packet.`)) {
+        return blocked("NO_ROUTE_TO_DESTINATION", "rtb-public", "egress");
+      }
+    }
+
+    // 6. Internet gateway: the source must be paired with a public IPv4 address
+    const publicIp = viaNat ? c.nat.eip : me.publicIp;
+    if (!hop("hIgw", !!publicIp, publicIp ? `Source ${src.ip} becomes ${publicIp}.`
+        : `Source ${src.ip} has no public IPv4 address. The internet gateway drops the packet.`)) {
+      return blocked("IGW_PUBLIC_IP_ASSOCIATION_FOR_EGRESS", "igw-1", "egress");
+    }
+    hop("hNet", true, `Receives the request from ${publicIp}:${src.port} and replies to it.`);
+
+    // The reply
+    if (viaNat) hop("hNatBack", true, `Port ${c.nat.port} is in its table. Destination becomes ${me.ip}:${me.port}.`);
+    // 9. Network ACL of the instance's subnet, inbound. The source of the reply is still the internet host.
+    const ni = naclDecide(c.aclPriv.in, d.ip, me.port);
+    if (!hop("hNaclIn", ni.allow, ni.allow ? `Rule ${ni.n} allows tcp ${me.port} from ${d.ip}.`
+        : `No rule allows tcp ${me.port} from ${d.ip}, so rule * denies. The source is the internet host, not the NAT gateway.`)) {
+      out.flow.push(["in", "REJECT"]);
+      return blocked("SUBNET_ACL_RESTRICTION", "acl-private", "ingress");
+    }
+    // 10. Security group: reply to a tracked connection
+    hop("hSgIn", true, "Reply to a tracked connection. Inbound rules are not read.");
+    out.flow.push(["in", "ACCEPT"]);
+    out.ra = { found: true };
+    return out;
+  }
+
+  // ---- What the learner can break: [key, button, what changed, change to the configuration, explanation] ----
+  const FAULTS = [
+    ["none", "Nothing broken", "The setup exactly as drawn.", c => {},
+      "<b>It works.</b> The flow log on the instance's network interface has two records for the connection, one per direction, and both say ACCEPT. Reachability Analyzer finds a path and lists every hop of it."],
+    ["route", "No default route", "<code>rtb-private</code> has only the local route. Someone deleted <code>0.0.0.0/0 → nat-1</code>.",
+      c => { c.rtb["rtb-private"] = [LOCAL]; },
+      "<b>Dropped at the route lookup.</b> The security group and the network ACL both allowed the packet, so the flow log says ACCEPT. Flow Logs record what those two decided. They do not record routing, so a missing route never shows as REJECT. The sign is an ACCEPT going out and no record coming back. <b>Fix:</b> add <code>0.0.0.0/0 → nat-1</code> to <code>rtb-private</code>."],
+    ["assoc", "Wrong route table association", "The private subnet has no explicit association, so it uses the main route table, which has only the local route. <code>rtb-private</code> still exists and still looks correct.",
+      c => { c.privAssoc = null; },
+      "<b>Dropped at the route lookup, in a table you were not looking at.</b> The evidence is the same as for a missing route. The difference is in the Reachability Analyzer result: it names the route table it used, <code>rtb-main</code>. Check with <code>aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-…</code>. An empty answer means the subnet uses the main table. <b>Fix:</b> associate <code>rtb-private</code> with the subnet."],
+    ["sg", "Security group outbound too narrow", "The outbound rules of <code>sg-app</code> were tightened to <code>tcp 5432 to 10.0.0.0/16</code> only.",
+      c => { c.sgOut = [{ from: 5432, to: 5432, cidr: "10.0.0.0/16" }]; },
+      "<b>Dropped at the network interface.</b> The packet never leaves the instance's ENI. Here the outgoing record itself says REJECT, and there is nothing else to find. <b>Fix:</b> add an outbound rule for TCP 443, to <code>0.0.0.0/0</code> or to a prefix list of the addresses the application calls."],
+    ["nacl", "Network ACL blocks the reply", "Inbound rule 110 of <code>acl-private</code> now allows <code>tcp 1024–65535</code> from <code>10.0.0.0/16</code> only. It was <code>0.0.0.0/0</code>.",
+      c => { c.aclPriv.in[1].cidr = "10.0.0.0/16"; },
+      "<b>The request arrives; the reply is dropped on its way back.</b> The reply's source is still 203.0.113.50, because the NAT gateway restores only the destination. That address is not in 10.0.0.0/16, so no rule matches. The flow log shows ACCEPT for the request and then REJECT for the reply. This pair points to a network ACL: a security group lets the reply of a tracked connection through. Reachability Analyzer models the reply as well, so it reports the path as not reachable. <b>Fix:</b> rule 110 must allow the source <code>0.0.0.0/0</code>."],
+    ["igw", "Default route points to the internet gateway", "<code>rtb-private</code> sends <code>0.0.0.0/0</code> to <code>igw-1</code> instead of <code>nat-1</code>. The instance has no public IPv4 address.",
+      c => { c.rtb["rtb-private"][1].target = "igw-1"; },
+      "<b>Dropped at the internet gateway.</b> It translates one private address to one public address, and this network interface has no public address. The flow log looks exactly like a missing route: ACCEPT going out, then silence. Reachability Analyzer tells the two apart. <b>Fix:</b> point the route at <code>nat-1</code>. If the instance is meant to be public, give it an Elastic IP instead."],
+    ["natpriv", "NAT gateway in a private subnet", "The NAT gateway's subnet has no route to the internet gateway: <code>rtb-public</code> lost <code>0.0.0.0/0 → igw-1</code>. The subnet is public in name only.",
+      c => { c.rtb["rtb-public"] = [LOCAL]; },
+      "<b>Dropped after the NAT gateway.</b> It translates the packet and then has no route for it. The NAT gateway still shows as <code>available</code> and nothing looks wrong in the console. Its CloudWatch metrics give it away: <code>ConnectionAttemptCount</code> rises while <code>ConnectionEstablishedCount</code> stays at zero. <b>Fix:</b> a public NAT gateway must sit in a subnet whose route table has <code>0.0.0.0/0</code> to the internet gateway."]
+  ];
+
+  const HOPS = [
+    ["hSgOut", "1 · Security group, outbound", "Security group"],
+    ["hNaclOut", "2 · Network ACL of the private subnet, outbound", "Network ACL"],
+    ["hRtbPriv", "3 · Route lookup for the instance's subnet", "Route lookup"],
+    ["hNat", "4 · NAT gateway", "NAT gateway"],
+    ["hRtbPub", "5 · Route lookup for the NAT gateway's subnet", "NAT's route table"],
+    ["hIgw", "6 · Internet gateway", "Internet gateway"],
+    ["hNet", "7 · Server on the internet", "Server"],
+    ["hNatBack", "8 · NAT gateway, reply", "NAT gateway"],
+    ["hNaclIn", "9 · Network ACL of the private subnet, inbound", "Network ACL (reply)"],
+    ["hSgIn", "10 · Security group, reply", "Security group"]
+  ];
+  const RA_MEANING = {
+    ENI_SG_RULES_MISMATCH: "This security group has no inbound or outbound rules that apply.",
+    SUBNET_ACL_RESTRICTION: "Inbound or outbound traffic for a subnet must be admitted by the network ACL for the subnet.",
+    NO_ROUTE_TO_DESTINATION: "The route table does not have an applicable route to the destination resource.",
+    IGW_PUBLIC_IP_ASSOCIATION_FOR_EGRESS: "Traffic can't reach the internet through the internet gateway if the source address is not paired with a public IP address or if the source address does not belong to a network interface in the VPC with an available attachment."
+  };
+  const pill = (kind, text) => `<span class="pill ${kind}">${text}</span>`;
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+  const T0 = 1790931600; // start of the capture window, in Unix seconds
+
+  function paintFault(key, lightUp) {
+    const [, , change, mutate, why] = FAULTS.find(f => f[0] === key);
+    [...$("faultBtns").children].forEach((b, i) => b.classList.toggle("on", FAULTS[i][0] === key));
+    const c = baseConfig(); mutate(c);
+    const s = simulate(c), ok = s.ra.found;
+
+    $("dbgChange").innerHTML = "<b>What changed:</b> " + change;
+
+    // Hop table: every hop in order. A hop without a result was either not on the path or not reached.
+    const stopAt = HOPS.findIndex(h => h[0] === s.stop);
+    $("dbgTable").innerHTML = "<tr><th>Hop</th><th>What happened</th><th>Result</th></tr>" + HOPS.map(([id, name], i) => {
+      const r = s.rows[id];
+      const cell = r ? [r.note, r.ok ? pill("yes", "Pass") : pill("no", "Drop")]
+        : stopAt !== -1 && i > stopAt ? ["—", pill("skip", "Not reached")] : ["The route did not send the packet this way.", pill("skip", "Not on path")];
+      return `<tr><td><b>${name}</b></td><td>${cell[0]}</td><td>${cell[1]}</td></tr>`;
+    }).join("");
+
+    // Flow log records on the instance's ENI, default (version 2) format
+    const me = c.eni, d = c.dst;
+    const lines = s.flow.map(([dir, action]) => {
+      const [sa, da, sp, dp] = dir === "out" ? [me.ip, d.ip, me.port, d.port] : [d.ip, me.ip, d.port, me.port];
+      const [packets, bytes] = !ok ? [6, 360] : dir === "out" ? [14, 1830] : [12, 5214];
+      return `2 123456789012 eni-0a1b2c3d4e5f67890 ${sa} ${da} ${sp} ${dp} 6 ${packets} ${bytes} ${T0} ${T0 + 58} ${action} OK`;
+    });
+    const actions = s.flow.map(f => f[1]);
+    if (actions.length === 1 && actions[0] === "ACCEPT") lines.push("# no record in the other direction: no reply reached eni-app");
+    if (actions.length === 1 && actions[0] === "REJECT") lines.push("# the packet never left eni-app, so nothing else was recorded");
+    $("dbgLog").textContent = "# version account-id interface-id srcaddr dstaddr srcport dstport protocol packets bytes start end action log-status\n" + lines.join("\n");
+
+    $("dbgRaOut").textContent = ok
+      ? "NetworkPathFound:  true\nForwardPathComponents and ReturnPathComponents list every hop,\nwith the security group rule, network ACL rule and route that let the packet through."
+      : `NetworkPathFound:  false\nExplanationCode:   ${s.ra.code}\nComponent:         ${s.ra.comp}   (direction: ${s.ra.dir})\nMeaning:           ${RA_MEANING[s.ra.code]}`;
+
+    const flowText = actions.join(", then ") + (actions.length === 1 && actions[0] === "ACCEPT" ? ", no reply" : "");
+    big("dbgStop", ok ? "Nowhere: delivered" : HOPS[stopAt][2], ok ? "pub" : "bad");
+    big("dbgFlow", flowText, ok ? "pub" : "bad");
+    big("dbgRa", ok ? "Reachable" : "Not reachable", ok ? "pub" : "bad");
+    $("dbgMsg").innerHTML = why;
+    Object.assign($("dbgMsg").dataset, { fault: key, stop: s.stop || "", flow: actions.join(","), code: ok ? "" : s.ra.code, comp: ok ? "" : s.ra.comp });
+    if (lightUp) light(s.lit, s.stop);
+  }
+  FAULTS.forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => paintFault(key, true);
+    $("faultBtns").appendChild(b);
+  });
+  paintFault("none", false);
+
+  // ---- Route table evaluator ----
+  const ROUTES = [
+    { dest: "10.0.0.0/16", target: "local", kind: "local", note: "the VPC's own CIDR" },
+    { dest: "10.0.3.0/24", target: "vpce-fw", kind: "static", note: "another subnet of this VPC, sent through a firewall endpoint" },
+    { dest: "10.0.0.0/8", target: "tgw-1", kind: "static", note: "every other private network, through the transit gateway" },
+    { dest: "10.50.0.0/16", target: "pcx-1", kind: "static", note: "a peered VPC" },
+    { dest: "10.50.0.0/16", target: "vgw-1", kind: "propagated", note: "the same range, learned from the VPN" },
+    { dest: "10.50.8.0/24", target: "vgw-1", kind: "propagated", note: "a smaller range, learned from the VPN" },
+    { dest: "52.216.0.0/15", target: "vpce-s3", kind: "prefix list", via: "pl-s3", note: "the S3 gateway endpoint" },
+    { dest: "0.0.0.0/0", target: "nat-1", kind: "static", note: "everything else" }
+  ];
+  const PRESETS = ["10.0.2.77", "10.0.3.20", "10.50.1.9", "10.50.8.4", "10.99.0.1", "52.216.10.10", "8.8.8.8"];
+  const validIp = ip => /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(ip) && ip.split(".").every(o => Number(o) <= 255);
+  const destLabel = r => r.via ? `${r.via} <span style="color:var(--muted)">· e.g. ${r.dest}</span>` : r.dest;
+
+  function paintRoutes(ip) {
+    [...$("rtBtns").querySelectorAll("button")].forEach(b => b.classList.toggle("on", b.textContent === ip));
+    const head = "<tr><th>Destination</th><th>Target</th><th>Type</th><th>For this address</th></tr>";
+    if (!validIp(ip)) {
+      $("rtTable").innerHTML = head + ROUTES.map(r => `<tr><td><code>${destLabel(r)}</code></td><td>${r.target}</td><td>${r.kind}</td><td>—</td></tr>`).join("");
+      $("rtMsg").innerHTML = ip === "" ? "Pick a destination address." : "That is not an IPv4 address. Type four numbers from 0 to 255, such as <code>10.50.8.4</code>.";
+      $("rtMsg").dataset.target = "";
+      return;
+    }
+    const { matches, best } = pickRoute(ROUTES, ip);
+    const tie = matches.filter(r => prefixLen(r.dest) === prefixLen(best.dest));
+    $("rtTable").innerHTML = head + ROUTES.map(r => {
+      let cls = "", say = "no match";
+      if (r === best) { cls = "hit"; say = `wins: /${prefixLen(r.dest)} is the longest match` + (tie.length > 1 ? `, and ${r.kind} beats ${tie[1].kind}` : ""); }
+      else if (matches.includes(r)) { cls = "lose"; say = prefixLen(r.dest) === prefixLen(best.dest) ? `matches, but ${r.kind} loses to ${best.kind}` : `matches, but /${prefixLen(r.dest)} is shorter than /${prefixLen(best.dest)}`; }
+      return `<tr class="${cls}"><td><code>${destLabel(r)}</code></td><td>${r.target}</td><td>${r.kind}</td><td>${say}</td></tr>`;
+    }).join("");
+    let msg = `<b>${ip} goes to ${best.target}</b> (${best.note}). ${matches.length} route${matches.length === 1 ? "" : "s"} match${matches.length === 1 ? "es" : ""}. `;
+    msg += tie.length > 1
+      ? `Two of them have the same /${prefixLen(best.dest)} destination, so the type decides: the ${best.kind} route beats the ${tie[1].kind} one.`
+      : matches.length > 1 ? `The /${prefixLen(best.dest)} is the most specific, so it wins. The type of the route is not even compared.`
+      : "Only the default route matches.";
+    if (best.kind === "propagated") msg += " A propagated route can beat a static one when its prefix is longer.";
+    if (best.target === "vpce-fw") msg += " This route is more specific than the local route. That is allowed only because its destination is exactly one subnet's CIDR.";
+    if (best.kind === "prefix list") msg += " This is why S3 traffic skips the NAT gateway and its per-GB charge once a gateway endpoint exists.";
+    $("rtMsg").innerHTML = msg;
+    $("rtMsg").dataset.target = best.target;
+  }
+  $("rtBtns").innerHTML = "<b>To</b>";
+  PRESETS.forEach(ip => {
+    const b = document.createElement("button");
+    b.textContent = ip;
+    b.onclick = () => { $("rtIp").value = ""; paintRoutes(ip); };
+    $("rtBtns").appendChild(b);
+  });
+  const lookUp = () => paintRoutes($("rtIp").value.trim());
+  $("rtGo").onclick = lookUp;
+  $("rtIp").addEventListener("keydown", e => { if (e.key === "Enter") lookUp(); });
+  paintRoutes("");
+</script>
+</body>
+</html>
