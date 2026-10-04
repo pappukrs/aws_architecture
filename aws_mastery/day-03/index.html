@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 3 — Networking at Scale</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .sim .calc { margin: 14px 0 12px; }
+  .sim .calc .big { font-size: 21px; }
+  .sim h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .sim h3 small { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 400; }
+  .sim .seg b { min-width: 64px; }
+  .sim tr.lose td { color: var(--muted); }
+  .tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 4px 20px; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .lab li { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-02/index.html">← Day 2</a><a href="../README.md">30-day plan</a><a href="../day-04/index.html">Day 4 →</a></nav>
+  <header>
+    <div class="tag">Day 3 of 30 · Week 1 — Identity, Networking, Compute, Storage</div>
+    <h1>Networking at Scale</h1>
+    <p class="lead">Yesterday you followed one packet through one VPC. A company has fifty VPCs, a data centre and a partner whose address range is the same as yours. Today you connect them. The centre of the page is the transit gateway and one question: which route table does a packet read, and who filled it? Then you add Direct Connect with a VPN behind it, DNS in both directions, and the three ways to share a service without sharing a network.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 700" role="img" aria-label="A hub-and-spoke network. At the top, three VPCs in one Region: dev, shared services and prod. Each has an attachment to a transit gateway in the middle. Inside the transit gateway are three route tables: rt-dev, rt-hub and rt-prod. rt-dev has no route to prod and rt-prod has no route to dev. Below the transit gateway, a Direct Connect gateway and a Direct Connect location lead to an on-premises data centre, and a Site-to-Site VPN with two tunnels is the backup path. The shared VPC holds Route 53 Resolver inbound and outbound endpoints. On the right, an interface endpoint in the prod VPC connects through PrivateLink to an endpoint service in a partner VPC with the same address range, and a peering attachment connects to a transit gateway in another Region.">
+        <defs>
+          <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--pub)"/></marker>
+        </defs>
+
+        <!-- Always visible: the Region -->
+        <rect x="10" y="14" width="738" height="418" rx="10" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="8 5"/>
+        <text x="24" y="32" font-size="12.5" font-weight="700" style="fill:var(--region)">AWS Region — ap-south-1</text>
+
+        <!-- Step 1: three VPCs -->
+        <g data-step="1">
+          <rect x="24" y="40" width="228" height="130" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2"/>
+          <text x="34" y="60" font-size="12.5" font-weight="700" style="fill:var(--vpc)">Dev VPC — 10.2.0.0/16</text>
+          <text x="34" y="77" font-size="10" style="fill:var(--muted)">routes: 10.0.0.0/8, 192.168.0.0/16 → tgw-1</text>
+          <text x="34" y="106" font-size="11" style="fill:var(--muted)">account: dev · test workloads</text>
+          <rect x="34" y="136" width="208" height="26" rx="6" fill="var(--card)" stroke="var(--az)" stroke-width="1.5"/>
+          <text x="138" y="153" font-size="10.5" text-anchor="middle">attachment subnet · one /28 per AZ</text>
+
+          <rect x="264" y="40" width="228" height="130" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2"/>
+          <text x="274" y="60" font-size="12.5" font-weight="700" style="fill:var(--vpc)">Shared VPC — 10.0.0.0/16</text>
+          <text x="274" y="77" font-size="10" style="fill:var(--muted)">routes: 10.0.0.0/8, 192.168.0.0/16 → tgw-1</text>
+          <rect x="274" y="136" width="208" height="26" rx="6" fill="var(--card)" stroke="var(--az)" stroke-width="1.5"/>
+          <text x="378" y="153" font-size="10.5" text-anchor="middle">attachment subnet · one /28 per AZ</text>
+
+          <rect x="504" y="40" width="232" height="130" rx="8" fill="var(--vpc-fill)" stroke="var(--vpc)" stroke-width="2"/>
+          <text x="514" y="60" font-size="12.5" font-weight="700" style="fill:var(--vpc)">Prod VPC — 10.1.0.0/16</text>
+          <text x="514" y="77" font-size="10" style="fill:var(--muted)">routes: 10.0.0.0/8, 192.168.0.0/16 → tgw-1</text>
+          <text x="514" y="102" font-size="11" style="fill:var(--muted)">account: prod</text>
+          <text x="514" y="117" font-size="11" style="fill:var(--muted)">live workloads</text>
+          <rect x="514" y="136" width="212" height="26" rx="6" fill="var(--card)" stroke="var(--az)" stroke-width="1.5"/>
+          <text x="620" y="153" font-size="10.5" text-anchor="middle">attachment subnet · one /28 per AZ</text>
+        </g>
+
+        <!-- Step 2: the transit gateway and its VPC attachments -->
+        <g data-step="2">
+          <rect x="24" y="200" width="712" height="220" rx="10" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2.5"/>
+          <text x="36" y="222" font-size="13.5" font-weight="700" style="fill:var(--az)">Transit gateway tgw-1 · one Regional router · ASN 64512</text>
+          <g stroke="var(--az)" stroke-width="2.5">
+            <line x1="138" y1="163" x2="138" y2="199"/><line x1="378" y1="163" x2="378" y2="199"/><line x1="620" y1="163" x2="620" y2="199"/>
+          </g>
+          <g font-size="10.5" font-weight="700" style="fill:var(--az)">
+            <text x="146" y="188">attachment “dev”</text><text x="386" y="188">attachment “shared”</text><text x="628" y="188">attachment “prod”</text>
+          </g>
+        </g>
+
+        <!-- Step 3: Direct Connect and the data centre -->
+        <g data-step="3">
+          <line x1="200" y1="421" x2="200" y2="447" stroke="var(--orange)" stroke-width="2.5"/>
+          <rect x="36" y="448" width="336" height="40" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+          <text x="48" y="465" font-size="12.5" font-weight="700">Direct Connect gateway dxgw · global</text>
+          <text x="48" y="480" font-size="10.5" style="fill:var(--muted)">attachment “dxgw” · tells your router about 10.0.0.0/8</text>
+          <line x1="200" y1="489" x2="200" y2="511" stroke="var(--orange)" stroke-width="2.5"/>
+          <rect x="36" y="512" width="336" height="54" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+          <text x="48" y="531" font-size="12.5" font-weight="700">Direct Connect location · 10 Gbps port</text>
+          <text x="48" y="546" font-size="10.5" style="fill:var(--muted)">transit virtual interface · VLAN 101</text>
+          <text x="48" y="559" font-size="10.5" style="fill:var(--muted)">BGP session: AWS 64512 ↔ your router 65000</text>
+          <line x1="200" y1="567" x2="200" y2="599" stroke="var(--orange)" stroke-width="2.5"/>
+          <text x="210" y="588" font-size="10.5" style="fill:var(--muted)">your fibre or a carrier circuit</text>
+          <rect x="24" y="600" width="712" height="86" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <text x="36" y="622" font-size="13" font-weight="700">On-premises data centre — 192.168.0.0/16</text>
+          <text x="36" y="640" font-size="11" style="fill:var(--muted)">router · ASN 65000 · advertises 192.168.0.0/16 on every path it has</text>
+        </g>
+
+        <!-- Step 4: the VPN behind it -->
+        <g data-step="4">
+          <line x1="560" y1="421" x2="560" y2="447" stroke="var(--region)" stroke-width="2.5" stroke-dasharray="7 4"/>
+          <rect x="400" y="448" width="324" height="118" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2"/>
+          <text x="412" y="467" font-size="12.5" font-weight="700">Site-to-Site VPN · the backup path</text>
+          <text x="412" y="484" font-size="10.5" style="fill:var(--muted)">attachment “vpn” · 2 IPsec tunnels over the internet</text>
+          <text x="412" y="498" font-size="10.5" style="fill:var(--muted)">1.25 Gbps per tunnel · one BGP session in each</text>
+          <rect x="412" y="510" width="300" height="46" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <text x="422" y="528" font-size="10.5" font-weight="700">The same prefix on both paths: Direct Connect wins.</text>
+          <text x="422" y="544" font-size="10.5" style="fill:var(--muted)">The VPN carries traffic when the other route is gone.</text>
+          <line x1="560" y1="567" x2="560" y2="599" stroke="var(--region)" stroke-width="2.5" stroke-dasharray="7 4"/>
+        </g>
+
+        <!-- Step 5: the route tables inside the transit gateway -->
+        <g data-step="5">
+          <rect x="36" y="236" width="214" height="172" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="1.5"/>
+          <text x="46" y="256" font-size="12.5" font-weight="700">Route table rt-dev</text>
+          <text x="46" y="273" font-size="10.5" style="fill:var(--muted)">association: dev</text>
+          <text x="46" y="287" font-size="10.5" style="fill:var(--muted)">propagation: shared, dxgw, vpn</text>
+          <text x="46" y="310" font-size="10.5" class="mono">10.0.0.0/16    → shared</text>
+          <text x="46" y="326" font-size="10.5" class="mono">192.168.0.0/16 → dxgw</text>
+          <text x="46" y="350" font-size="10.5" class="mono" font-weight="700" style="fill:var(--bad)">10.1.0.0/16    no route</text>
+          <text x="46" y="366" font-size="10.5" style="fill:var(--bad)">prod does not propagate here</text>
+
+          <rect x="262" y="236" width="232" height="172" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="1.5"/>
+          <text x="272" y="256" font-size="12.5" font-weight="700">Route table rt-hub</text>
+          <text x="272" y="273" font-size="10.5" style="fill:var(--muted)">association: shared, dxgw, vpn</text>
+          <text x="272" y="287" font-size="10.5" style="fill:var(--muted)">propagation: all five attachments</text>
+          <text x="272" y="310" font-size="10.5" class="mono">10.0.0.0/16    → shared</text>
+          <text x="272" y="326" font-size="10.5" class="mono">10.1.0.0/16    → prod</text>
+          <text x="272" y="342" font-size="10.5" class="mono">10.2.0.0/16    → dev</text>
+          <text x="272" y="358" font-size="10.5" class="mono">192.168.0.0/16 → dxgw</text>
+
+          <rect x="506" y="236" width="218" height="172" rx="8" fill="var(--card)" stroke="var(--az)" stroke-width="1.5"/>
+          <text x="516" y="256" font-size="12.5" font-weight="700">Route table rt-prod</text>
+          <text x="516" y="273" font-size="10.5" style="fill:var(--muted)">association: prod</text>
+          <text x="516" y="287" font-size="10.5" style="fill:var(--muted)">propagation: shared, dxgw, vpn</text>
+          <text x="516" y="310" font-size="10.5" class="mono">10.0.0.0/16    → shared</text>
+          <text x="516" y="326" font-size="10.5" class="mono">192.168.0.0/16 → dxgw</text>
+          <text x="516" y="350" font-size="10.5" class="mono" font-weight="700" style="fill:var(--bad)">10.2.0.0/16    no route</text>
+          <text x="516" y="366" font-size="10.5" style="fill:var(--bad)">dev does not propagate here</text>
+        </g>
+
+        <!-- Step 6: DNS in both directions -->
+        <g data-step="6">
+          <rect x="274" y="86" width="102" height="42" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="1.5"/>
+          <text x="325" y="103" font-size="9.5" font-weight="700" text-anchor="middle">Resolver inbound</text>
+          <text x="325" y="118" font-size="9.5" text-anchor="middle" style="fill:var(--muted)">2 IPs in 2 AZs</text>
+          <rect x="380" y="86" width="102" height="42" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="1.5"/>
+          <text x="431" y="103" font-size="9.5" font-weight="700" text-anchor="middle">Resolver outbound</text>
+          <text x="431" y="118" font-size="9.5" text-anchor="middle" style="fill:var(--muted)">+ forwarding rule</text>
+          <text x="36" y="658" font-size="11" style="fill:var(--muted)">DNS server 192.168.0.53 · answers corp.example.com · forwards aws.example.com to the inbound endpoint</text>
+          <text x="36" y="674" font-size="11" style="fill:var(--muted)">VPCs with the forwarding rule send corp.example.com through the outbound endpoint to 192.168.0.53</text>
+        </g>
+
+        <!-- Step 7: PrivateLink to a network you cannot route to -->
+        <g data-step="7">
+          <rect x="764" y="40" width="222" height="130" rx="8" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="774" y="60" font-size="12.5" font-weight="700" style="fill:var(--pub)">Partner VPC — 10.1.0.0/16</text>
+          <text x="774" y="77" font-size="10" style="fill:var(--muted)">another account · same range as prod</text>
+          <rect x="776" y="86" width="198" height="42" rx="6" fill="var(--card)" stroke="var(--pub)" stroke-width="1.5"/>
+          <text x="786" y="103" font-size="10.5" font-weight="700">Endpoint service</text>
+          <text x="786" y="118" font-size="10" style="fill:var(--muted)">Network Load Balancer → targets</text>
+          <text x="774" y="152" font-size="10" style="fill:var(--muted)">not attached to tgw-1 · no routes</text>
+          <rect x="612" y="86" width="116" height="42" rx="6" fill="var(--card)" stroke="var(--pub)" stroke-width="1.5"/>
+          <text x="670" y="103" font-size="10" font-weight="700" text-anchor="middle">Interface endpoint</text>
+          <text x="670" y="118" font-size="9.5" text-anchor="middle" style="fill:var(--muted)">ENI 10.1.9.20</text>
+          <line x1="729" y1="107" x2="774" y2="107" stroke="var(--pub)" stroke-width="2.5" marker-end="url(#arrowG)"/>
+        </g>
+
+        <!-- Step 8: another Region -->
+        <g data-step="8">
+          <line x1="737" y1="322" x2="763" y2="322" stroke="var(--az)" stroke-width="2.5"/>
+          <rect x="764" y="236" width="222" height="172" rx="8" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2"/>
+          <text x="774" y="256" font-size="12.5" font-weight="700" style="fill:var(--az)">Transit gateway tgw-2</text>
+          <text x="774" y="273" font-size="10.5" style="fill:var(--muted)">Region eu-west-1 · 10.8.0.0/16</text>
+          <text x="774" y="300" font-size="10.5">peering attachment “peer”</text>
+          <text x="774" y="316" font-size="10.5" style="fill:var(--muted)">static routes only, on both sides</text>
+          <text x="774" y="332" font-size="10.5" style="fill:var(--muted)">encrypted, on the AWS backbone</text>
+          <text x="272" y="374" font-size="10.5" class="mono">10.8.0.0/16    → peer (static)</text>
+          <rect x="764" y="448" width="222" height="118" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <text x="774" y="467" font-size="11" font-weight="700">With many Regions: Cloud WAN</text>
+          <text x="774" y="485" font-size="10.5" style="fill:var(--muted)">one policy document for the world</text>
+          <text x="774" y="500" font-size="10.5" style="fill:var(--muted)">segments replace route tables</text>
+          <text x="774" y="515" font-size="10.5" style="fill:var(--muted)">routes between Regions are dynamic</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: three VPCs, a data centre and a partner, joined in three different ways. The <b>transit gateway</b> routes between everything attached to it. Its <b>route tables</b> decide who reaches whom: dev and prod both reach the shared VPC and the data centre, and neither has a route to the other. <b>Direct Connect</b> is the main path to the data centre and the <b>VPN</b> stands behind it. The <b>Resolver endpoints</b> carry DNS questions in both directions. <b>PrivateLink</b> reaches one service in a partner VPC whose addresses overlap with prod, which no router could do. A <b>peering attachment</b> leads to another Region.</p>
+    <div class="legend">
+      <span style="--c:var(--az)">Transit gateway, attachments, route tables</span>
+      <span style="--c:var(--orange)">Direct Connect</span>
+      <span style="--c:var(--region)">Site-to-Site VPN</span>
+      <span style="--c:var(--pub)">PrivateLink</span>
+      <span style="--c:var(--dc)">DNS and notes</span>
+      <span style="--c:var(--vpc)">VPCs on the transit gateway</span>
+    </div>
+  </div>
+
+  <h2>Can dev reach prod?</h2>
+  <div class="card sim">
+    <p>Five ways to set up the route tables of the transit gateway above. Pick a design, a source and a destination. Before you read the result, say which route table the request reads, which one the reply reads, and whether each finds a route.</p>
+    <div class="seg" id="segDesign"></div>
+    <div class="seg" id="segFrom"></div>
+    <div class="seg" id="segTo"></div>
+    <p class="note" id="segChange"></p>
+    <div class="calc">
+      <div><div class="lbl">Request</div><div class="big" id="segReq"></div></div>
+      <div><div class="lbl">Reply</div><div class="big" id="segRep"></div></div>
+      <div><div class="lbl">Can they talk?</div><div class="big" id="segVerdict"></div></div>
+    </div>
+    <div class="table-wrap"><table id="segHops"></table></div>
+    <div class="tables" id="segTables"></div>
+    <p class="result" id="segMsg"></p>
+    <p class="note">Each VPC's own route table sends <code>10.0.0.0/8</code> and <code>192.168.0.0/16</code> to the transit gateway, and in the two designs with a default route, <code>0.0.0.0/0</code> as well. The firewall in the shared VPC is assumed to allow the traffic. The VPN attachment is left out here; it is associated and propagated exactly like <code>dxgw</code>. Highlighted rows are the routes the two packets used.</p>
+  </div>
+
+  <h2>Which link carries the traffic?</h2>
+  <div class="card sim">
+    <p>The transit gateway learns the data centre's routes twice: from the Direct Connect gateway and from the VPN. Each button changes one thing. Say which path a packet from AWS takes to each of two servers in the data centre, and how much traffic that path can carry.</p>
+    <div class="seg" id="hyBtns"></div>
+    <p class="note" id="hyChange"></p>
+    <div class="calc">
+      <div><div class="lbl">Direct Connect BGP session</div><div class="big" id="hyBgp"></div></div>
+      <div><div class="lbl">To 192.168.10.25</div><div class="big" id="hyA"></div></div>
+      <div><div class="lbl">To 192.168.20.25</div><div class="big" id="hyB"></div></div>
+      <div><div class="lbl">Traffic lost for</div><div class="big" id="hyGap"></div></div>
+    </div>
+    <h3>Routes for the data centre, as the transit gateway sees them</h3>
+    <div class="table-wrap"><table id="hyTable"></table></div>
+    <p class="result" id="hyMsg"></p>
+    <p class="note">The order of the rules on a transit gateway: the longest matching prefix wins. For the same prefix, a static route beats a propagated one, and among propagated routes a VPC beats a Direct Connect gateway, which beats a VPN. This decides the direction from AWS to the data centre only. The direction from the data centre to AWS is decided by your own router.</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Where peering stops</h3>
+      <ul>
+        <li>A <b>peering connection</b> joins exactly two VPCs. It is not transitive: if A peers with B and B with C, A cannot reach C (<a href="../../aws_architecture/day-22/index.html">architecture Day 22</a>).</li>
+        <li>A full mesh of <i>n</i> VPCs needs <i>n</i>(<i>n</i>−1)/2 connections. Ten VPCs need 45, and every one needs routes on both sides.</li>
+        <li>Nothing can pass through a peered VPC: not a VPN, not Direct Connect, not a NAT gateway.</li>
+        <li>It still has a place. It has no hourly charge, no data-processing charge and no bandwidth limit. For two VPCs that exchange a lot of data, it is the cheapest path.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Transit gateway: association and propagation</h3>
+      <ul>
+        <li>A transit gateway is a router for one Region. Everything connects to it through an <b>attachment</b>: a VPC, a VPN, a Direct Connect gateway, a peering connection to another transit gateway, or a Connect attachment for SD-WAN appliances.</li>
+        <li><b>Association</b> answers “which route table does traffic arriving from this attachment read?”. An attachment has exactly one.</li>
+        <li><b>Propagation</b> answers “which route tables learn this attachment's routes?”. An attachment can propagate into many tables, or into none.</li>
+        <li>The two are independent. An attachment can read a table it does not write to.</li>
+        <li>By default a transit gateway has one route table, and every attachment is associated with it and propagates into it. That is a full mesh. Turn both defaults off when you create the gateway.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Segmentation</h3>
+      <ul>
+        <li>Isolation on a transit gateway is the <b>absence of a route</b>. There is no deny rule to write.</li>
+        <li>The usual pattern: one route table per environment, and one hub table for shared services and hybrid links. Spokes propagate into the hub table. The hub propagates into every spoke table. Spokes never propagate into each other's tables.</li>
+        <li>A static <code>0.0.0.0/0</code> for central egress matches every address, including the other environments. Add <b>blackhole</b> routes for the ranges that must stay apart. A blackhole is a static route that drops.</li>
+        <li>Routing is checked per direction. A route in one table and none in the other gives one-way delivery, not isolation.</li>
+        <li>Give each environment its own address block, for example <code>10.1.0.0/16</code> for prod and <code>10.2.0.0/16</code> for dev. Then one blackhole covers every VPC that team will ever create.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>The attachment inside the VPC</h3>
+      <ul>
+        <li>A VPC attachment places one network interface in one subnet of each AZ you choose. Only instances in those AZs can use the transit gateway.</li>
+        <li>Use a small subnet of its own for this, a <code>/28</code> in each AZ. Its route table and network ACL then apply only to traffic that arrives from the transit gateway.</li>
+        <li>The transit gateway keeps traffic in the AZ where it entered. For a stateful firewall in an inspection VPC this is a problem: the request and the reply can enter from different AZs and meet different firewall instances.</li>
+        <li><b>Appliance mode</b> on the inspection VPC's attachment fixes it. The transit gateway then picks one AZ for a flow and keeps both directions there.</li>
+        <li>The VPC's own route tables still need routes that point to the transit gateway. The attachment adds none.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Route priority, peering and Connect</h3>
+      <ul>
+        <li>The longest prefix wins, as in a VPC. For the same prefix: static, then propagated from a VPC, then from a Direct Connect gateway, then Connect, then VPN.</li>
+        <li>A <b>peering attachment</b> joins two transit gateways, in the same Region or across Regions. It carries no propagation. You write static routes on both sides.</li>
+        <li>Traffic between Regions over a peering attachment stays on the AWS backbone and is encrypted.</li>
+        <li>A <b>Connect attachment</b> runs GRE tunnels and BGP to a virtual appliance, on top of a VPC or Direct Connect attachment. It gives an SD-WAN device dynamic routing and up to 5 Gbps per tunnel.</li>
+        <li>The MTU is 8,500 bytes between VPC, Direct Connect, Connect and peering attachments, and 1,500 on a VPN.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Direct Connect: connections and virtual interfaces</h3>
+      <ul>
+        <li>A <b>connection</b> is a physical port at a Direct Connect location. <b>Dedicated</b>: you own the port, at 1, 10, 100 or 400 Gbps. <b>Hosted</b>: a partner gives you a slice of theirs, from 50 Mbps to 25 Gbps.</li>
+        <li>A <b>virtual interface</b> (VIF) is one VLAN on the connection with one BGP session. Three types:</li>
+        <li><b>Private VIF</b>: to the private addresses of VPCs, through a virtual private gateway or a Direct Connect gateway.</li>
+        <li><b>Transit VIF</b>: to transit gateways, through a Direct Connect gateway.</li>
+        <li><b>Public VIF</b>: to the public endpoints of AWS services in all Regions. AWS advertises its public ranges to you. It does not reach your VPCs.</li>
+        <li>Getting a port takes weeks. AWS gives you a letter of authorisation, and the facility or your carrier makes the cross-connect.</li>
+        <li>Traffic is <b>not encrypted</b>. Use MACsec on a dedicated 10 Gbps or faster port, or run an IPsec VPN over the connection.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Direct Connect gateway and LAG</h3>
+      <ul>
+        <li>A <b>Direct Connect gateway</b> is a global object. One VIF to it reaches VPCs or transit gateways in any Region. It costs nothing.</li>
+        <li>It takes either virtual private gateways or transit gateways, not both on the same gateway.</li>
+        <li>For each association you set <b>allowed prefixes</b>. With a transit gateway, these are exactly what AWS advertises to your router. Summarise: <code>10.0.0.0/8</code>, not one entry per VPC.</li>
+        <li>It carries traffic between on-premises and AWS. It does not route from one VPC to another, or from one transit gateway to another.</li>
+        <li>A <b>link aggregation group</b> (LAG) bundles connections of the same speed at the same location into one logical link with LACP. It adds bandwidth. It does not add resilience, because all its links end on the same AWS device.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>BGP on Direct Connect</h3>
+      <ul>
+        <li>Your router may advertise at most <b>100 prefixes</b> on a private or transit VIF. With one more, the BGP session goes down and stays down until you advertise fewer.</li>
+        <li>BGP alone notices a dead link after the hold timer, 90 seconds by default. <b>BFD</b> notices in under a second. AWS has it ready on every VIF; it starts when you configure it on your router.</li>
+        <li>For the direction from AWS to you, the longest prefix decides first. Then <b>local preference communities</b> that you attach to your routes: <code>7224:7300</code> high, <code>7224:7200</code> medium, <code>7224:7100</code> low. Then the AS path length.</li>
+        <li>For the direction from you to AWS, your router decides. Set local preference there.</li>
+        <li>Resilience comes from separate locations. Two connections at each of two locations is the highest level; one at each of two locations is the usual production minimum.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Site-to-Site VPN with BGP</h3>
+      <ul>
+        <li>One VPN connection has <b>two tunnels</b>, to endpoints in two AZs. AWS replaces tunnel endpoints during maintenance, one at a time. Configure both tunnels, or maintenance is an outage.</li>
+        <li>Each tunnel carries up to 1.25 Gbps. On a transit gateway with BGP, <b>ECMP</b> spreads flows over several tunnels and several connections. On a virtual private gateway there is no ECMP.</li>
+        <li>With <b>BGP</b>, routes appear and disappear with the tunnel. With static routing, you list the prefixes by hand.</li>
+        <li>On a virtual private gateway your router may advertise 100 routes; on a transit gateway, 1,000.</li>
+        <li>Dead peer detection waits 30 seconds by default before it declares the tunnel down.</li>
+        <li>IPsec adds headers. Lower the TCP maximum segment size on your router, or large packets are dropped inside the tunnel.</li>
+        <li>An accelerated VPN enters AWS at the nearest edge location. It works only on a transit gateway.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Route 53 Resolver endpoints</h3>
+      <ul>
+        <li>Every VPC has a resolver at the base of its range plus two. It answers private hosted zones, VPC names and public names. It is reachable only from inside the VPC.</li>
+        <li>An <b>inbound endpoint</b> gives that resolver IP addresses in your subnets. The data centre's DNS servers forward your AWS zones to those addresses.</li>
+        <li>An <b>outbound endpoint</b> with a <b>forwarding rule</b> does the reverse: queries for <code>corp.example.com</code> leave through it to the DNS servers on-premises.</li>
+        <li>A rule works only in the VPCs it is associated with. Share the rule with AWS RAM and associate it with every VPC. The queries of all those VPCs use the one outbound endpoint; no DNS traffic crosses the transit gateway until the endpoint forwards it.</li>
+        <li>The most specific domain name in the rules wins. A <b>system rule</b> for a subdomain keeps it local while its parent is forwarded.</li>
+        <li>Do not forward a zone out that the other side forwards back in. The query circles until it times out.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--vpc)">
+      <h3>Shared VPC with RAM</h3>
+      <ul>
+        <li>The network account owns a VPC and <b>shares subnets</b> with other accounts of the same organisation through AWS Resource Access Manager.</li>
+        <li>A participant account launches instances, databases and load balancers into the shared subnet. It owns and pays for them. It cannot change the subnet, the route tables, the network ACLs or the gateways.</li>
+        <li>The owner cannot see into or delete the participants' resources.</li>
+        <li>Security groups belong to the account that created them. Participants can reference each other's groups by ID.</li>
+        <li>What you gain: one network instead of fifty, no transit gateway charge between the teams, and central control of routing.</li>
+        <li>What you give up: the VPC is one blast radius. All participants share its address space and its quotas.</li>
+        <li>An AZ name such as <code>ap-south-1a</code> maps to a different physical zone in each account. Compare AZ IDs, such as <code>aps1-az1</code>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>PrivateLink</h3>
+      <ul>
+        <li>The provider puts a Network Load Balancer in front of the service and creates an <b>endpoint service</b>. The consumer creates an <b>interface endpoint</b>: a network interface with an address from the consumer's own subnet (<a href="../../aws_architecture/day-24/index.html">architecture Day 24</a>).</li>
+        <li>No route connects the two VPCs. So overlapping address ranges do not matter, and the consumer can reach that one service and nothing else.</li>
+        <li>Connections go one way: from consumer to provider.</li>
+        <li>The provider sees the load balancer's address as the source, not the client's. Turn on Proxy Protocol v2 to receive the client address and the endpoint ID.</li>
+        <li>The provider approves each consumer, by a list of allowed principals and optionally by accepting each request.</li>
+        <li>An endpoint can be created only in AZs where the provider's load balancer is present. Match by AZ ID.</li>
+        <li>An interface endpoint can be reached from on-premises and from other VPCs, as long as they can route to its address.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>VPC Lattice</h3>
+      <ul>
+        <li>Lattice connects <b>services</b>, not networks. It works at the application layer: HTTP, HTTPS, gRPC and TLS.</li>
+        <li>A <b>service</b> has listeners, rules and target groups: instances, IP addresses, Lambda functions, load balancers, ECS tasks and Kubernetes pods.</li>
+        <li>A <b>service network</b> is a group of services. You associate services with it and VPCs with it. A client in an associated VPC can call every service in the network.</li>
+        <li>Clients reach a service by its DNS name, which resolves to link-local addresses. No route tables change, and overlapping ranges do not matter.</li>
+        <li>An <b>auth policy</b> on the service network or the service is an IAM policy for requests: which principal may call which path. The caller signs requests with SigV4.</li>
+        <li>You share service networks and services across accounts with RAM.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Cloud WAN</h3>
+      <ul>
+        <li>Cloud WAN is a managed global network. You write one <b>core network policy</b>, a JSON document. AWS builds a router in each Region you list, and connects them with dynamic routing.</li>
+        <li>A <b>segment</b> is a routing domain that spans all Regions. It does the work of a set of transit gateway route tables.</li>
+        <li>Attachments (VPC, VPN, Connect, Direct Connect gateway, an existing transit gateway route table) join a segment by their <b>tags</b>. The policy can require approval.</li>
+        <li>Segments are isolated from each other unless the policy shares routes between them.</li>
+        <li>Every policy change is a new version with a change set that you review and then apply.</li>
+        <li>Choose it over transit gateways with peering when you have several Regions and do not want to maintain static routes between them.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Numbers to remember</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>What</th><th>Number</th><th>Why it matters</th><th>Can it be raised?</th></tr>
+      <tr><td>Peering connections per VPC</td><td class="num">50</td><td>A mesh reaches this long before it is pleasant to operate.</td><td>Yes, up to 125</td></tr>
+      <tr><td>Attachments per transit gateway</td><td class="num">5,000</td><td>One gateway per Region is enough for almost every organisation.</td><td>No</td></tr>
+      <tr><td>Route tables per transit gateway</td><td class="num">20</td><td>One per segment. A design with a table per VPC runs out.</td><td>Yes</td></tr>
+      <tr><td>Routes per transit gateway</td><td class="num">10,000</td><td>Static and propagated together, across all its route tables.</td><td>Yes</td></tr>
+      <tr><td>Transit gateways per VPC</td><td class="num">5</td><td>A VPC can attach to several, for example during a migration.</td><td>No</td></tr>
+      <tr><td>Bandwidth per VPC attachment, per AZ</td><td class="num">up to 100 Gbps</td><td>Shared by all flows that enter from that AZ.</td><td>No</td></tr>
+      <tr><td>Transit gateway MTU</td><td class="num">8,500 bytes</td><td>1,500 on VPN attachments. A VPC allows 9,001 inside; a packet that large is dropped at the transit gateway.</td><td>No</td></tr>
+      <tr><td>VPN tunnel throughput</td><td class="num">1.25 Gbps</td><td>Two tunnels per connection. More capacity needs ECMP on a transit gateway.</td><td>No. Add connections.</td></tr>
+      <tr><td>BGP routes from your router, VPN</td><td class="num">100 / 1,000</td><td>100 on a virtual private gateway, 1,000 on a transit gateway.</td><td>No</td></tr>
+      <tr><td>BGP prefixes from your router, Direct Connect</td><td class="num">100</td><td>On a private or transit VIF, for IPv4 and for IPv6. One more and the session goes down. A public VIF takes 1,000.</td><td>No. Summarise.</td></tr>
+      <tr><td>Dedicated connection speeds</td><td class="num">1, 10, 100, 400 Gbps</td><td>Hosted connections: 50 Mbps to 25 Gbps.</td><td>—</td></tr>
+      <tr><td>VIFs per dedicated connection</td><td class="num">50 + 4</td><td>50 private or public, and 4 transit. A hosted connection carries one VIF.</td><td>No</td></tr>
+      <tr><td>Connections per LAG</td><td class="num">4</td><td>2 when the ports are 100 Gbps or faster.</td><td>No</td></tr>
+      <tr><td>Associations per Direct Connect gateway</td><td class="num">20 or 6</td><td>20 virtual private gateways, or 6 transit gateways.</td><td>No</td></tr>
+      <tr><td>Allowed prefixes per transit gateway association</td><td class="num">200</td><td>This is the list AWS advertises to your router.</td><td>No</td></tr>
+      <tr><td>BGP hold timer</td><td class="num">90 s</td><td>Time to notice a dead link without BFD.</td><td>Lower it on your router, or use BFD</td></tr>
+      <tr><td>BFD on Direct Connect</td><td class="num">300 ms × 3</td><td>Minimum interval and multiplier: failure is detected in under one second.</td><td>—</td></tr>
+      <tr><td>IP addresses per Resolver endpoint</td><td class="num">2 to 6</td><td>Each one is a network interface, and each is billed.</td><td>No</td></tr>
+      <tr><td>Queries per Resolver endpoint IP</td><td class="num">10,000 / s</td><td>For UDP. Add addresses before a migration moves all of DNS onto the endpoint.</td><td>Add IP addresses</td></tr>
+      <tr><td>Interface endpoint throughput</td><td class="num">10 Gbps</td><td>Per AZ, sustained. It bursts higher.</td><td>No</td></tr>
+      <tr><td>Participant accounts per shared VPC</td><td class="num">100</td><td>Distinct accounts that the subnets of one VPC are shared with.</td><td>Yes</td></tr>
+    </table>
+    <p class="note">Defaults from the quotas pages for Transit Gateway, Site-to-Site VPN, Direct Connect, Route 53 Resolver, PrivateLink and VPC sharing. AWS changes these; check Service Quotas in your own account before you design against a number.</p>
+  </div>
+
+  <h2>How it fails in production</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Symptom</th><th>Cause</th><th>How you find it</th><th>Fix</th></tr>
+      <tr>
+        <td><b>A security review finds that dev can open connections to prod.</b> Nobody asked for it.</td>
+        <td>Both attachments use the default route table, or a default route sends everything through a hub that knows every VPC.</td>
+        <td><code>aws ec2 search-transit-gateway-routes</code> on the table that dev is associated with. Look for a route that covers prod's range, including <code>0.0.0.0/0</code>.</td>
+        <td>A route table per environment, with no propagation between them. Blackhole routes for the other environments' ranges.</td>
+      </tr>
+      <tr>
+        <td><b>Through the inspection VPC, some connections work and others hang.</b> It depends on which AZ the two ends are in.</td>
+        <td>Appliance mode is off. The request and the reply enter the inspection VPC in different AZs and meet different firewall instances.</td>
+        <td>The firewall logs show flows with only one direction. The pairs that fail are always in different AZs.</td>
+        <td>Turn on appliance mode on the inspection VPC's attachment.</td>
+      </tr>
+      <tr>
+        <td><b>Instances in one AZ cannot use the transit gateway.</b> The other AZs are fine.</td>
+        <td>The VPC attachment has no subnet in that AZ.</td>
+        <td><code>aws ec2 describe-transit-gateway-vpc-attachments</code> and read <code>SubnetIds</code>. Reachability Analyzer on the path.</td>
+        <td>Add a subnet of that AZ to the attachment with <code>modify-transit-gateway-vpc-attachment</code>.</td>
+      </tr>
+      <tr>
+        <td><b>The Direct Connect port is up and the BGP session is down.</b> It started when a new site was added on-premises.</td>
+        <td>The router now advertises more than 100 prefixes on the VIF.</td>
+        <td>The VIF shows BGP status <code>down</code>. The CloudWatch metric <code>VirtualInterfaceBgpStatus</code> is 0. On the router, the session is idle.</td>
+        <td>Advertise a summary, or a default route. Alarm on the prefix count before it reaches 100.</td>
+      </tr>
+      <tr>
+        <td><b>Direct Connect fails. For about 90 seconds nothing works. Then everything is slow.</b></td>
+        <td>Without BFD, BGP waits for the hold timer. After failover, a 10 Gbps load runs on 1.25 Gbps tunnels.</td>
+        <td>The time of the outage against the BGP logs. <code>TunnelDataOut</code> on the VPN flat at its ceiling.</td>
+        <td>Configure BFD on the router. Size the backup: several VPN connections with ECMP, or a second Direct Connect at another location.</td>
+      </tr>
+      <tr>
+        <td><b>Small requests work over the VPN. Large responses and file transfers hang.</b></td>
+        <td>Packets are larger than the tunnel can carry. The transit gateway does not send the ICMP message that tells the sender to use smaller packets, so path MTU discovery fails.</td>
+        <td><code>ping</code> with the don't-fragment flag and growing sizes: it stops answering above a certain size.</td>
+        <td>Clamp the TCP MSS on the customer gateway. Set the MTU of instances that talk across the VPN to 1,500 or less.</td>
+      </tr>
+      <tr>
+        <td><b>A new VPC cannot resolve on-premises names.</b> Older VPCs can.</td>
+        <td>The forwarding rule is not associated with the new VPC. Or the endpoint's security group does not allow port 53 on both UDP and TCP.</td>
+        <td><code>aws route53resolver list-resolver-rule-associations</code>. Resolver query logs for the VPC.</td>
+        <td>Associate the shared rule when the account is created, as part of account vending. Route 53 Profiles can do it for a whole set of rules and zones.</td>
+      </tr>
+      <tr>
+        <td><b>Consumers of a PrivateLink service in one AZ get timeouts.</b> Consumers in other AZs are fine.</td>
+        <td>The provider's load balancer has no healthy target in that AZ, and cross-zone load balancing is off.</td>
+        <td>On the provider side: the target group's healthy host count per AZ.</td>
+        <td>Targets in every AZ the service is offered in, or cross-zone load balancing on.</td>
+      </tr>
+      <tr>
+        <td><b>Traffic to one on-premises subnet takes the VPN while Direct Connect is healthy.</b></td>
+        <td>The router advertises that subnet as its own, longer prefix on the VPN. The longest prefix wins before the type of link is compared.</td>
+        <td>Search the transit gateway route table for that address: the matching route points to the VPN attachment.</td>
+        <td>Advertise the same prefixes on both paths.</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2>What drives the bill</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Item</th><th>How it is charged</th><th>Figure</th><th>How to pay less</th></tr>
+      <tr><td><b>Transit gateway</b></td><td>Per hour for each attachment, plus per GB that enters the gateway. The sender's attachment pays.</td><td class="num">$0.05 / hour<br>$0.02 / GB</td><td>About $36 a month per attachment. For two VPCs that exchange terabytes, add a peering connection between them; the more specific route takes that traffic off the gateway.</td></tr>
+      <tr><td><b>Peering connection</b></td><td>No hourly charge and no processing charge. Normal data transfer applies.</td><td class="num">$0.01 / GB each way across AZs</td><td>Inside the same AZ the traffic is free. Compare AZ IDs, not names.</td></tr>
+      <tr><td><b>Direct Connect port</b></td><td>Per hour that the port exists, used or not.</td><td class="num">$0.30 / hour at 1 Gbps<br>$2.25 / hour at 10 Gbps</td><td>About $220 and $1,640 a month. Add the carrier's circuit and the cross-connect, which AWS does not bill. Below a few hundred Mbps, a hosted connection or a VPN costs less.</td></tr>
+      <tr><td><b>Direct Connect data out</b></td><td>Per GB from AWS to you. Data in is free.</td><td class="num">from $0.02 / GB</td><td>This is far below the internet rate of about $0.09. With heavy egress, the port pays for itself.</td></tr>
+      <tr><td><b>Transit VIF</b></td><td>The Direct Connect gateway is an attachment on the transit gateway: hourly, plus per GB for data that arrives from on-premises.</td><td class="num">as transit gateway</td><td>For one or two VPCs, a private VIF to a virtual private gateway has no such charge.</td></tr>
+      <tr><td><b>Site-to-Site VPN</b></td><td>Per hour for each connection, plus normal data transfer out.</td><td class="num">$0.05 / hour</td><td>About $36 a month. Cheap enough to keep as a standing backup for Direct Connect.</td></tr>
+      <tr><td><b>Resolver endpoint</b></td><td>Per hour for each IP address of each endpoint, plus per million queries that pass through.</td><td class="num">$0.125 / hour per IP<br>$0.40 / million</td><td>The minimum of two addresses is about $180 a month per endpoint. Build one inbound and one outbound endpoint centrally and share the rules; do not build a pair in every VPC.</td></tr>
+      <tr><td><b>PrivateLink</b></td><td>Consumer: per hour for each endpoint in each AZ, plus per GB. Provider: the load balancer.</td><td class="num">$0.01 / hour per AZ<br>$0.01 / GB</td><td>Half the per-GB price of a transit gateway. For one high-volume service between two VPCs, it is the cheaper of the two.</td></tr>
+      <tr><td><b>VPC Lattice</b></td><td>Per hour for each service, per GB, and per request above a free allowance.</td><td class="num">$0.025 / hour<br>$0.025 / GB<br>$0.10 / million requests</td><td>You pay for an application-layer proxy. Do not push bulk data transfer through it.</td></tr>
+      <tr><td><b>Cloud WAN</b></td><td>Per hour for each Region's router and for each attachment, plus per GB.</td><td class="num">$0.50 / hour per Region<br>$0.065 / hour per attachment<br>$0.02 / GB</td><td>About $365 a month per Region before any attachment. It earns that when it replaces a peering mesh you would otherwise maintain by hand.</td></tr>
+      <tr><td><b>Free</b></td><td colspan="3">Direct Connect gateways, sharing subnets with RAM, Resolver rules and their associations, and transit gateway route tables have no charge of their own.</td></tr>
+    </table>
+    <p class="note">Figures are list prices for US East (N. Virginia) from the AWS pricing pages when this page was written; Direct Connect port prices are those for the United States. Prices differ by Region and change over time. Check the pricing page for your Region.</p>
+  </div>
+
+  <h2>Peering, transit gateway, PrivateLink, Lattice or a shared VPC?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>VPC peering</th><th>Transit gateway</th><th>PrivateLink</th><th>VPC Lattice</th><th>Shared VPC</th></tr>
+      <tr><td><b>Connects</b></td><td>Two networks</td><td>Many networks, and on-premises</td><td>One service to many consumers</td><td>Many services to many clients</td><td>Nothing: the accounts are in one network</td></tr>
+      <tr><td><b>Layer</b></td><td>IP routing</td><td>IP routing</td><td>TCP or UDP to one endpoint</td><td>HTTP, HTTPS, gRPC, TLS</td><td>IP routing inside one VPC</td></tr>
+      <tr><td><b>Overlapping ranges</b></td><td>Refused</td><td>Cannot route them</td><td>Fine</td><td>Fine</td><td>Does not arise</td></tr>
+      <tr><td><b>Who can start a connection</b></td><td>Either side</td><td>Either side</td><td>The consumer only</td><td>The client only</td><td>Either side</td></tr>
+      <tr><td><b>Transitive</b></td><td>No</td><td>Yes, as far as the route tables allow</td><td>Not a network path</td><td>Not a network path</td><td>—</td></tr>
+      <tr><td><b>Access control</b></td><td>Routes, security groups</td><td>Route tables on the gateway, security groups</td><td>Allowed principals, endpoint security group, endpoint policy</td><td>IAM auth policies per service and path</td><td>Security groups, network ACLs</td></tr>
+      <tr><td><b>Cost</b></td><td>Data transfer only</td><td>Per attachment-hour and per GB</td><td>Per endpoint-hour per AZ and per GB</td><td>Per service-hour, per GB, per request</td><td>None for the sharing</td></tr>
+      <tr><td><b>Choose it when</b></td><td>Two VPCs, or one pair with very high volume</td><td>More than a few VPCs, hybrid links, central inspection or egress</td><td>You offer or consume one service across a boundary you do not trust, or the ranges overlap</td><td>Many teams call each other's HTTP services and you want IAM on every call</td><td>Many accounts in one organisation that should not each run a network</td></tr>
+    </table>
+    <p class="note">These combine. A common estate: shared VPCs for the teams of one business unit, a transit gateway between the units and to the data centre, PrivateLink for the partner, and a peering connection for the one pair of VPCs that moves the most data.</p>
+  </div>
+
+  <h2>Direct Connect or VPN?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Site-to-Site VPN</th><th>Direct Connect</th><th>VPN over Direct Connect</th></tr>
+      <tr><td><b>Path</b></td><td>The public internet</td><td>A private circuit</td><td>IPsec tunnels inside the private circuit</td></tr>
+      <tr><td><b>Time to set up</b></td><td>Minutes</td><td>Weeks</td><td>Weeks, then minutes</td></tr>
+      <tr><td><b>Bandwidth</b></td><td>1.25 Gbps per tunnel; more with ECMP on a transit gateway</td><td>50 Mbps to 400 Gbps</td><td>1.25 Gbps per tunnel, with ECMP</td></tr>
+      <tr><td><b>Latency</b></td><td>Varies with the internet path</td><td>Steady</td><td>Steady</td></tr>
+      <tr><td><b>Encrypted</b></td><td>Yes, IPsec</td><td>No, unless MACsec</td><td>Yes, IPsec</td></tr>
+      <tr><td><b>Routing</b></td><td>Static or BGP</td><td>BGP only</td><td>BGP</td></tr>
+      <tr><td><b>Cost</b></td><td>Per connection-hour; internet egress rate</td><td>Per port-hour, plus the circuit; lower egress rate</td><td>Both</td></tr>
+      <tr><td><b>Choose it when</b></td><td>You need it this week, the volume is small, or it is the backup</td><td>Steady high volume, latency that must not vary, or large egress</td><td>A rule requires encryption in transit and MACsec is not available on your port</td></tr>
+    </table>
+    <p class="note">The usual production answer is both: Direct Connect at two locations, and a VPN as the last line (<a href="../../aws_architecture/day-23/index.html">architecture Day 23</a>). Test the failover on purpose. A backup path that has never carried traffic is a guess.</p>
+  </div>
+
+  <h2>Hands-on lab</h2>
+  <div class="card lab">
+    <p><b>Goal:</b> build the three-VPC hub from the diagram, give the transit gateway three route tables, read them, make the one-way mistake from the simulator and close it with a blackhole route. About 40 minutes.</p>
+    <p><b>Cost:</b> about $0.15 for an hour: three attachments at $0.05 an hour each. No instances and no data. Attachments are billed for as long as they exist, so run the cleanup step.</p>
+    <ol>
+      <li>Choose a Region and create three VPCs, each with one small subnet for the attachment.
+<pre class="code">export AWS_DEFAULT_REGION=ap-south-1
+
+make_vpc() {   # $1 = name, $2 = second octet of the range. Prints "vpc-id subnet-id".
+  local vpc=$(aws ec2 create-vpc --cidr-block 10.$2.0.0/16 \
+    --tag-specifications "ResourceType=vpc,Tags=[{Key=Name,Value=mastery-day03-$1}]" \
+    --query Vpc.VpcId --output text)
+  local subnet=$(aws ec2 create-subnet --vpc-id $vpc --cidr-block 10.$2.255.0/28 \
+    --query Subnet.SubnetId --output text)
+  echo "$vpc $subnet"
+}
+read VPC_DEV SUB_DEV       &lt;&lt;&lt; "$(make_vpc dev 2)"
+read VPC_PROD SUB_PROD     &lt;&lt;&lt; "$(make_vpc prod 1)"
+read VPC_SHARED SUB_SHARED &lt;&lt;&lt; "$(make_vpc shared 0)"</pre>
+      </li>
+      <li>Create the transit gateway with both defaults turned off. Without this, every attachment would join one default route table. Repeat the second command until it prints <code>available</code>; it takes a minute or two.
+<pre class="code">TGW=$(aws ec2 create-transit-gateway --description mastery-day03 \
+  --options DefaultRouteTableAssociation=disable,DefaultRouteTablePropagation=disable \
+  --query TransitGateway.TransitGatewayId --output text)
+
+aws ec2 describe-transit-gateways --transit-gateway-ids $TGW \
+  --query 'TransitGateways[0].State' --output text</pre>
+      </li>
+      <li>Attach the three VPCs. Repeat the last command until all three are <code>available</code>.
+<pre class="code">attach() {   # $1 = VPC, $2 = subnet
+  aws ec2 create-transit-gateway-vpc-attachment --transit-gateway-id $TGW \
+    --vpc-id $1 --subnet-ids $2 \
+    --query TransitGatewayVpcAttachment.TransitGatewayAttachmentId --output text
+}
+ATT_DEV=$(attach $VPC_DEV $SUB_DEV)
+ATT_PROD=$(attach $VPC_PROD $SUB_PROD)
+ATT_SHARED=$(attach $VPC_SHARED $SUB_SHARED)
+
+aws ec2 describe-transit-gateway-vpc-attachments \
+  --filters Name=transit-gateway-id,Values=$TGW \
+  --query 'TransitGatewayVpcAttachments[].[TransitGatewayAttachmentId,State]' --output text</pre>
+      </li>
+      <li>Create three route tables. Then set the associations (which table each attachment reads) and the propagations (which tables learn each attachment's range). Wait half a minute after creating the tables before you associate.
+<pre class="code">make_rt() {   # $1 = name
+  aws ec2 create-transit-gateway-route-table --transit-gateway-id $TGW \
+    --tag-specifications "ResourceType=transit-gateway-route-table,Tags=[{Key=Name,Value=$1}]" \
+    --query TransitGatewayRouteTable.TransitGatewayRouteTableId --output text
+}
+RT_DEV=$(make_rt rt-dev); RT_PROD=$(make_rt rt-prod); RT_HUB=$(make_rt rt-hub)
+
+assoc() { aws ec2 associate-transit-gateway-route-table \
+  --transit-gateway-route-table-id $1 --transit-gateway-attachment-id $2; }
+prop()  { aws ec2 enable-transit-gateway-route-table-propagation \
+  --transit-gateway-route-table-id $1 --transit-gateway-attachment-id $2; }
+
+assoc $RT_DEV $ATT_DEV;  assoc $RT_PROD $ATT_PROD;  assoc $RT_HUB $ATT_SHARED
+prop $RT_DEV $ATT_SHARED;  prop $RT_PROD $ATT_SHARED
+prop $RT_HUB $ATT_DEV;  prop $RT_HUB $ATT_PROD;  prop $RT_HUB $ATT_SHARED</pre>
+      </li>
+      <li>Read the three tables. Before each command, say which ranges you expect.
+<pre class="code">routes() {   # $1 = route table
+  aws ec2 search-transit-gateway-routes --transit-gateway-route-table-id $1 \
+    --filters Name=state,Values=active,blackhole \
+    --query 'Routes[].[DestinationCidrBlock,Type,State]' --output text
+}
+routes $RT_DEV; echo; routes $RT_PROD; echo; routes $RT_HUB</pre>
+        Expect <code>rt-dev</code> and <code>rt-prod</code> to hold only <code>10.0.0.0/16</code>, and <code>rt-hub</code> to hold all three ranges. Dev has no route to <code>10.1.0.0/16</code>. That missing line is the whole isolation.
+      </li>
+      <li>Make the one-way mistake: let dev propagate into prod's table. Then read both tables again.
+<pre class="code">prop $RT_PROD $ATT_DEV
+routes $RT_PROD; echo; routes $RT_DEV</pre>
+        <code>rt-prod</code> now has <code>10.2.0.0/16</code>. <code>rt-dev</code> has not changed. A packet from prod would reach dev, and the reply would be dropped.
+      </li>
+      <li>Close it with a blackhole route, and read the table. A static route beats a propagated route for the same prefix, so the state of <code>10.2.0.0/16</code> is now <code>blackhole</code>. Then remove the mistaken propagation as well.
+<pre class="code">aws ec2 create-transit-gateway-route --transit-gateway-route-table-id $RT_PROD \
+  --destination-cidr-block 10.2.0.0/16 --blackhole
+routes $RT_PROD
+
+aws ec2 disable-transit-gateway-route-table-propagation \
+  --transit-gateway-route-table-id $RT_PROD --transit-gateway-attachment-id $ATT_DEV</pre>
+        No packet has moved in this lab. For real traffic, each VPC's own route table also needs a route to the gateway: <code>aws ec2 create-route --route-table-id … --destination-cidr-block 10.0.0.0/8 --transit-gateway-id $TGW</code>.
+      </li>
+      <li>Clean up. The attachments first; they take a few minutes. Repeat the <code>describe</code> command until every state is <code>deleted</code>, then run the rest.
+<pre class="code">for A in $ATT_DEV $ATT_PROD $ATT_SHARED; do
+  aws ec2 delete-transit-gateway-vpc-attachment --transit-gateway-attachment-id $A
+done
+aws ec2 describe-transit-gateway-vpc-attachments \
+  --filters Name=transit-gateway-id,Values=$TGW \
+  --query 'TransitGatewayVpcAttachments[].State' --output text
+
+for R in $RT_DEV $RT_PROD $RT_HUB; do
+  aws ec2 delete-transit-gateway-route-table --transit-gateway-route-table-id $R
+done
+sleep 60
+aws ec2 delete-transit-gateway --transit-gateway-id $TGW
+
+for S in $SUB_DEV $SUB_PROD $SUB_SHARED; do aws ec2 delete-subnet --subnet-id $S; done
+for V in $VPC_DEV $VPC_PROD $VPC_SHARED; do aws ec2 delete-vpc --vpc-id $V; done</pre>
+        If <code>delete-transit-gateway</code> fails, a route table is still being deleted; wait a minute and run it again. Check at the end that <code>describe-transit-gateways</code> shows the gateway as <code>deleted</code>.
+      </li>
+    </ol>
+  </div>
+
+  <h2>Interview questions</h2>
+  <details><summary>How do you stop the dev VPC from reaching prod when both attach to the same transit gateway?</summary><p>With route tables on the transit gateway. I turn off default association and default propagation. Dev's attachment is associated with <code>rt-dev</code> and prod's with <code>rt-prod</code>. Shared services and the hybrid links propagate into both tables; dev and prod propagate only into the hub table. Dev's table then has no route for prod's range, and prod's has none for dev's, so the packet is dropped in both directions. If either table has a default route for central egress, that route matches the other environment too, so I add blackhole routes for the other environment's range. I verify with <code>search-transit-gateway-routes</code> on both tables and with Reachability Analyzer.</p></details>
+  <details><summary>What is the difference between association and propagation on a transit gateway?</summary><p>Association is about traffic that arrives: an attachment is associated with exactly one route table, and packets that enter from it are routed by that table. Propagation is about routes: an attachment can propagate its prefixes into any number of route tables, so those tables learn how to reach it. They are independent. In a hub-and-spoke design a spoke is associated with its own table and propagates into the hub's table, not into its own.</p></details>
+  <details><summary>You route all traffic between VPCs through a firewall in an inspection VPC. Some flows fail, depending on the AZ. Why?</summary><p>The transit gateway keeps traffic in the AZ where it entered. The request enters the inspection VPC in the source's AZ and the reply enters in the destination's AZ. If these differ, the two directions pass different firewall instances, and a stateful firewall drops a flow of which it saw only half. The fix is appliance mode on the inspection VPC's attachment: the transit gateway then chooses one AZ per flow and uses it for both directions.</p></details>
+  <details><summary>Explain private, public and transit virtual interfaces.</summary><p>Each is one VLAN with one BGP session on a Direct Connect connection. A private VIF reaches the private addresses of VPCs, through a virtual private gateway or a Direct Connect gateway. A transit VIF reaches transit gateways through a Direct Connect gateway, and from there every VPC attached to them. A public VIF reaches the public endpoints of AWS services such as S3 in all Regions; AWS advertises its public ranges and I advertise public addresses that I own. A public VIF gives no access to a VPC.</p></details>
+  <details><summary>Your Direct Connect fails over to VPN. What can go wrong?</summary><p>Three things. Detection: without BFD the router waits for the BGP hold timer, about 90 seconds of lost traffic. Capacity: a VPN tunnel carries 1.25 Gbps, so a 10 Gbps load does not fit unless I have several VPN connections with ECMP on a transit gateway. Packet size: the VPN's MTU is lower, so flows that used large packets can hang unless the MSS is clamped. There is also the question of whether the backup works at all. I test it on a schedule by shutting the BGP session on purpose.</p></details>
+  <details><summary>The BGP session on a transit VIF went down when the network team added a site. The port is up. What happened?</summary><p>The router crossed the limit of 100 advertised prefixes on a private or transit VIF. AWS takes the session down when it receives more. The fix is to summarise the routes, or advertise a default route, and then the session comes back. To prevent it I alarm on the number of advertised prefixes well below 100, and I agree an address plan with the network team that can be summarised.</p></details>
+  <details><summary>Servers on-premises must resolve names in your private hosted zones, and instances must resolve on-premises names. How?</summary><p>Two Resolver endpoints in a central VPC. An inbound endpoint gives the VPC resolver addresses that are reachable over Direct Connect or VPN; the on-premises DNS servers forward the AWS zones to them. An outbound endpoint with a forwarding rule sends queries for the on-premises domain to the DNS servers there. I share the rule with RAM and associate it with every VPC, and I associate the private hosted zones with the central VPC. The endpoints' security groups allow port 53 over UDP and TCP. I check that no zone is forwarded in both directions, which would make a loop.</p></details>
+  <details><summary>A partner's VPC uses the same CIDR as yours and you must call their API. What are the options?</summary><p>Peering is refused and a transit gateway cannot route between two identical ranges. PrivateLink is the direct answer: the partner publishes the API as an endpoint service behind a Network Load Balancer, and I create an interface endpoint that takes an address in my own subnet. Addresses never have to be unique across the two sides, and the partner gets no route into my network. If the API is HTTP and both sides use it, VPC Lattice also works across overlapping ranges. A private NAT gateway with a small routable range on each side is the last resort.</p></details>
+  <details><summary>When do you choose a shared VPC over one VPC per account with a transit gateway?</summary><p>When many accounts belong together and talk to each other a lot: the teams of one product, for example. A shared VPC gives them account-level separation of IAM, billing and quotas, with one network that a central team runs. There is no transit gateway charge between them and no route tables to segment. I keep separate VPCs where I need a network boundary: between prod and non-prod, between business units, or for a workload with its own compliance scope. Those separate VPCs then meet at a transit gateway.</p></details>
+  <details><summary>What does Cloud WAN give you that transit gateways with peering do not?</summary><p>Peering between transit gateways carries no propagation, so every Region pair needs static routes on both sides, and every new range means editing them. Cloud WAN routes dynamically between its Regions. Segmentation is declared once in a policy and holds in all Regions, and attachments join a segment by tag instead of by hand. Changes are versioned and reviewed as change sets. The price is a fixed hourly charge per Region, so with one or two Regions and a stable set of ranges, transit gateways with peering are still simpler and cheaper.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-04/index.html">Day 4: EC2 in depth</a>.</b> The network is in place. Tomorrow you look at what runs in it: instance families, Nitro and Graviton, placement groups, AMIs, the metadata service, EBS volume types and Systems Manager.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Three VPCs that cannot talk.</b> Dev, shared services and prod sit in three accounts, with ranges that do not overlap. Each VPC has a small subnet in every AZ, reserved for the transit gateway attachment. Each VPC's route table sends the company's ranges to the transit gateway. Nothing is connected yet.",
+    "<b>Step 2 — The transit gateway.</b> One router for the Region. Each VPC joins it with an attachment, which places a network interface in the attachment subnet of each AZ. With default settings, all three would now reach each other: one default route table, every attachment associated with it and propagating into it. Here the defaults are off, so nothing is routed yet.",
+    "<b>Step 3 — Direct Connect.</b> A 10 Gbps port at a Direct Connect location, joined to your router by a circuit. On the port, a transit virtual interface: one VLAN and one BGP session. It ends on a Direct Connect gateway, a global object, which is one more attachment on the transit gateway. Your router advertises 192.168.0.0/16. AWS advertises the allowed prefix 10.0.0.0/8.",
+    "<b>Step 4 — The VPN behind it.</b> A Site-to-Site VPN is a fourth kind of attachment: two IPsec tunnels over the internet, each with its own BGP session. Your router advertises the same 192.168.0.0/16 here. The transit gateway now knows two ways to the data centre. For the same prefix it prefers the Direct Connect gateway, so the VPN stays idle until that route disappears.",
+    "<b>Step 5 — Route tables decide who reaches whom.</b> A packet is routed by the table its attachment is <b>associated</b> with. A table contains the routes of the attachments that <b>propagate</b> into it. The dev attachment reads rt-dev, and prod does not propagate there, so rt-dev has no route for 10.1.0.0/16. The same holds the other way. Shared services and the hybrid links read rt-hub, which knows everyone.",
+    "<b>Step 6 — DNS in both directions.</b> Routing is not enough; names must resolve. The inbound endpoint gives the VPC resolver two addresses that the data centre can reach, so its DNS server can forward your AWS zones to them. The outbound endpoint and a forwarding rule send queries for corp.example.com to the DNS server on-premises. The rule is shared with RAM and associated with every VPC.",
+    "<b>Step 7 — PrivateLink.</b> A partner's VPC uses 10.1.0.0/16, the same range as prod. No router can connect two networks with the same addresses. The partner publishes its service behind a Network Load Balancer as an endpoint service. Prod creates an interface endpoint, which gets the address 10.1.9.20 from prod's own subnet. Prod calls that address. The partner cannot call back, and can reach nothing else in prod.",
+    "<b>Step 8 — Another Region.</b> A transit gateway does not leave its Region. A peering attachment joins it to a transit gateway elsewhere. Peering carries no propagation: you add a static route for 10.8.0.0/16 here and static routes for your ranges there. With many Regions this becomes a lot of static routes. Cloud WAN replaces it with one policy and dynamic routing between Regions."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+
+  // ---- IPv4 helpers ----
+  const ipNum = ip => ip.split(".").reduce((n, o) => n * 256 + Number(o), 0);
+  const prefixLen = cidr => Number(cidr.split("/")[1]);
+  const inCidr = (ip, cidr) => {
+    const size = 2 ** (32 - prefixLen(cidr));
+    return Math.floor(ipNum(ip) / size) === Math.floor(ipNum(cidr.split("/")[0]) / size);
+  };
+  // ---- Transit gateway route selection: longest prefix first; for the same prefix, static > VPC > Direct Connect gateway > VPN ----
+  const RANK = { static: 0, vpc: 1, dxgw: 2, vpn: 3 };
+  const pickRoute = (routes, ip) => routes.filter(r => inCidr(ip, r.dest))
+    .sort((a, b) => prefixLen(b.dest) - prefixLen(a.dest) || RANK[a.rank] - RANK[b.rank])[0] || null;
+
+  const pill = (kind, text) => `<span class="pill ${kind}">${text}</span>`;
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+
+  // ================= Segmentation: can A reach B? =================
+  // The four networks. The key is the name of the attachment on the transit gateway.
+  const NET = {
+    dev:    { label: "Dev VPC",     cidr: "10.2.0.0/16",    ip: "10.2.1.10",    rank: "vpc" },
+    prod:   { label: "Prod VPC",    cidr: "10.1.0.0/16",    ip: "10.1.1.10",    rank: "vpc" },
+    shared: { label: "Shared VPC",  cidr: "10.0.0.0/16",    ip: "10.0.1.10",    rank: "vpc" },
+    dxgw:   { label: "On-premises", cidr: "192.168.0.0/16", ip: "192.168.1.10", rank: "dxgw" }
+  };
+  const KEYS = Object.keys(NET);
+  // The segmented design drawn in the diagram
+  const segmented = () => ({
+    "rt-dev":  { assoc: ["dev"],            prop: ["shared", "dxgw"],                statics: [] },
+    "rt-hub":  { assoc: ["shared", "dxgw"], prop: ["shared", "prod", "dev", "dxgw"], statics: [] },
+    "rt-prod": { assoc: ["prod"],           prop: ["shared", "dxgw"],                statics: [] }
+  });
+  const withDefault = t => { ["rt-dev", "rt-prod"].forEach(n => t[n].statics.push({ dest: "0.0.0.0/0", target: "shared" })); return t; };
+
+  // [key, button, what is set up, route tables, explanation]
+  const DESIGNS = [
+    ["flat", "Default: one route table", "One route table, the default one. Every attachment is associated with it and propagates into it.",
+      () => ({ "default route table": { assoc: [...KEYS], prop: ["shared", "prod", "dev", "dxgw"], statics: [] } }),
+      "This is what a transit gateway does with its default settings: a full mesh. Every new attachment reaches every other one from its first minute. That is convenient in a lab and wrong for production."],
+    ["segmented", "Segmented, as drawn", "Three route tables, as in the diagram. Dev and prod propagate only into <code>rt-hub</code>.",
+      segmented,
+      "Isolation here is a missing route, not a deny rule. <code>rt-dev</code> has no entry for 10.1.0.0/16 because the prod attachment does not propagate into it, and <code>rt-prod</code> has none for 10.2.0.0/16. Both still reach the shared VPC and the data centre."],
+    ["oneway", "One propagation too many", "A mistake: someone enabled propagation of the dev attachment into <code>rt-prod</code>. Nothing else changed.",
+      () => { const t = segmented(); t["rt-prod"].prop.push("dev"); return t; },
+      "Routing is checked once per direction. <code>rt-prod</code> now knows the way to dev, and <code>rt-dev</code> still does not know the way to prod. Read both tables before you say that two networks are isolated."],
+    ["egress", "Default route for central egress", "Central egress and inspection: <code>rt-dev</code> and <code>rt-prod</code> each got a static <code>0.0.0.0/0 → shared</code>, so that internet traffic leaves through the firewall and NAT gateway in the shared VPC.",
+      () => withDefault(segmented()),
+      "The default route matches every address, including the other environment's. The packet goes to the shared VPC, passes the firewall and returns to the transit gateway. There it is routed by <code>rt-hub</code>, which knows every VPC. The route tables no longer keep dev and prod apart. Only the firewall's rules do."],
+    ["blackhole", "Default route plus blackholes", "As before, plus two static blackhole routes: <code>10.1.0.0/16</code> in <code>rt-dev</code> and <code>10.2.0.0/16</code> in <code>rt-prod</code>.",
+      () => { const t = withDefault(segmented());
+        t["rt-dev"].statics.push({ dest: "10.1.0.0/16", target: "blackhole" });
+        t["rt-prod"].statics.push({ dest: "10.2.0.0/16", target: "blackhole" }); return t; },
+      "A /16 is more specific than /0, so the blackhole wins and the packet is dropped at the transit gateway, before it reaches the firewall. Internet traffic still follows the default route. Many teams blackhole all of <code>10.0.0.0/8</code> in the spoke tables: the propagated /16 of the shared VPC is more specific and keeps working."]
+  ];
+
+  // Turn associations, propagations and static routes into route lists
+  function buildTables(spec) {
+    Object.values(spec).forEach(t => {
+      t.routes = t.statics.map(s => ({ ...s, kind: "static", rank: "static" }))
+        .concat(t.prop.map(a => ({ dest: NET[a].cidr, target: a, kind: "propagated", rank: NET[a].rank })));
+    });
+    return spec;
+  }
+  // Walk one packet from attachment `from` to the address of network `to`
+  function walk(tables, from, to) {
+    const ip = NET[to].ip, hops = [];
+    hops.push({ where: NET[from].label, ok: true, note: from === "dxgw"
+      ? `The router learned 10.0.0.0/8 over BGP and sends ${ip} to Direct Connect. The packet enters tgw-1 on the dxgw attachment.`
+      : `The VPC's route table sends ${ip} to tgw-1. The packet enters on the ${from} attachment.` });
+    let at = from;
+    for (let i = 0; i < 4; i++) {
+      const name = Object.keys(tables).find(n => tables[n].assoc.includes(at));
+      const best = pickRoute(tables[name].routes, ip);
+      const intro = `The ${at} attachment is associated with this table. `;
+      if (!best) {
+        hops.push({ where: name, ok: false, note: intro + `No route matches ${ip}. The packet is dropped.` });
+        return { ok: false, hops, stop: name };
+      }
+      best.used = true;
+      if (best.target === "blackhole") {
+        hops.push({ where: name, ok: false, note: intro + `${best.dest} → blackhole is the most specific match. The packet is dropped.` });
+        return { ok: false, hops, stop: name };
+      }
+      hops.push({ where: name, ok: true, note: intro + `${best.dest} → ${best.target} (${best.kind}) is the most specific match.` });
+      if (best.target === to) {
+        hops.push({ where: NET[to].label, ok: true, note: `Delivered to ${ip}.` });
+        return { ok: true, hops, stop: null };
+      }
+      // A default route led to the shared VPC although the destination is elsewhere
+      hops.push({ where: "Shared VPC", ok: true, note: "The firewall inspects the packet and allows it. The VPC's route table sends it back to tgw-1, on the shared attachment." });
+      at = best.target;
+    }
+    return { ok: false, hops, stop: "a routing loop" };
+  }
+
+  const seg = { design: "segmented", from: "dev", to: "prod" };
+  function paintSeg() {
+    const [, , change, make, why] = DESIGNS.find(d => d[0] === seg.design);
+    const mark = (id, list, cur) => [...$(id).querySelectorAll("button")].forEach((b, i) => b.classList.toggle("on", list[i] === cur));
+    mark("segDesign", DESIGNS.map(d => d[0]), seg.design); mark("segFrom", KEYS, seg.from); mark("segTo", KEYS, seg.to);
+    const tables = buildTables(make());
+    const A = NET[seg.from].label, B = NET[seg.to].label;
+    const req = walk(tables, seg.from, seg.to);
+    const rep = req.ok ? walk(tables, seg.to, seg.from) : null;
+
+    $("segChange").innerHTML = "<b>The design:</b> " + change;
+    big("segReq", req.ok ? "Delivered" : `Dropped at ${req.stop}`, req.ok ? "pub" : "bad");
+    big("segRep", !rep ? "Never sent" : rep.ok ? "Delivered" : `Dropped at ${rep.stop}`, rep && rep.ok ? "pub" : "bad");
+    const verdict = !req.ok ? "No" : rep.ok ? "Yes" : "One way only";
+    big("segVerdict", verdict, verdict === "Yes" ? "pub" : "bad");
+
+    const rows = (dir, w) => w.hops.map(h => `<tr><td>${dir}</td><td><b>${h.where}</b></td><td>${h.note}</td><td>${h.ok ? pill("yes", "Pass") : pill("no", "Drop")}</td></tr>`).join("");
+    $("segHops").innerHTML = "<tr><th>Packet</th><th>Where</th><th>What happened</th><th>Result</th></tr>"
+      + rows("Request", req) + (rep ? rows("Reply", rep) : `<tr><td>Reply</td><td>—</td><td>The request never arrived, so there is no reply.</td><td>${pill("skip", "Not sent")}</td></tr>`);
+
+    $("segTables").innerHTML = Object.entries(tables).map(([name, t]) =>
+      `<div><h3>${name}<br><small>association: ${t.assoc.join(", ")} · propagation: ${t.prop.join(", ")}</small></h3>
+       <table><tr><th>Destination</th><th>Target</th><th>Type</th></tr>` +
+      [...t.routes].sort((a, b) => ipNum(a.dest.split("/")[0]) - ipNum(b.dest.split("/")[0])).map(r =>
+        `<tr class="${r.used ? "hit" : ""}"><td><code>${r.dest}</code></td><td>${r.target}</td><td>${r.kind}</td></tr>`).join("") + "</table></div>").join("");
+
+    const head = verdict === "Yes" ? `<b>${A} and ${B} can talk.</b> Both directions find a route.`
+      : verdict === "No" ? `<b>Blocked.</b> The request from ${A} stops at ${req.stop}.`
+      : `<b>One way only.</b> The request reaches ${B}, and the reply stops at ${rep.stop}. A TCP handshake cannot complete, so the application sees a timeout. A single UDP packet still arrives, so do not count this as isolation.`;
+    $("segMsg").innerHTML = head + " " + why;
+    Object.assign($("segMsg").dataset, { verdict, stop: (rep || req).stop || "" });
+  }
+  function segButtons(id, title, items, onPick) {
+    $(id).innerHTML = `<b>${title}</b>`;
+    items.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.onclick = () => { onPick(key); paintSeg(); };
+      $(id).appendChild(b);
+    });
+  }
+  segButtons("segDesign", "Design", DESIGNS.map(d => [d[0], d[1]]), k => { seg.design = k; });
+  // Picking the network that is already on the other side swaps the two
+  segButtons("segFrom", "From", KEYS.map(k => [k, NET[k].label]), k => { if (k === seg.to) seg.to = seg.from; seg.from = k; });
+  segButtons("segTo", "To", KEYS.map(k => [k, NET[k].label]), k => { if (k === seg.from) seg.from = seg.to; seg.to = k; });
+  paintSeg();
+
+  // ================= Hybrid: Direct Connect with a VPN behind it =================
+  const DX_LIMIT = 100, DX_GBPS = 10, TUNNEL_GBPS = 1.25;
+  const DESTS = [["hyA", "192.168.10.25"], ["hyB", "192.168.20.25"]];
+  const many = n => Array.from({ length: n }, (_, i) => `192.168.${i}.0/24`);
+  const baseLinks = () => ({ dx: { link: true, bfd: true, prefixes: ["192.168.0.0/16"] }, vpn: { tunnels: 2, prefixes: ["192.168.0.0/16"] } });
+
+  // [key, button, what changed, change to the links, explanation]
+  const CASES = [
+    ["normal", "Everything up", "Nothing. Your router advertises <code>192.168.0.0/16</code> on Direct Connect and on the VPN.", s => {},
+      "<b>Direct Connect carries everything.</b> Both routes have the same prefix, so the type of attachment decides, and a Direct Connect gateway beats a VPN. The VPN route is known and unused. This is the state you want: the backup is up, and you can see that it is up."],
+    ["cutSlow", "Fibre cut, no BFD", "The circuit to the Direct Connect location is cut. BFD is not configured on your router.", s => { s.dx.link = false; s.dx.bfd = false; },
+      "<b>Traffic is lost for up to 90 seconds, then moves to the VPN.</b> Nothing tells the transit gateway that the link is dead. It keeps the Direct Connect route until the BGP hold timer runs out. After that the VPN route is the only one left. The load now runs on two tunnels of 1.25 Gbps each."],
+    ["cutFast", "Fibre cut, BFD on", "The same cut. BFD is configured on your router: 300 ms interval, multiplier 3.", s => { s.dx.link = false; },
+      "<b>Failover in under a second.</b> BFD misses three packets and takes the BGP session down at once, so the route is withdrawn and the VPN takes over. Open TCP connections survive it. The capacity problem remains: 2.5 Gbps where there were 10."],
+    ["specific", "A more specific route on the VPN", "During a test, someone made your router advertise <code>192.168.10.0/24</code> on the VPN, in addition to the /16.", s => { s.vpn.prefixes.push("192.168.10.0/24"); },
+      "<b>One subnet silently uses the VPN.</b> The longest prefix is compared first. The preference for Direct Connect applies only between routes with the same prefix. Nothing is down and no alarm fires. The servers in 192.168.10.0/24 are simply slower, and their traffic crosses the internet."],
+    ["limit", "120 prefixes on the transit VIF", "Your network team stopped summarising. The router now advertises 120 separate <code>/24</code> prefixes on Direct Connect. The VPN still gets the /16.", s => { s.dx.prefixes = many(120); },
+      "<b>The Direct Connect BGP session goes down, although the port and the fibre are fine.</b> A private or transit virtual interface accepts 100 prefixes from your router. With more, AWS closes the session and keeps it closed. Everything moves to the VPN. On a transit gateway the VPN accepts 1,000 routes, so it survives. <b>Fix:</b> advertise the /16 again."],
+    ["tunnel", "Fibre cut and one tunnel in maintenance", "The circuit is cut, with BFD on. At the same time AWS is replacing the endpoint of VPN tunnel 2.", s => { s.dx.link = false; s.vpn.tunnels = 1; },
+      "<b>Still up, on a single tunnel.</b> This is why a VPN connection has two tunnels, and why you configure both. With one tunnel configured, this would be a full outage. Capacity is now 1.25 Gbps."]
+  ];
+
+  function paintHybrid(key) {
+    const [, , change, mutate, why] = CASES.find(c => c[0] === key);
+    [...$("hyBtns").children].forEach((b, i) => b.classList.toggle("on", CASES[i][0] === key));
+    const s = baseLinks(); mutate(s);
+    const overLimit = s.dx.prefixes.length > DX_LIMIT;
+    const dxUp = s.dx.link && !overLimit, vpnUp = s.vpn.tunnels > 0;
+    const routes = [
+      ...s.dx.prefixes.map(p => ({ dest: p, target: "dxgw", rank: "dxgw", live: dxUp })),
+      ...s.vpn.prefixes.map(p => ({ dest: p, target: "vpn", rank: "vpn", live: vpnUp }))
+    ];
+    const live = routes.filter(r => r.live);
+    const vpnGbps = TUNNEL_GBPS * s.vpn.tunnels;
+    const pathName = r => !r ? "No route" : r.target === "dxgw" ? `Direct Connect · ${DX_GBPS} Gbps` : `VPN · ${vpnGbps} Gbps`;
+    const picks = DESTS.map(([id, ip]) => { const r = pickRoute(live, ip); big(id, pathName(r), r && r.target === "dxgw" ? "pub" : "bad"); return r; });
+
+    $("hyChange").innerHTML = "<b>What changed:</b> " + change;
+    big("hyBgp", dxUp ? "Up" : overLimit ? "Down: over 100 prefixes" : "Down: link lost", dxUp ? "pub" : "bad");
+    const gap = dxUp ? "—" : overLimit ? "A few seconds" : s.dx.bfd ? "Under 1 second" : "Up to 90 seconds";
+    big("hyGap", gap, dxUp ? "pub" : "bad");
+
+    // Many prefixes from one source are shown as one row
+    const groups = [];
+    [["dxgw", s.dx.prefixes, dxUp], ["vpn", s.vpn.prefixes, vpnUp]].forEach(([target, list, up]) => {
+      if (list.length > 4) groups.push({ label: `${list.length} prefixes: ${list[0]} … ${list[list.length - 1]}`, target, up, routes: [] });
+      else list.forEach(p => groups.push({ label: p, target, up, routes: routes.filter(r => r.dest === p && r.target === target) }));
+    });
+    const say = (g, i) => !g.up ? "—" : g.routes.includes(picks[i]) ? "wins"
+      : g.routes.some(r => inCidr(DESTS[i][1], r.dest)) ? "matches, loses" : "no match";
+    $("hyTable").innerHTML = `<tr><th>Destination</th><th>Learned from</th><th>State</th><th>For ${DESTS[0][1]}</th><th>For ${DESTS[1][1]}</th></tr>` +
+      groups.map(g => `<tr class="${!g.up ? "lose" : g.routes.some(r => picks.includes(r)) ? "hit" : ""}"><td><code>${g.label}</code></td><td>${g.target}</td>` +
+        `<td>${g.up ? "active" : g.target === "dxgw" ? (overLimit ? "not accepted: the BGP session is down" : "withdrawn") : "withdrawn"}</td><td>${say(g, 0)}</td><td>${say(g, 1)}</td></tr>`).join("");
+    $("hyMsg").innerHTML = why;
+    Object.assign($("hyMsg").dataset, { a: picks[0] ? picks[0].target : "", b: picks[1] ? picks[1].target : "", bgp: dxUp ? "up" : "down", gap });
+  }
+  CASES.forEach(([key, label]) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => paintHybrid(key);
+    $("hyBtns").appendChild(b);
+  });
+  paintHybrid("normal");
+</script>
+</body>
+</html>

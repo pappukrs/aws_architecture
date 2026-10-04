@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 4 — EC2 in Depth</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .sim .calc { margin: 14px 0 12px; }
+  .sim .calc .big { font-size: 21px; }
+  .sim .calc .val { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .sim h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .sim .seg b { min-width: 76px; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .lab li { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-03/index.html">← Day 3</a><a href="../README.md">30-day plan</a><a href="../day-05/index.html">Day 5 →</a></nav>
+  <header>
+    <div class="tag">Day 4 of 30 · Week 1 — Identity, Networking, Compute, Storage</div>
+    <h1>EC2 in Depth</h1>
+    <p class="lead">For three days you built the place where an instance lives. Today you open the instance itself. What is the machine under it, and what does the name <code>m7g.xlarge</code> tell you? Where do its disks really sit, and which of them survive a stop? How does a process on it get credentials, and how does an attacker get the same ones? The centre of the page is one question about storage: the database is slow, so is it the volume, or the instance in front of the volume?</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 700" role="img" aria-label="One EC2 instance and everything it depends on. Inside an Availability Zone, a physical host runs the Nitro system: a thin hypervisor and three Nitro cards for networking, local NVMe disks and EBS. The instance sits on the host. Inside the instance are the metadata service address, user data, the SSM Agent and three NVMe devices. Two EBS volumes, a gp3 root volume and an io2 data volume, sit outside the host in the same Availability Zone and are reached through the EBS card. Instance store disks sit inside the host. On the right, outside the Availability Zone, an AMI built by an Image Builder pipeline launches the instance, EBS snapshots are stored in S3, and Systems Manager is reached by an outbound HTTPS connection from the agent. At the bottom, three placement group strategies: cluster, spread and partition.">
+        <defs>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--region)"/></marker>
+          <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--priv)"/></marker>
+          <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--pub)"/></marker>
+        </defs>
+
+        <!-- Always visible: the Region and one Availability Zone -->
+        <rect x="10" y="14" width="980" height="672" rx="10" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="8 5"/>
+        <text x="24" y="31" font-size="12.5" font-weight="700" style="fill:var(--region)">AWS Region — ap-south-1</text>
+        <rect x="24" y="38" width="640" height="472" rx="8" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2"/>
+        <text x="36" y="57" font-size="12.5" font-weight="700" style="fill:var(--az)">Availability Zone ap-south-1a · aps1-az1</text>
+
+        <!-- Step 1: the host, the hypervisor and the instance -->
+        <g data-step="1">
+          <rect x="36" y="72" width="400" height="328" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <text x="48" y="89" font-size="12.5" font-weight="700">Physical host</text>
+          <rect x="48" y="96" width="376" height="146" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2.5"/>
+          <text x="58" y="114" font-size="12.5" font-weight="700" style="fill:var(--orange)">Instance m7g.xlarge</text>
+          <text x="58" y="130" font-size="10" style="fill:var(--muted)">4 vCPU · 16 GiB · Graviton (arm64) · 1 vCPU = 1 core</text>
+          <rect x="48" y="250" width="376" height="26" rx="6" fill="var(--bg)" stroke="var(--dc)" stroke-width="1.5"/>
+          <text x="236" y="267" font-size="10.5" text-anchor="middle">Nitro hypervisor · divides CPU and memory, nothing else</text>
+        </g>
+
+        <!-- Step 2: the Nitro cards -->
+        <g data-step="2">
+          <text x="142" y="89" font-size="10" style="fill:var(--muted)">· Nitro security chip · no operator access</text>
+          <g fill="var(--edge-fill)" stroke="var(--edge)" stroke-width="1.5">
+            <rect x="48" y="286" width="120" height="32" rx="6"/><rect x="176" y="286" width="120" height="32" rx="6"/><rect x="304" y="286" width="120" height="32" rx="6"/>
+          </g>
+          <g font-size="10" font-weight="700" text-anchor="middle">
+            <text x="108" y="299">Nitro card</text><text x="236" y="299">Nitro card</text><text x="364" y="299">Nitro card</text>
+          </g>
+          <g font-size="9.5" text-anchor="middle" style="fill:var(--muted)">
+            <text x="108" y="312">VPC network (ENA)</text><text x="236" y="312">local NVMe disks</text><text x="364" y="312">EBS as NVMe</text>
+          </g>
+        </g>
+
+        <!-- Step 3: the AMI and the launch -->
+        <g data-step="3">
+          <rect x="680" y="40" width="296" height="150" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2"/>
+          <text x="692" y="58" font-size="12.5" font-weight="700">AMI · the template for a launch</text>
+          <text x="692" y="76" font-size="10.5" style="fill:var(--muted)">root snapshot + block device mapping</text>
+          <text x="692" y="92" font-size="10.5" style="fill:var(--muted)">arm64 · Regional · copy it to use it elsewhere</text>
+          <rect x="690" y="104" width="276" height="76" rx="6" fill="var(--card)" stroke="var(--region)" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <text x="700" y="122" font-size="11" font-weight="700">EC2 Image Builder pipeline</text>
+          <text x="700" y="138" font-size="10" style="fill:var(--muted)">base image → components → tests → new AMI</text>
+          <text x="700" y="153" font-size="10" style="fill:var(--muted)">distributed to accounts and Regions</text>
+          <text x="700" y="168" font-size="10" style="fill:var(--muted)">on a schedule, so patches arrive in the image</text>
+          <path d="M680 62 H380 V95" fill="none" stroke="var(--region)" stroke-width="2.5" marker-end="url(#arrowR)"/>
+          <text x="392" y="55" font-size="10" style="fill:var(--muted)">launch template: AMI + type + role + user data</text>
+        </g>
+
+        <!-- Step 4: EBS volumes -->
+        <g data-step="4">
+          <rect x="452" y="96" width="200" height="62" rx="8" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="462" y="114" font-size="11.5" font-weight="700" style="fill:var(--priv)">Root volume · gp3</text>
+          <text x="462" y="130" font-size="10">30 GiB · 3,000 IOPS · 125 MiB/s</text>
+          <text x="462" y="146" font-size="10" style="fill:var(--muted)">DeleteOnTermination: true</text>
+          <rect x="452" y="166" width="200" height="76" rx="8" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="462" y="184" font-size="11" font-weight="700" style="fill:var(--priv)">Data volume · io2 Block Express</text>
+          <text x="462" y="200" font-size="10">500 GiB · 20,000 IOPS</text>
+          <text x="462" y="215" font-size="10" style="fill:var(--muted)">DeleteOnTermination: false</text>
+          <text x="462" y="230" font-size="10" style="fill:var(--muted)">encrypted with a KMS key</text>
+          <path d="M425 302 H552 V243" fill="none" stroke="var(--priv)" stroke-width="2.5"/>
+          <text x="444" y="318" font-size="10" style="fill:var(--muted)">EBS-optimised: its own bandwidth</text>
+          <rect x="452" y="330" width="200" height="38" rx="6" fill="var(--card)" stroke="var(--dc)" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <text x="462" y="346" font-size="10">A volume lives in one AZ and attaches</text>
+          <text x="462" y="360" font-size="10">only to instances in that AZ.</text>
+          <text x="244" y="206" font-size="10" class="mono">nvme0n1  root (EBS)</text>
+          <text x="244" y="220" font-size="10" class="mono">nvme1n1  data (EBS)</text>
+        </g>
+
+        <!-- Step 5: snapshots -->
+        <g data-step="5">
+          <rect x="680" y="204" width="296" height="112" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2"/>
+          <text x="692" y="222" font-size="12.5" font-weight="700">EBS snapshots · kept in S3 · Regional</text>
+          <text x="692" y="240" font-size="10.5" style="fill:var(--muted)">incremental: only blocks changed since the last</text>
+          <text x="692" y="256" font-size="10.5" style="fill:var(--muted)">a restore makes a new volume, in any AZ</text>
+          <text x="692" y="272" font-size="10.5" style="fill:var(--muted)">its blocks load on first read: slow at first</text>
+          <text x="692" y="288" font-size="10.5" style="fill:var(--muted)">Data Lifecycle Manager takes them on schedule</text>
+          <text x="692" y="304" font-size="10.5" style="fill:var(--muted)">an AMI is a snapshot plus launch settings</text>
+          <line x1="653" y1="224" x2="679" y2="224" stroke="var(--priv)" stroke-width="2.5" marker-end="url(#arrowB)"/>
+          <line x1="828" y1="191" x2="828" y2="203" stroke="var(--region)" stroke-width="2.5"/>
+        </g>
+
+        <!-- Step 6: instance store, and what a stop does -->
+        <g data-step="6">
+          <line x1="236" y1="319" x2="236" y2="329" stroke="var(--edge)" stroke-width="2.5"/>
+          <rect x="176" y="330" width="248" height="58" rx="6" fill="var(--card)" stroke="var(--bad)" stroke-width="1.5"/>
+          <text x="186" y="347" font-size="10.5" font-weight="700">Instance store · NVMe disks in the host</text>
+          <text x="186" y="362" font-size="10" style="fill:var(--muted)">no network hop, very fast, in the price</text>
+          <text x="186" y="377" font-size="10" style="fill:var(--bad)">lost on stop, terminate or host failure</text>
+          <text x="244" y="234" font-size="10" class="mono">nvme2n1  instance store</text>
+          <text x="124" y="424" font-size="10.5" font-weight="700">Stop and start: the instance moves to another host.</text>
+          <text x="124" y="440" font-size="10.5" style="fill:var(--muted)">EBS volumes and the private IP follow. Memory and the instance store do not.</text>
+        </g>
+
+        <!-- Step 7: metadata service and user data -->
+        <g data-step="7">
+          <rect x="58" y="140" width="178" height="42" rx="6" fill="var(--card)" stroke="var(--orange)" stroke-width="1.5"/>
+          <text x="66" y="156" font-size="10.5" font-weight="700">IMDS · 169.254.169.254</text>
+          <text x="66" y="171" font-size="9.5" style="fill:var(--muted)">role credentials · IMDSv2 token</text>
+          <rect x="244" y="140" width="170" height="42" rx="6" fill="var(--card)" stroke="var(--orange)" stroke-width="1.5"/>
+          <text x="252" y="156" font-size="10.5" font-weight="700">User data · cloud-init</text>
+          <text x="252" y="171" font-size="9.5" style="fill:var(--muted)">first boot only · as root · 16 KB</text>
+        </g>
+
+        <!-- Step 8: Systems Manager -->
+        <g data-step="8">
+          <rect x="58" y="190" width="178" height="44" rx="6" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="1.5"/>
+          <text x="66" y="207" font-size="10.5" font-weight="700">SSM Agent</text>
+          <text x="66" y="222" font-size="9.5" style="fill:var(--muted)">calls out; nothing listens</text>
+          <path d="M108 319 V470 H679" fill="none" stroke="var(--pub)" stroke-width="2.5" marker-end="url(#arrowG)"/>
+          <text x="124" y="462" font-size="10.5" style="fill:var(--muted)">outbound HTTPS 443 from the agent, through the instance's network interface · no inbound rule</text>
+          <rect x="680" y="330" width="296" height="180" rx="8" fill="var(--pub-fill)" stroke="var(--pub)" stroke-width="2"/>
+          <text x="692" y="349" font-size="12.5" font-weight="700" style="fill:var(--pub)">Systems Manager</text>
+          <text x="692" y="369" font-size="10.5" font-weight="700">Session Manager</text>
+          <text x="692" y="383" font-size="10" style="fill:var(--muted)">a shell through IAM, fully logged · no port 22, no keys</text>
+          <text x="692" y="403" font-size="10.5" font-weight="700">Run Command</text>
+          <text x="692" y="417" font-size="10" style="fill:var(--muted)">one document, many instances, a few at a time</text>
+          <text x="692" y="437" font-size="10.5" font-weight="700">Patch Manager</text>
+          <text x="692" y="451" font-size="10" style="fill:var(--muted)">patch baseline + maintenance window + report</text>
+          <text x="692" y="484" font-size="10" style="fill:var(--muted)">needs: the agent, an instance role, and a path</text>
+          <text x="692" y="498" font-size="10" style="fill:var(--muted)">to the ssm endpoints (NAT or VPC endpoints)</text>
+        </g>
+
+        <!-- Step 9: placement groups -->
+        <g data-step="9">
+          <text x="24" y="536" font-size="12.5" font-weight="700" style="fill:var(--az)">Placement groups: you choose how the hosts are arranged</text>
+          <g fill="var(--card)" stroke="var(--az)" stroke-width="1.5">
+            <rect x="24" y="546" width="308" height="128" rx="8"/><rect x="346" y="546" width="308" height="128" rx="8"/><rect x="668" y="546" width="308" height="128" rx="8"/>
+          </g>
+          <g font-size="12" font-weight="700">
+            <text x="36" y="566">Cluster</text><text x="358" y="566">Spread</text><text x="680" y="566">Partition</text>
+          </g>
+          <!-- cluster: one rack, four instances -->
+          <rect x="60" y="578" width="60" height="84" rx="4" fill="var(--az-fill)" stroke="var(--dc)" stroke-width="1.5"/>
+          <g fill="var(--orange)"><rect x="68" y="586" width="44" height="13" rx="2"/><rect x="68" y="604" width="44" height="13" rx="2"/><rect x="68" y="622" width="44" height="13" rx="2"/><rect x="68" y="640" width="44" height="13" rx="2"/></g>
+          <!-- spread: three racks, one instance each -->
+          <g fill="var(--az-fill)" stroke="var(--dc)" stroke-width="1.5"><rect x="358" y="578" width="36" height="84" rx="4"/><rect x="402" y="578" width="36" height="84" rx="4"/><rect x="446" y="578" width="36" height="84" rx="4"/></g>
+          <g fill="var(--orange)"><rect x="363" y="586" width="26" height="13" rx="2"/><rect x="407" y="613" width="26" height="13" rx="2"/><rect x="451" y="640" width="26" height="13" rx="2"/></g>
+          <!-- partition: three partitions, two racks each -->
+          <g fill="none" stroke="var(--az)" stroke-width="1.5" stroke-dasharray="4 3"><rect x="678" y="574" width="42" height="92" rx="4"/><rect x="724" y="574" width="42" height="92" rx="4"/><rect x="770" y="574" width="42" height="92" rx="4"/></g>
+          <g fill="var(--az-fill)" stroke="var(--dc)" stroke-width="1.2">
+            <rect x="682" y="580" width="15" height="80" rx="2"/><rect x="701" y="580" width="15" height="80" rx="2"/>
+            <rect x="728" y="580" width="15" height="80" rx="2"/><rect x="747" y="580" width="15" height="80" rx="2"/>
+            <rect x="774" y="580" width="15" height="80" rx="2"/><rect x="793" y="580" width="15" height="80" rx="2"/>
+          </g>
+          <g fill="var(--orange)">
+            <rect x="684" y="586" width="11" height="9" rx="1"/><rect x="684" y="602" width="11" height="9" rx="1"/><rect x="703" y="586" width="11" height="9" rx="1"/><rect x="703" y="618" width="11" height="9" rx="1"/>
+            <rect x="730" y="586" width="11" height="9" rx="1"/><rect x="730" y="634" width="11" height="9" rx="1"/><rect x="749" y="602" width="11" height="9" rx="1"/><rect x="749" y="618" width="11" height="9" rx="1"/>
+            <rect x="776" y="602" width="11" height="9" rx="1"/><rect x="776" y="618" width="11" height="9" rx="1"/><rect x="795" y="586" width="11" height="9" rx="1"/><rect x="795" y="634" width="11" height="9" rx="1"/>
+          </g>
+          <g font-size="10">
+            <text x="136" y="596">hosts close together, in one AZ</text>
+            <text x="136" y="614" style="fill:var(--muted)">lowest latency between nodes</text>
+            <text x="136" y="632" style="fill:var(--muted)">up to 10 Gbps for a single flow</text>
+            <text x="136" y="650" style="fill:var(--bad)">one failure can take them all</text>
+            <text x="496" y="596">every instance on its own rack</text>
+            <text x="496" y="614" style="fill:var(--muted)">no shared power or network</text>
+            <text x="496" y="632" style="fill:var(--muted)">for a few critical nodes</text>
+            <text x="496" y="650" style="fill:var(--bad)">7 running instances per AZ</text>
+            <text x="824" y="596">racks divided into partitions</text>
+            <text x="824" y="614" style="fill:var(--muted)">a rack failure hits one only</text>
+            <text x="824" y="632" style="fill:var(--muted)">for Kafka, Cassandra, HDFS</text>
+            <text x="824" y="650" style="fill:var(--bad)">7 partitions per AZ</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: one instance and everything it depends on. The <b>host</b> runs the Nitro system: a thin hypervisor for CPU and memory, and separate cards for the network, local disks and EBS. The instance was launched from an <b>AMI</b>, which an Image Builder pipeline rebuilds on a schedule. Its <b>EBS volumes</b> are outside the host, in the same AZ, and their <b>snapshots</b> are in S3. The <b>instance store</b> is inside the host, so it stays behind when the instance moves. Inside the instance, the <b>metadata service</b> hands out the role's credentials and <b>user data</b> runs at first boot. The <b>SSM Agent</b> calls out to Systems Manager, so you need no inbound port. A <b>placement group</b> decides how close the hosts of several instances are.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">The instance and what is inside it</span>
+      <span style="--c:var(--dc)">Physical host, racks</span>
+      <span style="--c:var(--edge)">Nitro cards</span>
+      <span style="--c:var(--priv)">EBS volumes</span>
+      <span style="--c:var(--region)">AMIs and snapshots</span>
+      <span style="--c:var(--pub)">Systems Manager</span>
+      <span style="--c:var(--bad)">What you can lose</span>
+    </div>
+  </div>
+
+  <h2>Will the volume keep up?</h2>
+  <div class="card sim">
+    <p>A database asks its disk for a number of operations per second (IOPS), each of a certain size. Two things limit what it gets: the volume, and the instance in front of the volume. Pick a workload, a volume type and an instance, then move the sliders. Before you read the result, say which of the two is the limit.</p>
+    <div class="seg" id="ebWork"></div>
+    <div class="seg" id="ebType"></div>
+    <div class="seg" id="ebInst"></div>
+    <div class="calc">
+      <div><div class="lbl">Size</div><input type="range" id="ebSize" min="0" max="9" value="4"><div class="val" id="ebSizeV"></div></div>
+      <div><div class="lbl">Provisioned IOPS</div><input type="range" id="ebIops" min="0" max="11" value="3"><div class="val" id="ebIopsV"></div></div>
+      <div><div class="lbl">Provisioned throughput</div><input type="range" id="ebTput" min="0" max="6" value="2"><div class="val" id="ebTputV"></div></div>
+    </div>
+    <p class="note" id="ebNotes"></p>
+    <div class="calc">
+      <div><div class="lbl">The workload gets</div><div class="big" id="ebGets"></div></div>
+      <div><div class="lbl">Limited by</div><div class="big" id="ebLimit"></div></div>
+      <div><div class="lbl">Storage cost</div><div class="big" id="ebCost"></div></div>
+    </div>
+    <div class="table-wrap"><table id="ebTable"></table></div>
+    <p class="result" id="ebMsg"></p>
+    <p class="note">Instance figures are the baseline EBS limits of the R6i family. Sizes up to <code>4xlarge</code> can go above their baseline, to 40,000 IOPS, for 30 minutes in every 24 hours; after that they fall back. On SSD volumes one operation is counted up to 256 KiB, so a sequential read of 1 MiB counts as four. Prices are list prices for US East (N. Virginia) and cover the volume only.</p>
+  </div>
+
+  <h2>Who gets the role's credentials?</h2>
+  <div class="card sim">
+    <p>Every process on the instance can ask <code>http://169.254.169.254</code> for the credentials of the instance role. So can an attacker who makes one of those processes send a request. Set the two metadata options, pick who is asking, and say what happens before you read the result.</p>
+    <div class="seg" id="imTokens"></div>
+    <div class="seg" id="imHop"></div>
+    <div class="seg" id="imCaller"></div>
+    <p class="note" id="imWho"></p>
+    <div class="calc">
+      <div><div class="lbl">Token request (PUT)</div><div class="big" id="imPut"></div></div>
+      <div><div class="lbl">Credentials request (GET)</div><div class="big" id="imGet"></div></div>
+      <div><div class="lbl">Outcome</div><div class="big" id="imVerdict"></div></div>
+    </div>
+    <div class="table-wrap"><table id="imSteps"></table></div>
+    <p class="result" id="imMsg"></p>
+    <p class="note">The options are <code>HttpTokens</code> (<code>optional</code> or <code>required</code>) and <code>HttpPutResponseHopLimit</code>. The hop limit is the IP time-to-live of the reply that carries the token. Each network hop lowers it by one, and at zero the packet is dropped. A process on the instance itself is zero hops away. A container on a bridge network is one hop away.</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Reading an instance type</h3>
+      <ul>
+        <li><code>m7g.xlarge</code> is four facts: family <b>m</b>, generation <b>7</b>, attribute <b>g</b>, size <b>xlarge</b>.</li>
+        <li><b>Families:</b> M general purpose (4 GiB per vCPU). C compute (2 GiB per vCPU). R and X memory (8 GiB and more per vCPU). I and D local storage. G and P GPUs. T burstable.</li>
+        <li><b>Attributes:</b> <code>g</code> Graviton, <code>a</code> AMD, <code>i</code> Intel. <code>d</code> has instance store disks. <code>n</code> has more network and EBS bandwidth. <code>b</code> has more EBS performance. <code>z</code> has a high clock speed.</li>
+        <li><b>Size:</b> each step doubles vCPU and memory, and also raises the network and EBS limits. A small size of the right family can still be the wrong choice because of those limits.</li>
+        <li>Take the newest generation. It is usually both faster and cheaper than the one before.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Nitro</h3>
+      <ul>
+        <li>Old hosts ran a hypervisor that also emulated the network and the disks in software. That work used CPU that the customer had paid for.</li>
+        <li>Nitro moves that work to <b>dedicated cards</b>: one for VPC networking, one for EBS, one for local NVMe disks. The cards encrypt data in hardware.</li>
+        <li>The <b>Nitro hypervisor</b> that remains only divides CPU and memory. An instance gets almost all of the host's performance. A <code>metal</code> size has no hypervisor at all.</li>
+        <li>A <b>security chip</b> checks the firmware at boot. There is no login to the host, not even for AWS staff.</li>
+        <li>For you this means: EBS volumes and instance store disks appear as <b>NVMe devices</b>, the network uses the <b>ENA</b> driver, and an AMI must have both drivers.</li>
+        <li>Every type released since 2018 is on Nitro. The Xen types (M4, C4, T2) lack many newer features.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Graviton</h3>
+      <ul>
+        <li>Graviton is the Arm processor that AWS designs. A Graviton type costs about 20% less than the Intel type of the same size, and often does more work per vCPU.</li>
+        <li>On Graviton, one vCPU is one physical <b>core</b>. On Intel and most AMD types, one vCPU is one <b>thread</b>, half a core.</li>
+        <li>The architecture is <code>arm64</code>. You need an arm64 AMI, and arm64 builds of your software and container images.</li>
+        <li>Code in Java, Python, Node.js or Go usually moves without changes. Check native libraries, agents and anything you install as a binary.</li>
+        <li>Managed services hide the difference. RDS, ElastiCache, OpenSearch and Lambda on Graviton need a setting, not a rebuild.</li>
+        <li>For containers, build multi-architecture images so that both kinds of node can pull the same tag.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Burstable instances and CPU credits</h3>
+      <ul>
+        <li>A T instance has a <b>baseline</b>: a share of each vCPU that it may use all the time. For <code>t3.micro</code> it is 10%, for <code>t3.large</code> 30%.</li>
+        <li>Below the baseline it earns <b>CPU credits</b>. Above it, it spends them. One credit is one vCPU at 100% for one minute.</li>
+        <li><b>Standard</b> mode: when the credits are gone, the CPU is held at the baseline. The instance looks healthy and is very slow.</li>
+        <li><b>Unlimited</b> mode: it keeps bursting and you pay for the extra, per vCPU-hour. This is the default for T3 and T4g. A T instance that is busy all day in this mode costs more than an M instance.</li>
+        <li>T is right for workloads that are idle most of the time. For steady load, use M or C.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Placement groups</h3>
+      <ul>
+        <li>Without a placement group, AWS puts instances on any host with room in the AZ.</li>
+        <li><b>Cluster</b>: hosts close together in one AZ. The lowest latency, and up to 10 Gbps for a single flow instead of 5. For HPC and tightly coupled systems. One rack or power failure can stop all of them.</li>
+        <li><b>Spread</b>: each instance on a different rack. At most 7 running instances per AZ in one group. For a small set of nodes that must not fail together, such as a quorum.</li>
+        <li><b>Partition</b>: you get up to 7 partitions per AZ. No two partitions share a rack. Each can hold many instances. The partition number is in the instance metadata, so Kafka or Cassandra can place replicas in different partitions.</li>
+        <li>A cluster group needs capacity that is next to each other. Launch all instances in one request, with one instance type. Adding one later often fails with <code>InsufficientInstanceCapacity</code>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>AMIs</h3>
+      <ul>
+        <li>An AMI is three things: one or more <b>snapshots</b>, a <b>block device mapping</b> that says which volumes to create from them, and <b>launch permissions</b>.</li>
+        <li>It also fixes the architecture, the boot mode and the virtualisation type. An x86 AMI does not start on Graviton.</li>
+        <li>An AMI belongs to one Region. Copy it to use it in another. You share it with accounts, with an organisation, or with everyone.</li>
+        <li>For an <b>encrypted</b> AMI, the other account also needs permission to use the KMS key. An AMI encrypted with the default <code>aws/ebs</code> key cannot be shared at all.</li>
+        <li>Deregistering an AMI does not delete its snapshots. You keep paying for them until you delete them.</li>
+        <li>Refer to an AMI through an <b>SSM parameter</b>, not a hard-coded ID. IDs differ per Region and change with every build.</li>
+        <li>The <b>Allowed AMIs</b> setting limits an account to images from owners you trust.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Image Builder: golden images</h3>
+      <ul>
+        <li>A <b>recipe</b> is a base image plus <b>components</b>: documents with build steps (install, harden) and test steps.</li>
+        <li>A <b>pipeline</b> starts a build instance, runs the components, makes the AMI, starts a test instance from it, and then <b>distributes</b> the AMI to other accounts and Regions.</li>
+        <li>Run the pipeline on a schedule, or when the base image has an update. New instances then start already patched.</li>
+        <li>Lifecycle policies deprecate and delete old images and their snapshots.</li>
+        <li>The trade-off against user data: a baked image starts in seconds and starts the same every time. A script at boot is easy to change, slow to start, and fails when a package repository is down. Bake what is slow and stable. Leave to boot time only what differs per environment.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>The metadata service and IMDSv2</h3>
+      <ul>
+        <li>IMDS is a web server at the link-local address <code>169.254.169.254</code>. It is reachable only from the instance. It returns the instance ID, the AZ, the user data, and <b>temporary credentials for the instance role</b>.</li>
+        <li><b>IMDSv1</b> answers any GET request. An application that can be made to fetch a URL (server-side request forgery) will fetch the credentials for an attacker.</li>
+        <li><b>IMDSv2</b> needs a session. First a <code>PUT</code> to <code>/latest/api/token</code> returns a token. Then every GET carries the token in a header.</li>
+        <li>Three things stop an attacker: most SSRF bugs cannot send a PUT or set a header. A PUT that carries <code>X-Forwarded-For</code> is refused. The reply with the token has a <b>hop limit</b> of 1, so it cannot leave the instance.</li>
+        <li>Set <code>HttpTokens=required</code>. Make it the default for the account, and deny launches without it with the condition key <code>ec2:MetadataHttpTokens</code>.</li>
+        <li>Before you enforce it, look at the CloudWatch metric <code>MetadataNoToken</code>. It counts IMDSv1 calls.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>User data</h3>
+      <ul>
+        <li>User data is up to 16 KB of text that you give at launch. On Linux, <b>cloud-init</b> runs it as root, <b>once</b>, at the first boot.</li>
+        <li>It does not run again after a reboot or a stop and start. To change it you must stop the instance, and the change still does not run by itself.</li>
+        <li>The output is in <code>/var/log/cloud-init-output.log</code>. Read it first when an instance comes up without its software.</li>
+        <li>The instance reports <code>running</code> long before the script ends. A load balancer health check, not the instance state, tells you when it is ready.</li>
+        <li>User data is <b>not secret</b>. Every process on the instance can read it from IMDS, and anyone with <code>ec2:DescribeInstanceAttribute</code> can read it from the API. Fetch secrets at boot with the instance role.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>EBS volume types</h3>
+      <ul>
+        <li><b>gp3</b>: the default SSD. 3,000 IOPS and 125 MiB/s are included at any size. You buy more of each, separately from size, up to 80,000 IOPS and 2,000 MiB/s. Latency is a few milliseconds.</li>
+        <li><b>io2 Block Express</b>: up to 256,000 IOPS and 4,000 MiB/s. Latency below one millisecond and steady. Durability of 99.999%, a hundred times better than gp3.</li>
+        <li><b>st1</b>: hard disk. Priced for throughput, up to 500 MiB/s, for large sequential reads and writes. A random operation costs as much as a sequential megabyte. It cannot be a boot volume.</li>
+        <li><b>sc1</b>: the cheapest hard disk, for data you rarely read.</li>
+        <li><b>gp2</b> and <b>io1</b> are the older generation. gp2 ties IOPS to size (3 per GiB) and uses burst credits below 1,000 GiB. gp3 costs 20% less per GiB. Migrate; it is an online change.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>EBS: how a volume behaves</h3>
+      <ul>
+        <li>A volume is network storage. Its data is replicated inside one AZ. It attaches to instances in that AZ only.</li>
+        <li>The <b>instance has its own EBS limit</b> for IOPS and throughput, set by its type and size. The workload gets the lower of the two limits. A fast volume on a small instance is wasted money.</li>
+        <li><b>Elastic Volumes</b>: you raise the size, change the type, or change IOPS and throughput while the volume is in use. A volume can grow and cannot shrink. After a size change you still extend the partition and the file system.</li>
+        <li>A volume takes up to four such changes in 24 hours.</li>
+        <li><b>Encryption</b> uses a KMS key and happens on the Nitro card. Turn on “encryption by default” per Region. An existing unencrypted volume becomes encrypted through a snapshot copy.</li>
+        <li><b>Multi-Attach</b> (io2 only) attaches one volume to up to 16 instances. It needs a cluster-aware file system. A normal file system will be corrupted.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Snapshots</h3>
+      <ul>
+        <li>A snapshot is a copy of a volume at one moment, stored in S3 by AWS. You do not see the bucket.</li>
+        <li>Snapshots are <b>incremental</b>: each stores only the blocks that changed since the one before. You can delete any of them. Blocks that a later snapshot still needs are kept.</li>
+        <li>A snapshot is crash-consistent: it is the disk as if the power was cut. For a database across several volumes, use a <b>multi-volume snapshot</b>, and flush or pause writes first.</li>
+        <li>A volume made from a snapshot is usable at once, and its blocks are fetched from S3 <b>on first read</b>. Until then it is slow. Fast snapshot restore, or a provisioned initialisation rate, removes the wait for a price.</li>
+        <li>The <b>archive tier</b> costs 75% less, holds a full copy, and takes 24 to 72 hours to restore.</li>
+        <li>Data Lifecycle Manager or AWS Backup takes and expires snapshots on a schedule. The Recycle Bin keeps deleted ones for a period you set.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Instance store</h3>
+      <ul>
+        <li>Instance store disks are NVMe SSDs inside the host. There is no network between the instance and the disk, so they give the most IOPS and the lowest latency in EC2.</li>
+        <li>Types with a <code>d</code> have them, and the I family is built around them. They are in the instance price.</li>
+        <li>The data survives a reboot. It is <b>lost</b> on stop, hibernate, terminate, and when the host or the disk fails.</li>
+        <li>You cannot snapshot them, detach them, or add them after launch.</li>
+        <li>Use them for data you can lose or rebuild: caches, temporary files, shuffle space, and databases that replicate between nodes (Cassandra, Kafka, ClickHouse).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Reboot, stop, start and recovery</h3>
+      <ul>
+        <li><b>Reboot</b>: same host. Everything is kept, including the instance store and the public IP.</li>
+        <li><b>Stop and start</b>: a new host. EBS volumes, private IPs and Elastic IPs follow. Memory, the instance store and an automatic public IPv4 address do not.</li>
+        <li><b>Hibernate</b>: memory is written to the encrypted root volume and restored at start.</li>
+        <li>Three <b>status checks</b> run every minute. <i>System</i>: the host, its power and its network. <i>Instance</i>: the operating system answers. <i>Attached EBS</i>: the volumes are reachable.</li>
+        <li>When the system check fails, <b>automatic recovery</b> moves the instance to a healthy host with the same ID, addresses and volumes. It is on by default for most types.</li>
+        <li>AWS announces <b>scheduled events</b> before it retires a host. A stop and start on your own schedule moves the instance early.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Systems Manager: the agent and Session Manager</h3>
+      <ul>
+        <li>The <b>SSM Agent</b> is installed in the common AMIs. It opens an outbound HTTPS connection to Systems Manager and waits for work. Nothing listens on the instance.</li>
+        <li>An instance becomes a <b>managed node</b> when three things are true: the agent runs, the instance role has the <code>AmazonSSMManagedInstanceCore</code> permissions, and the instance can reach the <code>ssm</code> and <code>ssmmessages</code> endpoints through a NAT gateway or interface endpoints.</li>
+        <li><b>Session Manager</b> gives a shell through that connection. There is no port 22, no key pair and no bastion host (<a href="../../aws_architecture/day-25/index.html">architecture Day 25</a>).</li>
+        <li>Access is an IAM permission, <code>ssm:StartSession</code>, which you can limit by tag. CloudTrail records who opened a session, and the session's input and output go to S3 or CloudWatch Logs.</li>
+        <li>It also forwards ports, for example to a private database through the instance.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Run Command and Patch Manager</h3>
+      <ul>
+        <li><b>Run Command</b> runs a <b>document</b>, such as <code>AWS-RunShellScript</code>, on instances that you select by ID, tag or resource group.</li>
+        <li>Two rate controls make it safe on a fleet. <b>Concurrency</b>: how many instances at a time. <b>Error threshold</b>: after how many failures it stops.</li>
+        <li><b>Patch Manager</b> starts from a <b>patch baseline</b>: which classifications and severities are approved, and how many days after release.</li>
+        <li>It runs as <b>Scan</b>, which only reports, or <b>Install</b>, which patches and can reboot. A <b>maintenance window</b> or a patch policy decides when.</li>
+        <li>The result is a compliance report per instance: missing, installed, failed.</li>
+        <li>Patching in place and replacing instances with a new AMI solve the same problem. An Auto Scaling group is better served by a new image. Servers that cannot be replaced need Patch Manager.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Numbers to remember</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>What</th><th>Number</th><th>Why it matters</th><th>Can it be raised?</th></tr>
+      <tr><td>gp3 included performance</td><td class="num">3,000 IOPS · 125 MiB/s</td><td>At any size, even 1 GiB. Enough for most boot volumes and small databases.</td><td>Pay for more</td></tr>
+      <tr><td>gp3 maximum</td><td class="num">80,000 IOPS · 2,000 MiB/s · 64 TiB</td><td>Raised in 2025 from 16,000 IOPS, 1,000 MiB/s and 16 TiB. Older material still gives the old figures.</td><td>No</td></tr>
+      <tr><td>gp3 ratios</td><td class="num">500 IOPS per GiB<br>0.25 MiB/s per IOPS</td><td>A 20 GiB volume takes at most 10,000 IOPS. 2,000 MiB/s needs 8,000 IOPS.</td><td>No</td></tr>
+      <tr><td>io2 Block Express maximum</td><td class="num">256,000 IOPS · 4,000 MiB/s · 64 TiB</td><td>1,000 IOPS per GiB. Only the largest instances can use all of it.</td><td>No</td></tr>
+      <tr><td>gp2</td><td class="num">3 IOPS per GiB</td><td>Minimum 100, maximum 16,000. Below 1,000 GiB it bursts to 3,000 on credits.</td><td>Only by adding size</td></tr>
+      <tr><td>st1</td><td class="num">40 MiB/s per TiB</td><td>Baseline. Bursts to 250 per TiB. Maximum 500 MiB/s. Smallest volume: 125 GiB.</td><td>Only by adding size</td></tr>
+      <tr><td>Durability of a volume</td><td class="num">99.8–99.9% / 99.999%</td><td>gp3 and the hard disks / io2. Of 1,000 gp3 volumes, one or two fail in a year. Snapshots are not optional.</td><td>—</td></tr>
+      <tr><td>Instance EBS limit, <code>r6i.large</code></td><td class="num">3,600 IOPS · 81 MiB/s</td><td>Baseline. A 16,000 IOPS volume on this instance delivers 3,600.</td><td>A larger size</td></tr>
+      <tr><td>Changes to one volume</td><td class="num">4 in 24 hours</td><td>Elastic Volumes. Until 2026 the rule was one change every 6 hours.</td><td>No</td></tr>
+      <tr><td>Multi-Attach</td><td class="num">16 instances</td><td>io2 only, same AZ, Nitro instances.</td><td>No</td></tr>
+      <tr><td>User data</td><td class="num">16 KB</td><td>Before base64 encoding. A longer script goes to S3 and user data downloads it.</td><td>No</td></tr>
+      <tr><td>IMDSv2 token lifetime</td><td class="num">1 s to 6 hours</td><td>You choose it in the PUT request. The SDKs renew the token themselves.</td><td>—</td></tr>
+      <tr><td>IMDS hop limit</td><td class="num">1 (up to 64)</td><td>Containers on a bridge network need 2. The Amazon Linux 2023 AMI sets 2 and requires tokens.</td><td>Per instance or account</td></tr>
+      <tr><td>Spread placement group</td><td class="num">7 instances per AZ</td><td>Running instances, per group. A larger fleet needs a partition group.</td><td>No</td></tr>
+      <tr><td>Partition placement group</td><td class="num">7 partitions per AZ</td><td>The number of instances in a partition is not limited.</td><td>No</td></tr>
+      <tr><td>Single flow between instances</td><td class="num">5 Gbps / 10 Gbps</td><td>Normally / inside a cluster placement group. Total bandwidth is higher; this is one TCP connection.</td><td>ENA Express: 25 Gbps</td></tr>
+      <tr><td>CPU credit</td><td class="num">1 vCPU-minute</td><td>A T instance keeps at most 24 hours of earned credits.</td><td>—</td></tr>
+      <tr><td>T3 baseline per vCPU</td><td class="num">10% to 40%</td><td>micro 10%, small and medium 20%, large 30%, xlarge and above 40%.</td><td>—</td></tr>
+      <tr><td>On-Demand quota</td><td class="num">counted in vCPUs</td><td>One quota for the standard families (A, C, D, H, I, M, R, T, Z) per Region. A new account has a low one, and a launch fails with <code>VcpuLimitExceeded</code>.</td><td>Yes</td></tr>
+      <tr><td>Status checks</td><td class="num">every minute</td><td>System, instance and attached EBS.</td><td>—</td></tr>
+      <tr><td>Session Manager idle timeout</td><td class="num">20 minutes</td><td>Default. You can set 1 to 60, and also a maximum session length.</td><td>Yes</td></tr>
+      <tr><td>Run Command output</td><td class="num">24,000 characters</td><td>What the API returns. Send the full output to S3 or CloudWatch Logs.</td><td>No</td></tr>
+    </table>
+    <p class="note">Defaults from the EC2, EBS and Systems Manager user guides and quota pages. AWS changes these; check Service Quotas in your own account and the page for your instance type before you design against a number.</p>
+  </div>
+
+  <h2>How it fails in production</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Symptom</th><th>Cause</th><th>How you find it</th><th>Fix</th></tr>
+      <tr>
+        <td><b>Database latency rises under load. The volume's metrics are far below its provisioned IOPS.</b></td>
+        <td>The instance's EBS limit is reached, not the volume's. Often a small size whose 30-minute burst is used up.</td>
+        <td>Instance metrics <code>EBSIOBalance%</code> and <code>EBSByteBalance%</code> fall to zero. <code>InstanceEBSIOPSExceededCheck</code> is 1.</td>
+        <td>A larger size, or a family with more EBS performance. More volume IOPS will not help.</td>
+      </tr>
+      <tr>
+        <td><b>A gp2 volume is fast in the morning and slow after an hour of load.</b></td>
+        <td>The burst credits are gone. A 100 GiB gp2 volume falls from 3,000 to 300 IOPS.</td>
+        <td><code>BurstBalance</code> at 0%. <code>VolumeQueueLength</code> rises at the same minute.</td>
+        <td>Change the type to gp3 with <code>modify-volume</code>. No downtime, and it is cheaper.</td>
+      </tr>
+      <tr>
+        <td><b>A volume restored from a snapshot is very slow for the first hours.</b> The restore test passed; the real recovery did not meet its time.</td>
+        <td>Blocks are fetched from S3 on first read. A database that scans its files meets every block for the first time.</td>
+        <td>High read latency on the new volume with low IOPS. It improves as the same data is read again.</td>
+        <td>Fast snapshot restore on the snapshots you would recover from, or a provisioned initialisation rate, or read the whole device once before use.</td>
+      </tr>
+      <tr>
+        <td><b>After a stop and start, the data directory is empty.</b></td>
+        <td>The data was on the instance store. The instance started on another host.</td>
+        <td><code>lsblk -o NAME,MODEL</code>: the device is “Amazon EC2 NVMe Instance Storage”, not “Amazon Elastic Block Store”.</td>
+        <td>Durable data on EBS. Use the instance store only for data that another node or a backup can rebuild.</td>
+      </tr>
+      <tr>
+        <td><b>The volume was resized from 100 to 200 GiB. The file system is still full.</b></td>
+        <td><code>modify-volume</code> changes the block device. The partition and the file system keep their old size.</td>
+        <td><code>lsblk</code> shows a 200 GiB disk with a 100 GiB partition. <code>df -h</code> shows 100 GiB.</td>
+        <td><code>growpart</code> for the partition, then <code>xfs_growfs</code> or <code>resize2fs</code>. Both work online.</td>
+      </tr>
+      <tr>
+        <td><b>After IMDSv2 was enforced, applications in containers cannot find credentials.</b> Processes on the host are fine.</td>
+        <td>The hop limit is 1. The reply with the token is dropped on the extra hop into the container.</td>
+        <td>The SDK reports that it cannot load credentials. <code>describe-instances</code> shows <code>HttpPutResponseHopLimit: 1</code>.</td>
+        <td>A hop limit of 2. Better: a role for the task or the pod, so that containers do not use the node's role at all (Day 13).</td>
+      </tr>
+      <tr>
+        <td><b>The instance does not appear in Systems Manager. Session Manager cannot connect.</b></td>
+        <td>One of three: no instance profile, or its role lacks the SSM permissions; no path to the endpoints from a private subnet; the agent is not running.</td>
+        <td><code>aws ssm describe-instance-information</code> does not list it. The reachability check of Session Manager names the missing part.</td>
+        <td>Attach the role. Add a NAT gateway or the <code>ssm</code>, <code>ssmmessages</code> and <code>ec2messages</code> interface endpoints.</td>
+      </tr>
+      <tr>
+        <td><b>A new instance is <code>running</code> and passes its status checks, and the application is not installed.</b></td>
+        <td>The user data script failed half-way: a package repository was unreachable, or a command returned an error.</td>
+        <td><code>/var/log/cloud-init-output.log</code> on the instance, or the console output through the API.</td>
+        <td>Bake the software into the AMI. Keep user data short, and make the script stop on the first error so that the health check fails clearly.</td>
+      </tr>
+      <tr>
+        <td><b>A T3 instance has had a slow application for days. CPU is flat at 20%.</b> Or the opposite: the bill of a small instance has doubled.</td>
+        <td>Standard mode with no credits left: the CPU is held at the baseline. Or unlimited mode with steady load: surplus credits are charged.</td>
+        <td><code>CPUCreditBalance</code> at 0, or <code>CPUSurplusCreditsCharged</code> above 0.</td>
+        <td>A larger T size, or an M or C type for steady load.</td>
+      </tr>
+      <tr>
+        <td><b>Scaling out a cluster placement group fails with <code>InsufficientInstanceCapacity</code>.</b></td>
+        <td>There is no free host next to the existing ones.</td>
+        <td>The error of the launch request, or the activity history of the Auto Scaling group.</td>
+        <td>Launch the full number in one request. Stop and start all instances together to move the group. Reserve capacity for the group in advance.</td>
+      </tr>
+      <tr>
+        <td><b>Another account cannot launch from your shared AMI.</b> The instance goes to <code>terminated</code> at once.</td>
+        <td>The AMI's snapshot is encrypted, and the other account may not use the KMS key.</td>
+        <td>The state reason of the instance: <code>Client.InternalError</code>. A denied KMS call in CloudTrail.</td>
+        <td>A customer managed key, with a key policy that allows the other account, and a grant for its Auto Scaling service role (Day 18).</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2>What drives the bill</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Item</th><th>How it is charged</th><th>Figure</th><th>How to pay less</th></tr>
+      <tr><td><b>Instance hours</b></td><td>Per second while the instance is running, with a minimum of 60 seconds.</td><td class="num">m7i.xlarge $0.2016 / hour<br>m7g.xlarge $0.1632 / hour</td><td>About $147 and $119 a month. Graviton is 19% less for the same size. Right-size first; then Savings Plans and Spot (Day 26).</td></tr>
+      <tr><td><b>Burstable surplus</b></td><td>Unlimited mode: per vCPU-hour used above the baseline, when earned credits do not cover it.</td><td class="num">$0.05 / vCPU-hour<br>$0.04 on T4g</td><td>Watch <code>CPUSurplusCreditsCharged</code>. A T instance that is always busy should be an M instance.</td></tr>
+      <tr><td><b>gp3</b></td><td>Per GiB-month, plus IOPS above 3,000 and throughput above 125 MiB/s.</td><td class="num">$0.08 / GiB<br>$0.005 / IOPS<br>$0.04 / MiB/s</td><td>16,000 IOPS on 500 GiB is $105 a month. Provision what the metrics show, and change it online when they change.</td></tr>
+      <tr><td><b>io2 Block Express</b></td><td>Per GiB-month, plus every provisioned IOPS, in three tiers.</td><td class="num">$0.125 / GiB<br>$0.065 / IOPS to 32,000<br>$0.0455 to 64,000<br>$0.032 above</td><td>16,000 IOPS on 500 GiB is $1,103 a month, ten times gp3. Buy it for latency and durability, not for IOPS that gp3 also has.</td></tr>
+      <tr><td><b>st1 and sc1</b></td><td>Per GiB-month.</td><td class="num">$0.045 / GiB<br>$0.015 / GiB</td><td>Only for large sequential data. For anything random, gp3 is cheaper per unit of work.</td></tr>
+      <tr><td><b>Snapshots</b></td><td>Per GB-month of the blocks actually stored. The archive tier stores a full copy, for at least 90 days.</td><td class="num">$0.05 / GB<br>$0.0125 / GB archive</td><td>A lifecycle policy that deletes old ones. Delete the snapshots of AMIs you have deregistered.</td></tr>
+      <tr><td><b>Fast snapshot restore</b></td><td>Per hour, for each snapshot, in each AZ where it is enabled.</td><td class="num">$0.75 / hour</td><td>About $540 a month per snapshot and AZ. Enable it only on the newest snapshot of the systems whose recovery time needs it.</td></tr>
+      <tr><td><b>Stopped instances</b></td><td>No instance charge. The volumes, Elastic IPs and snapshots are still charged.</td><td class="num">as EBS</td><td>A fleet of stopped instances with large volumes is a common hidden cost. Snapshot and delete, or terminate.</td></tr>
+      <tr><td><b>Unattached volumes</b></td><td>The same as attached ones, including provisioned IOPS.</td><td class="num">as EBS</td><td>Search for volumes in state <code>available</code>. Set <code>DeleteOnTermination</code> on volumes that hold nothing of value.</td></tr>
+      <tr><td><b>Public IPv4 address</b></td><td>Per hour for every public address, attached or not.</td><td class="num">$0.005 / hour</td><td>About $3.65 a month each. Instances behind a load balancer, managed through Session Manager, need none.</td></tr>
+      <tr><td><b>Detailed monitoring</b></td><td>One-minute metrics instead of five-minute ones, charged as custom metrics.</td><td class="num">about $2.10 / instance-month</td><td>Turn it on where scaling or alarms need the one-minute data.</td></tr>
+      <tr><td><b>Free</b></td><td colspan="3">Session Manager, Run Command and Patch Manager for EC2 instances, Image Builder itself (you pay for the build instance and the snapshots), placement groups, IMDS, instance store disks, and changing a volume's type.</td></tr>
+    </table>
+    <p class="note">Figures are list prices for US East (N. Virginia), Linux, On-Demand, from the AWS pricing pages when this page was written. Prices differ by Region and change over time. Check the pricing page for your Region.</p>
+  </div>
+
+  <h2>gp3, io2, st1 or instance store?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>gp3</th><th>io2 Block Express</th><th>st1</th><th>Instance store</th></tr>
+      <tr><td><b>Medium</b></td><td>SSD, over the network</td><td>SSD, over the network</td><td>Hard disk, over the network</td><td>NVMe SSD in the host</td></tr>
+      <tr><td><b>Top performance</b></td><td>80,000 IOPS, 2,000 MiB/s</td><td>256,000 IOPS, 4,000 MiB/s</td><td>500 MiB/s, sequential</td><td>Hundreds of thousands of IOPS per disk, set by the instance type</td></tr>
+      <tr><td><b>Latency</b></td><td>A few milliseconds</td><td>Below one millisecond, steady</td><td>Tens of milliseconds for random access</td><td>The lowest</td></tr>
+      <tr><td><b>Durability</b></td><td>99.8–99.9%</td><td>99.999%</td><td>99.8–99.9%</td><td>None beyond the life of the host</td></tr>
+      <tr><td><b>Survives stop and start</b></td><td>Yes</td><td>Yes</td><td>Yes</td><td>No</td></tr>
+      <tr><td><b>Snapshots</b></td><td>Yes</td><td>Yes</td><td>Yes</td><td>No</td></tr>
+      <tr><td><b>Change it while in use</b></td><td>Size, IOPS, throughput, type</td><td>Size, IOPS, type</td><td>Size, type</td><td>Nothing</td></tr>
+      <tr><td><b>Cost</b></td><td>Low. Performance is priced separately from size.</td><td>High. Every IOPS is charged.</td><td>Lowest per GiB of the three</td><td>In the instance price</td></tr>
+      <tr><td><b>Choose it when</b></td><td>Almost always: boot volumes, most databases, anything you have not measured yet</td><td>A critical database that needs steady sub-millisecond latency, more than 80,000 IOPS, or durability you cannot get from replication</td><td>Large sequential data: log processing, data warehouse staging, Kafka when cost matters most</td><td>The data can be rebuilt: caches, scratch space, databases that replicate between nodes</td></tr>
+    </table>
+    <p class="note">A relational database on gp3 has outgrown it when three things are true together: the volume's <code>VolumeIOPSExceededCheck</code> or its latency shows the volume is the limit; the instance's EBS limit is not; and the volume is already at the gp3 maximum, or the application needs latency below a millisecond. Until then, raise the gp3 figures.</p>
+  </div>
+
+  <h2>Cluster, spread, partition or none?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>No placement group</th><th>Cluster</th><th>Spread</th><th>Partition</th></tr>
+      <tr><td><b>Hosts</b></td><td>Wherever there is room</td><td>Close together</td><td>One rack per instance</td><td>Groups of racks; no rack in two groups</td></tr>
+      <tr><td><b>AZs</b></td><td>Any</td><td>One</td><td>Several</td><td>Several</td></tr>
+      <tr><td><b>Size limit</b></td><td>Account quota</td><td>What fits in one place</td><td>7 running instances per AZ</td><td>7 partitions per AZ, any number of instances</td></tr>
+      <tr><td><b>A rack fails</b></td><td>Some instances, by chance</td><td>Possibly all</td><td>At most one</td><td>At most one partition</td></tr>
+      <tr><td><b>Network between members</b></td><td>Normal</td><td>Lowest latency; 10 Gbps per flow</td><td>Normal</td><td>Normal</td></tr>
+      <tr><td><b>Capacity errors</b></td><td>Rare</td><td>Likely when you add instances later</td><td>Possible: each needs its own rack</td><td>Rare</td></tr>
+      <tr><td><b>Choose it when</b></td><td>Stateless fleets behind a load balancer. Spreading over AZs is enough.</td><td>HPC, tightly coupled simulation, anything where microseconds between nodes matter more than availability</td><td>A few nodes of which no two may fail together: a quorum of three, a primary and its standby</td><td>Large replicated systems that know about racks: Kafka, Cassandra, HDFS</td></tr>
+    </table>
+    <p class="note">Most systems need none of the three. An Auto Scaling group over three AZs already survives the loss of a rack, and of a whole AZ (Day 5).</p>
+  </div>
+
+  <h2>Hands-on lab</h2>
+  <div class="card lab">
+    <p><b>Goal:</b> launch a Graviton instance with no key pair and no open port, with IMDSv2 required. Manage it only through Systems Manager. See the token rule of IMDS from inside, read the NVMe devices, change a volume while it is in use, snapshot it and scan for missing patches. About 40 minutes.</p>
+    <p><b>Cost:</b> under $0.05 for an hour: a <code>t4g.small</code>, 18 GiB of gp3, one public IPv4 address and a small snapshot. The lab uses the default VPC, so that the agent reaches Systems Manager over the internet.</p>
+    <ol>
+      <li>Create a role that lets the SSM Agent register the instance, and an instance profile to carry it.
+<pre class="code">export AWS_DEFAULT_REGION=ap-south-1
+
+cat &gt; trust.json &lt;&lt;'EOF'
+{ "Version": "2012-10-17", "Statement": [ { "Effect": "Allow",
+  "Principal": { "Service": "ec2.amazonaws.com" }, "Action": "sts:AssumeRole" } ] }
+EOF
+aws iam create-role --role-name mastery-day04 --assume-role-policy-document file://trust.json
+aws iam attach-role-policy --role-name mastery-day04 \
+  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+aws iam create-instance-profile --instance-profile-name mastery-day04
+aws iam add-role-to-instance-profile --instance-profile-name mastery-day04 --role-name mastery-day04
+sleep 15   # a new instance profile takes a few seconds to be usable</pre>
+      </li>
+      <li>Launch the instance. The AMI comes from a public SSM parameter, so no ID is hard-coded. There is no key pair and no security group rule. The second volume is the one you will change.
+<pre class="code">ID=$(aws ec2 run-instances \
+  --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 \
+  --instance-type t4g.small \
+  --iam-instance-profile Name=mastery-day04 \
+  --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1,HttpEndpoint=enabled \
+  --block-device-mappings 'DeviceName=/dev/sdf,Ebs={VolumeSize=10,VolumeType=gp3,DeleteOnTermination=true}' \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=mastery-day04}]' \
+  --query 'Instances[0].InstanceId' --output text)
+
+aws ec2 wait instance-status-ok --instance-ids $ID</pre>
+      </li>
+      <li>Check that the instance is a managed node. Repeat until it prints <code>Online</code>. Then define a helper that runs one shell command through Run Command and prints its output.
+<pre class="code">aws ssm describe-instance-information --filters Key=InstanceIds,Values=$ID \
+  --query 'InstanceInformationList[].[PingStatus,PlatformName,AgentVersion]' --output text
+
+run() {   # $1 = a shell command without double quotes
+  local cmd=$(aws ssm send-command --instance-ids $ID --document-name AWS-RunShellScript \
+    --parameters "{\"commands\":[\"$1\"]}" --query Command.CommandId --output text)
+  sleep 2
+  aws ssm wait command-executed --command-id $cmd --instance-id $ID
+  aws ssm get-command-invocation --command-id $cmd --instance-id $ID \
+    --query '[StandardOutputContent,StandardErrorContent]' --output text
+}
+run "whoami; uname -m"</pre>
+        Expect <code>root</code> and <code>aarch64</code>. If you have the Session Manager plugin installed, <code>aws ssm start-session --target $ID</code> gives you a shell instead.
+      </li>
+      <li>Ask IMDS for metadata without a token, as an SSRF attack would. Then ask the proper way.
+<pre class="code">run "curl -s -o /dev/null -w '%{http_code}' http://169.254.169.254/latest/meta-data/"
+
+run "TOKEN=\$(curl -s -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token); \
+curl -s -H X-aws-ec2-metadata-token:\$TOKEN http://169.254.169.254/latest/meta-data/iam/security-credentials/"</pre>
+        The first prints <code>401</code>. The second prints <code>mastery-day04</code>: the name of the role whose credentials are one more request away.
+      </li>
+      <li>Look at the disks. Before you run it, say how many devices you expect and what kind.
+<pre class="code">run "lsblk -o NAME,SIZE,MODEL,SERIAL"</pre>
+        Two NVMe devices, both with the model <code>Amazon Elastic Block Store</code>. The serial number is the volume ID. A <code>t4g</code> has no instance store, so there is no third device.
+      </li>
+      <li>Change the data volume while it is attached: double its size and raise its performance. Repeat the second command until the state is <code>optimizing</code> or <code>completed</code>; the new size is usable from that moment.
+<pre class="code">VOL=$(aws ec2 describe-volumes \
+  --filters Name=attachment.instance-id,Values=$ID Name=attachment.device,Values=/dev/sdf \
+  --query 'Volumes[0].VolumeId' --output text)
+aws ec2 modify-volume --volume-id $VOL --size 20 --iops 4000 --throughput 250
+
+aws ec2 describe-volumes-modifications --volume-ids $VOL \
+  --query 'VolumesModifications[0].[ModificationState,Progress]' --output text
+run "lsblk"</pre>
+        The device is now 20 GiB. This volume has no file system. If it had one, you would now run <code>xfs_growfs</code> or <code>resize2fs</code>. Try to shrink it back with <code>--size 10</code> and read the error.
+      </li>
+      <li>Take a snapshot, and scan the instance against the default patch baseline. A scan installs nothing.
+<pre class="code">SNAP=$(aws ec2 create-snapshot --volume-id $VOL --description mastery-day04 \
+  --query SnapshotId --output text)
+aws ec2 wait snapshot-completed --snapshot-ids $SNAP
+aws ec2 describe-snapshots --snapshot-ids $SNAP \
+  --query 'Snapshots[0].[VolumeSize,State,Encrypted]' --output text
+
+SCAN=$(aws ssm send-command --instance-ids $ID --document-name AWS-RunPatchBaseline \
+  --parameters Operation=Scan --query Command.CommandId --output text)
+sleep 2; aws ssm wait command-executed --command-id $SCAN --instance-id $ID
+aws ssm describe-instance-patch-states --instance-ids $ID \
+  --query 'InstancePatchStates[0].[InstalledCount,MissingCount,FailedCount]' --output text</pre>
+        The snapshot reports 20 GiB, the size of the volume. You are charged only for the blocks that were written, which here is almost nothing.
+      </li>
+      <li>Clean up.
+<pre class="code">aws ec2 terminate-instances --instance-ids $ID
+aws ec2 wait instance-terminated --instance-ids $ID
+aws ec2 delete-snapshot --snapshot-id $SNAP
+
+aws iam remove-role-from-instance-profile --instance-profile-name mastery-day04 --role-name mastery-day04
+aws iam delete-instance-profile --instance-profile-name mastery-day04
+aws iam detach-role-policy --role-name mastery-day04 \
+  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+aws iam delete-role --role-name mastery-day04
+rm trust.json</pre>
+        Both volumes had <code>DeleteOnTermination</code> set, so they went with the instance. Check with <code>aws ec2 describe-volumes --volume-ids $VOL</code>: it must answer that the volume does not exist.
+      </li>
+    </ol>
+  </div>
+
+  <h2>Interview questions</h2>
+  <details><summary>gp3 or io2 for a busy database, and how do you know when you have outgrown it?</summary><p>I start on gp3. It gives 3,000 IOPS and 125 MiB/s at any size, I can provision up to 80,000 IOPS and 2,000 MiB/s separately from size, and every change is online. io2 Block Express costs about ten times as much for the same IOPS, so I need a reason: steady latency below a millisecond, more than 80,000 IOPS on one volume, or 99.999% durability for a database that has no replica. To know that I have outgrown gp3, I first check that the volume is the limit and not the instance: the instance's EBS limit and its <code>EBSIOBalance%</code>, then the volume's <code>VolumeIOPSExceededCheck</code>, queue length and latency. If the volume is the limit and is below the gp3 maximum, I raise the gp3 figures. If it is at the maximum, or the latency target cannot be met, I move to io2, and I also ask whether read replicas or a cache would remove the load instead.</p></details>
+  <details><summary>What is the Nitro system, and why should an application engineer care?</summary><p>Nitro moves networking, EBS and local storage from the hypervisor to dedicated hardware cards, and leaves a thin hypervisor that only divides CPU and memory. Three things follow for me. Performance is close to bare metal and does not vary with what the neighbours do with their disks. Volumes and instance store appear as NVMe devices and the network uses ENA, so my AMIs need those drivers and my scripts must not assume device names such as <code>/dev/xvdf</code>. And the security model is stronger: encryption of EBS and of traffic between instances happens on the cards, and nobody can log in to the host.</p></details>
+  <details><summary>How does IMDSv2 stop the theft of credentials through SSRF?</summary><p>With IMDSv1, any GET to <code>169.254.169.254</code> returns the role's credentials, so an application that fetches a URL for a user can be made to fetch them. IMDSv2 requires a token, which is obtained with a PUT request and then sent in a header. A typical SSRF bug controls only the URL of a GET; it cannot change the method or add a header. Two more rules cover proxies: a PUT with an <code>X-Forwarded-For</code> header is refused, and the reply with the token has an IP hop limit of 1, so it is dropped before it leaves the instance. I set <code>HttpTokens=required</code> as the account default, enforce it with the condition key <code>ec2:MetadataHttpTokens</code>, and watch <code>MetadataNoToken</code> before the change to find software that still uses version 1.</p></details>
+  <details><summary>What changes when you stop and start an instance, compared with a reboot?</summary><p>A reboot stays on the same host and keeps everything. A stop releases the host. At start the instance is placed on a new one, so memory is gone, instance store data is gone, and an automatic public IPv4 address is replaced. EBS volumes, the private addresses, Elastic IPs and the instance ID stay. That is also why stop and start fixes a failed system status check or a scheduled retirement, and a reboot does not. In an Auto Scaling group a stopped instance is seen as unhealthy and replaced, so there I terminate instead.</p></details>
+  <details><summary>Snapshots are incremental. You delete the first one of ten. What happens to the other nine?</summary><p>Nothing is lost. Each snapshot is a full description of the volume at its moment, and only the storage is shared. When I delete a snapshot, EBS removes only the blocks that no other snapshot refers to. Blocks that later snapshots still need stay, and I keep paying for them. So deleting old snapshots frees less than their listed size, and every remaining snapshot can still restore the whole volume alone.</p></details>
+  <details><summary>You restore a 2 TB database volume from a snapshot. It is available in seconds and the database is very slow. Why, and what do you do?</summary><p>The volume is created empty and its blocks are loaded from S3 in the background and on first access. Every block the database reads for the first time waits for that fetch, so the first pass over the data is slow. For a planned restore I read the whole device once before I use it. For recovery where time matters, I enable fast snapshot restore on the newest snapshots in the AZs I would restore into, which gives full performance from the start for an hourly charge, or I set a provisioned initialisation rate on the new volume. I also measure this in a restore test, because it decides the real recovery time.</p></details>
+  <details><summary>When do you choose a cluster, a spread or a partition placement group?</summary><p>Cluster when the nodes talk to each other all the time and latency decides the result, as in HPC. I accept that they are in one AZ and can fail together, and I launch them in one request because capacity next to existing hosts may not be free later. Spread for a handful of instances that must not share a rack, such as three quorum members; the limit is seven per AZ. Partition for large replicated systems: up to seven partitions per AZ, no rack shared between partitions, and the software reads its partition from the metadata to place replicas apart. For an ordinary stateless fleet I use none and spread over AZs.</p></details>
+  <details><summary>Golden AMI or user data: how do you prepare instances?</summary><p>Both, with a clear line. Everything slow and stable goes into the image: the operating system patches, agents, the runtime, and often the application itself. Image Builder rebuilds it on a schedule, tests it and distributes it. User data stays short and does only what differs per environment, such as reading configuration and starting the service. A baked image starts in seconds, starts the same way every time, and does not depend on a package repository during a scale-out. The cost is a pipeline, and a new image for every change. I never put secrets in either one; the instance fetches them with its role.</p></details>
+  <details><summary>Why Session Manager instead of SSH through a bastion host?</summary><p>Session Manager needs no inbound port, no key pairs and no bastion to patch. The agent calls out over HTTPS, so the instance can sit in a private subnet with a security group that allows nothing in. Access is an IAM decision, by tag if I want, with MFA and short-lived credentials, and it ends when the person leaves the identity provider. Every session start is in CloudTrail and the full session can be logged to S3 or CloudWatch Logs. With SSH I would have to build key rotation, host access lists and command logging myself. The requirements are the agent, an instance role and a path to the Systems Manager endpoints.</p></details>
+  <details><summary>You are asked to move a fleet from Intel to Graviton to save money. What do you check?</summary><p>The software first: an arm64 build of every binary, native library, agent and container image, and an arm64 AMI. Interpreted and JVM code usually runs unchanged; the surprises are compiled dependencies and vendor agents. Then performance, with a load test on the real workload, remembering that a Graviton vCPU is a full core and an Intel vCPU is a thread. Then the rollout: multi-architecture images, a second node group or a mixed-instances Auto Scaling group, a canary share of traffic, and a way back. I also check commitments: Compute Savings Plans cover both architectures, and Reserved Instances for the old type do not. Managed services such as RDS and ElastiCache are the easy first step, because the change there is only the instance class.</p></details>
+  <details><summary>How do you patch 500 instances without causing an outage?</summary><p>Where instances are in Auto Scaling groups, I do not patch them: I build a new AMI and replace them with an instance refresh. For the rest I use Patch Manager. A patch baseline approves patches by severity after a number of days, with a shorter delay in dev than in prod, so that dev finds the bad patch first. Maintenance windows per environment run the install, targeted by tag, with a concurrency of a small percentage and an error threshold that stops the run. Instances behind a load balancer are patched one AZ or one group at a time. A scan runs daily and the compliance report shows what is still missing.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-05/index.html">Day 5: Load balancing and Auto Scaling</a>.</b> One instance is a single point of failure. Tomorrow you put a fleet behind a load balancer: ALB, NLB and Gateway Load Balancer, health checks, deregistration delay, scaling policies, warm pools and instance refresh.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — A host and an instance.</b> An instance is a virtual machine on a physical host in one Availability Zone. The name m7g.xlarge says what you get: family M (general purpose), generation 7, Graviton processor, size xlarge with 4 vCPUs and 16 GiB. The Nitro hypervisor between the instance and the hardware only divides CPU and memory.",
+    "<b>Step 2 — The Nitro cards.</b> Everything else is hardware. One card connects the instance to the VPC. One presents EBS volumes as NVMe devices. One controls the local disks. They also encrypt. Because this work no longer runs on the host's CPU, the instance gets nearly all of it. A security chip checks the firmware, and nobody can log in to the host.",
+    "<b>Step 3 — Launched from an AMI.</b> The AMI holds a snapshot of the root volume, a block device mapping, and the architecture. A launch template adds the instance type, the role and the user data. An Image Builder pipeline rebuilds the AMI on a schedule: base image, your components, tests, then distribution to the accounts and Regions that need it.",
+    "<b>Step 4 — EBS volumes.</b> The disks are not in the host. They are network storage in the same AZ, reached through the EBS card on bandwidth reserved for it. The root volume is gp3 with its included 3,000 IOPS. The data volume is io2 with 20,000 provisioned IOPS. Inside the instance both are NVMe devices. The instance type has its own EBS limit; the workload gets the lower of the two.",
+    "<b>Step 5 — Snapshots.</b> A snapshot copies a volume to S3, and is Regional, so it survives the loss of the AZ. Each snapshot stores only the blocks changed since the last. A restore creates a new volume in any AZ at once and loads its blocks on first read, so it starts slow. An AMI is a snapshot with launch settings around it.",
+    "<b>Step 6 — Instance store.</b> Some types have NVMe disks inside the host. They are the fastest storage in EC2 because there is no network on the way. They belong to the host. When you stop and start the instance, it moves to another host: EBS volumes and the private IP follow, and the instance store is empty again.",
+    "<b>Step 7 — The metadata service and user data.</b> At 169.254.169.254 the instance finds facts about itself and the temporary credentials of its role. IMDSv2 demands a token from a PUT request first, which an attacker who only controls a URL cannot send. User data is a script that cloud-init runs as root at the first boot, and never again.",
+    "<b>Step 8 — Systems Manager.</b> The SSM Agent opens an outbound HTTPS connection through the instance's network interface and waits for work. Session Manager gives a shell over that connection, with IAM for access and a full log. Run Command runs a document on many instances at a controlled rate. Patch Manager applies a patch baseline in a maintenance window. No inbound port is open.",
+    "<b>Step 9 — Placement groups.</b> For several instances you can choose how their hosts are arranged. Cluster: close together in one AZ, for the lowest latency, at the risk of failing together. Spread: each on its own rack, seven per AZ at most. Partition: up to seven groups of racks per AZ that share nothing, for large replicated systems."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const num = x => Math.round(x).toLocaleString("en-US");
+  const pill = (kind, text) => `<span class="pill ${kind}">${text}</span>`;
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+  // A row of buttons; the one whose key equals state[field] is highlighted by the paint function
+  function buttons(id, title, items, onPick) {
+    $(id).innerHTML = `<b>${title}</b>`;
+    items.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.onclick = () => onPick(key);
+      $(id).appendChild(b);
+    });
+  }
+  const mark = (id, keys, cur) => [...$(id).querySelectorAll("button")].forEach((b, i) => b.classList.toggle("on", keys[i] === cur));
+
+  // ================= EBS: the volume, the instance and the workload =================
+  const SIZES = [20, 50, 100, 200, 500, 1000, 2000, 4000, 8000, 16000];
+  const IOPS = [3000, 6000, 10000, 16000, 24000, 32000, 48000, 64000, 80000, 120000, 160000, 256000];
+  const TPUT = [125, 250, 500, 750, 1000, 1500, 2000];
+  // [key, button, operations per second, size of one operation in KiB]
+  const WORK = [
+    ["small", "Small database", 2500, 16],
+    ["busy", "Busy database", 30000, 16],
+    ["huge", "Very busy database", 120000, 16],
+    ["scan", "Sequential scan", 450, 1024]
+  ];
+  // [type, baseline IOPS, baseline MiB/s] from the EBS-optimised table
+  const INST = [["r6i.large", 3600, 81.25], ["r6i.2xlarge", 12000, 312.5], ["r6i.4xlarge", 20000, 625],
+    ["r6i.8xlarge", 40000, 1250], ["r6i.16xlarge", 80000, 2500], ["r6i.32xlarge", 160000, 5000]];
+  const VTYPES = [["gp2", "gp2"], ["gp3", "gp3"], ["io2", "io2 Block Express"], ["st1", "st1 (hard disk)"]];
+  const GP3 = { iops: 80000, mibps: 2000, perGib: 500, perIops: 0.25, base: 3000, baseT: 125 };
+  const gp3Cost = (size, iops, mibps) => 0.08 * size + 0.005 * Math.max(0, iops - GP3.base) + 0.04 * Math.max(0, mibps - GP3.baseT);
+  const io2IopsCost = n => 0.065 * Math.min(n, 32000) + 0.0455 * Math.min(Math.max(n - 32000, 0), 32000) + 0.032 * Math.max(n - 64000, 0);
+
+  // What the volume delivers and costs, with the rules of its type applied to the slider values
+  function volume(type, size, iops, mibps) {
+    const notes = [];
+    if (type === "gp2") {
+      const got = Math.min(16000, Math.max(100, 3 * size));
+      notes.push(`gp2 has no performance settings. It gives 3 IOPS per GiB: ${num(got)} IOPS for ${num(size)} GiB.` +
+        (size < 1000 ? " It bursts to 3,000 IOPS while its credits last; the figure here is what remains after that." : ""));
+      return { size, iops: got, mibps: size <= 170 ? 128 : 250, cost: 0.10 * size, notes };
+    }
+    if (type === "st1") {
+      const gib = Math.max(125, size), t = Math.min(500, 40 * gib / 1024);
+      if (gib !== size) notes.push("The smallest st1 volume is 125 GiB.");
+      notes.push(`st1 has no performance settings. Its baseline is 40 MiB/s per TiB: ${num(t)} MiB/s for ${num(gib)} GiB. Every operation costs at least 1 MiB of that.`);
+      return { size: gib, iops: t, mibps: t, cost: 0.045 * gib, notes, hdd: true };
+    }
+    const io2 = type === "io2";
+    const cap = Math.min(io2 ? 256000 : GP3.iops, (io2 ? 1000 : GP3.perGib) * size);
+    const got = Math.max(io2 ? 100 : GP3.base, Math.min(iops, cap));
+    if (got < iops) notes.push(cap === (io2 ? 256000 : GP3.iops) ? `${io2 ? "io2 Block Express" : "gp3"} stops at ${num(cap)} IOPS.`
+      : `${io2 ? "io2 allows 1,000" : "gp3 allows 500"} IOPS per GiB: at most ${num(cap)} for ${num(size)} GiB.`);
+    if (io2) {
+      notes.push("io2 has no throughput setting. Throughput follows IOPS: 0.256 MiB/s for each, up to 4,000 MiB/s.");
+      return { size, iops: got, mibps: Math.min(4000, got * 0.256), cost: 0.125 * size + io2IopsCost(got), notes };
+    }
+    const t = Math.max(GP3.baseT, Math.min(mibps, GP3.mibps, got * GP3.perIops));
+    if (t < mibps) notes.push(`gp3 allows 0.25 MiB/s per provisioned IOPS: at most ${num(t)} MiB/s with ${num(got)} IOPS.`);
+    return { size, iops: got, mibps: t, cost: gp3Cost(size, got, t), notes };
+  }
+
+  const eb = { work: "busy", type: "gp3", inst: "r6i.4xlarge" };
+  function paintEbs() {
+    mark("ebWork", WORK.map(w => w[0]), eb.work); mark("ebType", VTYPES.map(t => t[0]), eb.type); mark("ebInst", INST.map(i => i[0]), eb.inst);
+    const [, wLabel, wIops, kib] = WORK.find(w => w[0] === eb.work);
+    const [iName, iIops, iMib] = INST.find(i => i[0] === eb.inst);
+    const fixed = eb.type === "gp2" || eb.type === "st1";
+    $("ebIops").disabled = fixed; $("ebTput").disabled = eb.type !== "gp3";
+    const v = volume(eb.type, SIZES[+$("ebSize").value], IOPS[+$("ebIops").value], TPUT[+$("ebTput").value]);
+    $("ebSizeV").textContent = `${num(v.size)} GiB`;
+    $("ebIopsV").textContent = v.hdd ? "—" : `${num(v.iops)} IOPS`;
+    $("ebTputV").textContent = `${num(v.mibps)} MiB/s`;
+    $("ebNotes").innerHTML = v.notes.length ? "<b>Rules of this type:</b> " + v.notes.join(" ") : "";
+
+    // An SSD counts one operation per 256 KiB. A hard disk charges every operation as 1 MiB of throughput.
+    const ssdOps = wIops * Math.ceil(kib / 256), volOps = v.hdd ? wIops : ssdOps, needMib = wIops * kib / 1024;
+    const limits = [
+      ["Volume IOPS", v.iops / volOps, "vol"], ["Volume throughput", v.mibps / needMib, "vol"],
+      ["Instance IOPS limit", iIops / ssdOps, "inst"], ["Instance throughput limit", iMib / needMib, "inst"]
+    ];
+    const worst = limits.reduce((a, b) => b[1] < a[1] ? b : a);
+    const f = Math.min(1, worst[1]), ok = f >= 1;
+    const label = !ok && v.hdd && worst[2] === "vol" ? "Hard disk throughput" : worst[0];
+
+    big("ebGets", `${num(f * wIops)} of ${num(wIops)} operations/s`, ok ? "pub" : "bad");
+    big("ebLimit", ok ? "Nothing" : label, ok ? "pub" : "bad");
+    big("ebCost", `$${num(v.cost)} a month`, "text");
+
+    const state = side => limits.filter(l => l[2] === side).every(l => l[1] >= 1) ? pill("yes", "Enough")
+      : worst[2] === side ? pill("no", "The limit") : pill("skip", "Also too low");
+    $("ebTable").innerHTML = "<tr><th></th><th>Operations per second</th><th>MiB per second</th><th></th></tr>" +
+      `<tr><td><b>The workload asks for</b><br>${wLabel}</td><td>${num(wIops)}, each ${kib >= 1024 ? kib / 1024 + " MiB" : kib + " KiB"}${ssdOps !== wIops && !v.hdd ? `<br>counted as ${num(ssdOps)} IOPS` : ""}</td><td>${num(needMib)}</td><td></td></tr>` +
+      `<tr><td><b>The volume gives</b><br>${VTYPES.find(t => t[0] === eb.type)[1]}, ${num(v.size)} GiB</td><td>${v.hdd ? "1 MiB of throughput per operation" : num(v.iops) + " IOPS"}</td><td>${num(v.mibps)}</td><td>${state("vol")}</td></tr>` +
+      `<tr><td><b>The instance allows</b><br>${iName}</td><td>${num(iIops)} IOPS</td><td>${num(iMib)}</td><td>${state("inst")}</td></tr>` +
+      `<tr class="${ok ? "hit" : ""}"><td><b>The workload gets</b></td><td>${num(f * wIops)}</td><td>${num(f * needMib)}</td><td>${ok ? pill("yes", "All of it") : pill("no", Math.round(f * 100) + "%")}</td></tr>`;
+
+    let msg;
+    if (ok) {
+      const used = Math.max(volOps / v.iops, needMib / v.mibps);
+      msg = `<b>It keeps up.</b> The workload uses ${Math.round(used * 100)}% of what the volume can give.`;
+      if (used > 0.8) msg += " That is close to the edge. Growth of a quarter puts you over it, so set an alarm on the volume's IOPS and queue length now.";
+      else if (used < 0.3 && !fixed && v.iops > GP3.base) msg += " You pay for much more than you use. Lower the provisioned figures; it is an online change.";
+      // Could gp3 do the same job?
+      const gIops = Math.max(GP3.base, ssdOps, Math.ceil(needMib / GP3.perIops)), gMib = Math.max(GP3.baseT, needMib);
+      if (eb.type === "io2" && gIops <= Math.min(GP3.iops, GP3.perGib * v.size) && gMib <= GP3.mibps)
+        msg += ` A gp3 volume with ${num(gIops)} IOPS and ${num(gMib)} MiB/s would carry this load for $${num(gp3Cost(v.size, gIops, gMib))} a month. The reasons to pay for io2 here are steady latency below a millisecond and 99.999% durability, not the IOPS.`;
+      if (eb.type === "gp2") msg += ` The same size on gp3 costs $${num(0.08 * v.size)} without extra performance, 20% less.`;
+    } else if (worst[2] === "inst") {
+      msg = `<b>The instance is the limit, not the volume.</b> The volume can give ${v.hdd ? num(v.mibps) + " MiB/s" : num(v.iops) + " IOPS"}, and <code>${iName}</code> passes ${worst[0] === "Instance IOPS limit" ? num(iIops) + " IOPS" : num(iMib) + " MiB/s"} to all of its volumes together. More provisioned IOPS would change the bill and nothing else. Choose a larger size, or a family built for storage. <b>How you see it:</b> the volume's metrics stay below its provisioned figures, while the instance's <code>InstanceEBSIOPSExceededCheck</code> or <code>InstanceEBSThroughputExceededCheck</code> is 1 and, on sizes that burst, <code>EBSIOBalance%</code> falls.`;
+    } else {
+      const tput = worst[0] === "Volume throughput";
+      const how = { gp2: tput ? "gp2 stops at 250 MiB/s. Change the type to gp3 and provision the throughput."
+          : "On gp2 the only way to more IOPS is a larger volume. Change the type to gp3 and provision the IOPS you need; the volume stays in use during the change.",
+        gp3: tput ? (v.mibps >= GP3.mibps ? "This is the gp3 maximum of 2,000 MiB/s. The next step is io2 Block Express, or several volumes."
+            : "Raise the provisioned throughput. Remember the ratio: each MiB/s needs 4 provisioned IOPS.")
+          : v.iops >= GP3.iops ? "This is the gp3 maximum of 80,000 IOPS. Now the question “gp3 or io2” has a clear answer: io2 Block Express goes to 256,000. Or take load off the volume with read replicas and a cache."
+          : v.iops >= GP3.perGib * v.size ? "The volume is at 500 IOPS per GiB. Make it larger, or use io2, which allows 1,000 per GiB."
+          : "Raise the provisioned IOPS. It is an online change and costs $0.005 per IOPS a month. You have not outgrown gp3.",
+        io2: tput ? "On io2, throughput follows IOPS. Provision more IOPS."
+          : v.iops >= 256000 ? "This is the most that one EBS volume can do. Beyond it: instance store, or spread the data over several volumes or nodes."
+          : "Raise the provisioned IOPS, and check the price first: every IOPS on io2 is charged.",
+        st1: kib < 1024 ? "A hard disk charges every random operation as 1 MiB of throughput, so small random reads get almost nothing. Never put a database on st1. Use gp3."
+          : "On st1, throughput comes with size: 40 MiB/s per TiB, up to 500. Make the volume larger. It can burst to 250 MiB/s per TiB for a while, which this figure does not count."
+      }[eb.type];
+      msg = `<b>The volume is the limit: ${label.toLowerCase().replace("iops", "IOPS")}.</b> ${how} <b>How you see it:</b> <code>${tput ? "VolumeThroughputExceededCheck" : "VolumeIOPSExceededCheck"}</code> is 1, <code>VolumeQueueLength</code> grows and read and write latency rise` + (eb.type === "gp2" ? ", and <code>BurstBalance</code> is at 0." : ".");
+    }
+    $("ebMsg").innerHTML = msg;
+    Object.assign($("ebMsg").dataset, { limit: ok ? "none" : worst[0], got: Math.round(f * wIops), cost: Math.round(v.cost) });
+  }
+  buttons("ebWork", "Workload", WORK.map(w => [w[0], w[1]]), k => { eb.work = k; paintEbs(); });
+  buttons("ebType", "Volume", VTYPES, k => { eb.type = k; paintEbs(); });
+  buttons("ebInst", "Instance", INST.map(i => [i[0], i[0]]), k => { eb.inst = k; paintEbs(); });
+  ["ebSize", "ebIops", "ebTput"].forEach(id => $(id).addEventListener("input", paintEbs));
+  paintEbs();
+
+  // ================= IMDS: who gets the credentials? =================
+  // [key, button, who it is, legitimate?, can send PUT and headers?, extra network hops, adds X-Forwarded-For?]
+  const CALLERS = [
+    ["sdk", "AWS SDK on the instance", "Your application, running as a process on the instance. It uses the AWS SDK, which asks for a token first.", true, true, 0, false],
+    ["ctr", "AWS SDK in a container", "Your application in a container on a bridge network (plain Docker, or a pod without host networking). It is one network hop away from the instance's own network stack.", true, true, 1, false],
+    ["ssrf", "Attacker: SSRF", "An attacker who found a feature that fetches a URL for the user, such as “import an image from a link”. They give it <code>http://169.254.169.254/latest/meta-data/iam/security-credentials/role</code>. They control the URL of a GET request and nothing else.", false, false, 0, false],
+    ["proxy", "Attacker: open proxy", "An attacker who reaches a misconfigured reverse proxy on the instance that forwards any request, with any method and any header. Like most proxies, it adds <code>X-Forwarded-For</code>.", false, true, 0, true]
+  ];
+  const im = { tokens: "optional", hop: 1, caller: "ssrf" };
+  function paintImds() {
+    mark("imTokens", ["optional", "required"], im.tokens); mark("imHop", [1, 2], im.hop); mark("imCaller", CALLERS.map(c => c[0]), im.caller);
+    const [key, , who, legit, canPut, hops, xff] = CALLERS.find(c => c[0] === im.caller);
+    const required = im.tokens === "required", steps = [];
+    let put, token = false;
+    if (!canPut) {
+      put = "Cannot send one";
+      steps.push(["PUT /latest/api/token", "Not sent. The attacker cannot choose the method or add the header that sets the token's lifetime.", "skip", "Not sent"]);
+    } else if (xff) {
+      put = "403 Forbidden";
+      steps.push(["PUT /latest/api/token", "The request carries <code>X-Forwarded-For</code>. IMDS refuses to issue a token to a request that came through a proxy.", "no", "403"]);
+    } else if (hops >= im.hop) {
+      put = "Reply never arrives";
+      steps.push(["PUT /latest/api/token", `IMDS issues the token. The reply leaves with a hop limit of ${im.hop}. The bridge into the container is one hop, which brings it to zero, and the packet is dropped. The SDK waits and times out.`, "no", "Timeout"]);
+    } else {
+      put = "200, token issued"; token = true;
+      steps.push(["PUT /latest/api/token", hops ? `IMDS issues the token. The reply has a hop limit of ${im.hop}, enough for the one hop into the container.`
+        : "IMDS issues the token. The caller is on the instance itself, so the hop limit does not matter.", "yes", "200"]);
+    }
+    let get, got;
+    if (token) {
+      get = "200, with token"; got = true;
+      steps.push(["GET …/security-credentials/role", "Sent with the header <code>X-aws-ec2-metadata-token</code>. IMDS returns the access key, the secret key and the session token of the role.", "yes", "200"]);
+    } else if (!required) {
+      get = "200, IMDSv1"; got = true;
+      steps.push(["GET …/security-credentials/role", (key === "ctr" ? "The SDK falls back to IMDSv1 and sends" : "Sent as") + " a plain GET with no token. <code>HttpTokens</code> is <code>optional</code>, so IMDS answers it like any other.", "yes", "200"]);
+    } else {
+      get = "401 Unauthorized"; got = false;
+      steps.push(["GET …/security-credentials/role", "No token in the request. <code>HttpTokens</code> is <code>required</code>, so IMDS refuses.", "no", "401"]);
+    }
+    $("imWho").innerHTML = "<b>Who is asking:</b> " + who;
+    big("imPut", put, token ? "pub" : canPut && legit ? "bad" : "text");
+    big("imGet", get, got === legit ? "pub" : "bad");
+    const verdict = legit ? (got ? "The application works" : "The application has no credentials") : got ? "Credentials stolen" : "Attack blocked";
+    big("imVerdict", verdict, got === legit ? "pub" : "bad");
+    $("imSteps").innerHTML = "<tr><th>Request</th><th>What happened</th><th>Result</th></tr>" +
+      steps.map(s => `<tr><td><code>${s[0]}</code></td><td>${s[1]}</td><td>${pill(s[2], s[3])}</td></tr>`).join("");
+
+    const msg = {
+      sdk: required ? "<b>Works, and only for callers like this one.</b> The SDK does the token step by itself; you change no code. This is the setting to use everywhere."
+        : "<b>Works, but so does every other GET from this instance.</b> The SDK uses a token although it does not have to. As long as tokens are optional, IMDSv1 stays open for whoever can make the instance send a request. Try the two attackers.",
+      ctr: token ? "<b>Works.</b> With a hop limit of 2 the token reaches the container. Know what that means: every container on this instance can now take the instance role's credentials. A role per task or per pod (ECS task roles, EKS Pod Identity) is the better answer, and then the hop limit can stay at 1."
+        : got ? "<b>Works, by accident.</b> The token never arrives, the SDK waits for it, and then falls back to IMDSv1. The application starts a little slower and nobody notices. On the day someone sets <code>HttpTokens</code> to <code>required</code>, it breaks. The metric <code>MetadataNoToken</code> counts these calls; check it before you enforce."
+        : "<b>The usual outage after enforcing IMDSv2.</b> The token cannot reach the container and there is no IMDSv1 to fall back to. The SDK reports that it cannot find credentials. Set the hop limit to 2, or better, give the container its own role so that it does not use IMDS at all.",
+      ssrf: got ? "<b>The attacker has the role's credentials.</b> They are valid for hours and work from anywhere. This is how the Capital One data was taken in 2019: an SSRF flaw, IMDSv1, and a role that could read S3. Nothing on the instance looks wrong."
+        : "<b>Blocked.</b> The same request now gets 401. To succeed the attacker would first need a PUT with a custom header, and then a GET with another header, and the flaw gives them neither. The permissions of the role still matter: this closes one door, and least privilege limits the damage behind every other.",
+      proxy: got ? "<b>The attacker has the role's credentials.</b> IMDSv1 does not care how the request arrived. The header that the proxy added is ignored on a plain GET."
+        : "<b>Blocked, by the header the proxy added.</b> This attacker can send a PUT, which the SSRF attacker could not. IMDS refuses to issue a token to any request with <code>X-Forwarded-For</code>, so there is no token, and without a token the GET gets 401."
+    }[key];
+    $("imMsg").innerHTML = msg;
+    Object.assign($("imMsg").dataset, { put, get, got: String(got), verdict });
+  }
+  buttons("imTokens", "HttpTokens", [["optional", "optional (IMDSv1 allowed)"], ["required", "required (IMDSv2 only)"]], k => { im.tokens = k; paintImds(); });
+  buttons("imHop", "Hop limit", [[1, "1"], [2, "2"]], k => { im.hop = k; paintImds(); });
+  buttons("imCaller", "Who asks", CALLERS.map(c => [c[0], c[1]]), k => { im.caller = k; paintImds(); });
+  paintImds();
+</script>
+</body>
+</html>
