@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 5 — Load Balancing and Auto Scaling</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .sim .calc { margin: 14px 0 12px; }
+  .sim .calc .big { font-size: 21px; }
+  .sim h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .sim .seg b { min-width: 128px; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+  td.when { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .lab li { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-04/index.html">← Day 4</a><a href="../README.md">30-day plan</a><a href="../day-06/index.html">Day 6 →</a></nav>
+  <header>
+    <div class="tag">Day 5 of 30 · Week 1 — Identity, Networking, Compute, Storage</div>
+    <h1>Load Balancing and Auto Scaling</h1>
+    <p class="lead">Yesterday you opened one instance. One instance is a single point of failure, so today you put a fleet behind a load balancer and let an Auto Scaling group keep the fleet at the right size. How does the load balancer decide where a request goes, and when does it stop using a target? How does the group know that it needs more instances, and how long until they help? The centre of the page is one deploy: an instance leaves, a new one arrives, and for 30 seconds some clients get a 502. Which settings decided that?</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg id="diagram" viewBox="0 0 1000 700" role="img" aria-label="A fleet behind a load balancer. Clients on the internet resolve a DNS name and reach an Application Load Balancer that has one node in each of two Availability Zones. The load balancer has an HTTPS listener with rules that choose a target group. The target group holds five instances in private subnets: four in service, one of them unhealthy, and one draining. A dashed line shows cross-zone load balancing from the node in one zone to targets in the other. The instances belong to an Auto Scaling group with a launch template and scaling policies. Below it are a warm pool of stopped instances and the lifecycle hooks. On the right are panels for the listener rules, the scaling policies and the error codes 502, 503 and 504. At the bottom are four boxes: instance refresh, mixed instances, Network Load Balancer and Gateway Load Balancer. At the top right is Global Accelerator in front of the load balancer.">
+        <defs>
+          <marker id="arrowE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--edge)"/></marker>
+          <marker id="arrowO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--orange)"/></marker>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--region)"/></marker>
+          <marker id="arrowD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--dc)"/></marker>
+        </defs>
+
+        <!-- Always visible: the Region and two Availability Zones -->
+        <rect x="10" y="92" width="980" height="596" rx="10" fill="var(--region-fill)" stroke="var(--region)" stroke-width="2" stroke-dasharray="8 5"/>
+        <text x="24" y="110" font-size="12.5" font-weight="700" style="fill:var(--region)">AWS Region — ap-south-1 · one VPC</text>
+        <rect x="24" y="118" width="376" height="452" rx="8" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2"/>
+        <text x="36" y="136" font-size="12.5" font-weight="700" style="fill:var(--az)">Availability Zone ap-south-1a</text>
+        <rect x="412" y="118" width="376" height="452" rx="8" fill="var(--az-fill)" stroke="var(--az)" stroke-width="2"/>
+        <text x="424" y="136" font-size="12.5" font-weight="700" style="fill:var(--az)">Availability Zone ap-south-1b</text>
+
+        <!-- Step 1: clients and the load balancer with a node in each AZ -->
+        <g data-step="1">
+          <rect x="24" y="24" width="150" height="52" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2"/>
+          <text x="36" y="45" font-size="12.5" font-weight="700">Clients</text>
+          <text x="36" y="63" font-size="10" style="fill:var(--muted)">ask DNS: app.example.com</text>
+          <rect x="36" y="146" width="740" height="64" rx="8" fill="var(--edge-fill)" stroke="var(--edge)" stroke-width="2"/>
+          <text x="48" y="163" font-size="12" font-weight="700" style="fill:var(--edge)">Application Load Balancer · layer 7 · internet-facing · at least one node in every enabled AZ</text>
+          <g fill="var(--card)" stroke="var(--edge)" stroke-width="1.5">
+            <rect x="48" y="172" width="152" height="30" rx="6"/><rect x="612" y="172" width="152" height="30" rx="6"/>
+          </g>
+          <g font-size="10" text-anchor="middle">
+            <text x="124" y="191">LB node · public subnet</text><text x="688" y="191">LB node · public subnet</text>
+          </g>
+          <path d="M100 77 V145" fill="none" stroke="var(--edge)" stroke-width="2.5" marker-end="url(#arrowE)"/>
+          <path d="M175 50 H689 V145" fill="none" stroke="var(--edge)" stroke-width="2.5" marker-end="url(#arrowE)"/>
+          <text x="190" y="43" font-size="10" style="fill:var(--muted)">DNS returns an address in each AZ · the addresses change when the load balancer scales</text>
+        </g>
+
+        <!-- Step 2: listener, rules, TLS -->
+        <g data-step="2">
+          <rect x="212" y="172" width="388" height="30" rx="6" fill="var(--card)" stroke="var(--edge)" stroke-width="1.5"/>
+          <text x="406" y="191" font-size="10" text-anchor="middle">Listener HTTPS :443 · TLS ends here · certificate chosen by SNI</text>
+          <line x1="776" y1="187" x2="799" y2="187" stroke="var(--edge)" stroke-width="2"/>
+          <rect x="800" y="118" width="178" height="172" rx="8" fill="var(--card)" stroke="var(--edge)" stroke-width="2"/>
+          <text x="810" y="136" font-size="11.5" font-weight="700" style="fill:var(--edge)">Listener rules</text>
+          <g font-size="10">
+            <text x="810" y="154">1  host api.example.com</text>
+            <text x="810" y="183">2  path /img/*</text>
+            <text x="810" y="212">3  header, method, query</text>
+            <text x="810" y="243" font-weight="700">default → target group web</text>
+          </g>
+          <g font-size="10" style="fill:var(--muted)">
+            <text x="822" y="167">→ target group api</text>
+            <text x="822" y="196">→ target group images</text>
+            <text x="822" y="225">string or source IP</text>
+            <text x="810" y="262">lowest number first;</text>
+            <text x="810" y="275">the first match wins</text>
+          </g>
+        </g>
+
+        <!-- Step 3: target group and targets -->
+        <g data-step="3">
+          <rect x="36" y="250" width="740" height="180" rx="8" fill="var(--priv-fill)" stroke="var(--priv)" stroke-width="2"/>
+          <text x="48" y="267" font-size="12" font-weight="700" style="fill:var(--priv)">Target group web · HTTP :8080 · targets in private subnets</text>
+          <text x="48" y="282" font-size="10" style="fill:var(--muted)">target types: instance · ip (containers, on-premises servers) · lambda · alb (behind a Network Load Balancer)</text>
+          <g fill="var(--card)" stroke="var(--orange)" stroke-width="2">
+            <rect x="60" y="314" width="104" height="52" rx="6"/><rect x="180" y="314" width="104" height="52" rx="6"/>
+            <rect x="432" y="314" width="104" height="52" rx="6"/><rect x="552" y="314" width="104" height="52" rx="6"/>
+          </g>
+          <g font-size="10.5" font-weight="700">
+            <text x="70" y="335">Instance</text><text x="190" y="335">Instance</text><text x="442" y="335">Instance</text><text x="562" y="335">Instance</text>
+          </g>
+          <g font-size="9.5" style="fill:var(--muted)">
+            <text x="70" y="351">10.0.10.21 :8080</text><text x="190" y="351">10.0.10.47 :8080</text><text x="442" y="351">10.0.11.15 :8080</text><text x="562" y="351">10.0.11.62 :8080</text>
+          </g>
+          <path d="M124 210 V249" fill="none" stroke="var(--edge)" stroke-width="2.5" marker-end="url(#arrowE)"/>
+          <path d="M688 210 V249" fill="none" stroke="var(--edge)" stroke-width="2.5" marker-end="url(#arrowE)"/>
+        </g>
+
+        <!-- Step 4: health checks -->
+        <g data-step="4">
+          <rect x="180" y="314" width="104" height="52" rx="6" fill="none" stroke="var(--bad)" stroke-width="3"/>
+          <text x="180" y="382" font-size="10" font-weight="700" style="fill:var(--bad)">unhealthy · gets no requests</text>
+          <text x="48" y="408" font-size="10">Health check: GET /health every 30 s · 5 s timeout · 2 failures → unhealthy · 5 successes → healthy</text>
+          <text x="48" y="422" font-size="10" style="fill:var(--muted)">If every target is unhealthy, the load balancer sends requests to all of them anyway.</text>
+        </g>
+
+        <!-- Step 5: cross-zone load balancing -->
+        <g data-step="5">
+          <path d="M160 210 V231 H640 V249" fill="none" stroke="var(--edge)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowE)"/>
+          <text x="400" y="225" font-size="10" text-anchor="middle" style="fill:var(--muted)">cross-zone: every node sends to the targets in every AZ</text>
+        </g>
+
+        <!-- Step 6: deregistration delay and the error codes -->
+        <g data-step="6">
+          <rect x="668" y="314" width="96" height="52" rx="6" fill="var(--card)" stroke="var(--orange)" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="678" y="335" font-size="10.5" font-weight="700">Instance</text>
+          <text x="678" y="351" font-size="9.5" style="fill:var(--orange)">draining</text>
+          <text x="764" y="382" font-size="10" text-anchor="end" style="fill:var(--muted)">no new requests · running ones finish · 300 s</text>
+          <rect x="800" y="460" width="178" height="110" rx="8" fill="var(--card)" stroke="var(--bad)" stroke-width="2"/>
+          <text x="810" y="478" font-size="11.5" font-weight="700" style="fill:var(--bad)">What the client sees</text>
+          <g font-size="10">
+            <text x="810" y="496"><tspan font-weight="700">502</tspan>  the target refused or</text>
+            <text x="834" y="509">closed the connection</text>
+            <text x="810" y="527"><tspan font-weight="700">503</tspan>  no target to send to</text>
+            <text x="810" y="545"><tspan font-weight="700">504</tspan>  no answer in time</text>
+          </g>
+          <text x="810" y="561" font-size="9.5" style="fill:var(--muted)">made by the load balancer</text>
+        </g>
+
+        <!-- Step 7: Auto Scaling group and scaling policies -->
+        <g data-step="7">
+          <rect x="46" y="292" width="720" height="100" rx="8" fill="none" stroke="var(--orange)" stroke-width="2" stroke-dasharray="7 4"/>
+          <text x="56" y="307" font-size="10.5" font-weight="700" style="fill:var(--orange)">Auto Scaling group · launch template · min 2 · desired 4 · max 12 · health check type ELB</text>
+          <rect x="800" y="300" width="178" height="150" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+          <text x="810" y="318" font-size="11.5" font-weight="700" style="fill:var(--orange)">Scaling policies</text>
+          <g font-size="10">
+            <text x="810" y="336">Target tracking: CPU at 50%</text>
+            <text x="810" y="368">Step: alarm → +2, then +4</text>
+            <text x="810" y="400">Scheduled: at a time you set</text>
+            <text x="810" y="416">Predictive: from a forecast</text>
+          </g>
+          <g font-size="10" style="fill:var(--muted)">
+            <text x="810" y="350">adds and removes by itself</text>
+            <text x="810" y="382">you write alarm and steps</text>
+            <text x="810" y="438">each one sets desired capacity</text>
+          </g>
+          <path d="M799 340 H768" fill="none" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrowO)"/>
+        </g>
+
+        <!-- Step 8: warm pool and lifecycle hooks -->
+        <g data-step="8">
+          <rect x="36" y="444" width="352" height="114" rx="8" fill="var(--card)" stroke="var(--dc)" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="48" y="462" font-size="11.5" font-weight="700">Warm pool</text>
+          <g fill="var(--bg)" stroke="var(--dc)" stroke-width="1.5">
+            <rect x="48" y="471" width="72" height="28" rx="5"/><rect x="128" y="471" width="72" height="28" rx="5"/><rect x="208" y="471" width="72" height="28" rx="5"/>
+          </g>
+          <g font-size="10" text-anchor="middle" style="fill:var(--muted)">
+            <text x="84" y="489">stopped</text><text x="164" y="489">stopped</text><text x="244" y="489">stopped</text>
+          </g>
+          <text x="48" y="518" font-size="10">booted once, then stopped: you pay for the volumes only</text>
+          <text x="48" y="533" font-size="10" style="fill:var(--muted)">a scale-out starts them in seconds, not minutes</text>
+          <text x="48" y="548" font-size="10" style="fill:var(--muted)">not available with Spot or mixed instance types</text>
+          <path d="M340 443 V394" fill="none" stroke="var(--dc)" stroke-width="2.5" marker-end="url(#arrowD)"/>
+          <rect x="424" y="444" width="352" height="114" rx="8" fill="var(--card)" stroke="var(--orange)" stroke-width="2"/>
+          <text x="436" y="462" font-size="11.5" font-weight="700">Lifecycle hooks: the group waits for you</text>
+          <text x="436" y="481" font-size="10" class="mono">Pending → Pending:Wait → InService</text>
+          <text x="436" y="495" font-size="10" style="fill:var(--muted)">install, warm up, then complete the hook</text>
+          <text x="436" y="514" font-size="10" class="mono">Terminating → Terminating:Wait → Terminated</text>
+          <text x="436" y="528" font-size="10" style="fill:var(--muted)">finish jobs, upload logs, leave the cluster</text>
+          <text x="436" y="548" font-size="10" style="fill:var(--muted)">timeout 1 hour by default, then ABANDON</text>
+        </g>
+
+        <!-- Step 9: instance refresh and mixed instances -->
+        <g data-step="9">
+          <g fill="var(--card)" stroke="var(--orange)" stroke-width="1.5">
+            <rect x="24" y="582" width="228" height="94" rx="8"/><rect x="264" y="582" width="228" height="94" rx="8"/>
+          </g>
+          <g font-size="11.5" font-weight="700">
+            <text x="36" y="600">Instance refresh</text><text x="276" y="600">Mixed instances</text>
+          </g>
+          <g font-size="10">
+            <text x="36" y="617">new launch template → replace the fleet</text>
+            <text x="276" y="617">several types, On-Demand and Spot</text>
+          </g>
+          <g font-size="10" style="fill:var(--muted)">
+            <text x="36" y="632">in batches · minimum healthy 90%</text>
+            <text x="36" y="647">each batch must pass its health checks</text>
+            <text x="36" y="662">checkpoints · rollback on an alarm</text>
+            <text x="276" y="632">an On-Demand base, a Spot share above</text>
+            <text x="276" y="647">price-capacity-optimized picks the pool</text>
+          </g>
+          <text x="276" y="662" font-size="10" style="fill:var(--bad)">Spot is taken back with 2 minutes notice</text>
+        </g>
+
+        <!-- Step 10: the other load balancers and Global Accelerator -->
+        <g data-step="10">
+          <g fill="var(--card)" stroke="var(--edge)" stroke-width="1.5">
+            <rect x="504" y="582" width="228" height="94" rx="8"/><rect x="744" y="582" width="228" height="94" rx="8"/>
+          </g>
+          <g font-size="11.5" font-weight="700">
+            <text x="516" y="600">Network Load Balancer · layer 4</text><text x="756" y="600">Gateway Load Balancer · layer 3</text>
+          </g>
+          <g font-size="10">
+            <text x="516" y="617">TCP, UDP, TLS · no HTTP rules</text>
+            <text x="756" y="617">every IP packet, to firewall appliances</text>
+          </g>
+          <g font-size="10" style="fill:var(--muted)">
+            <text x="516" y="632">one static address per AZ</text>
+            <text x="516" y="647">the target sees the client's address</text>
+            <text x="516" y="662">cross-zone is off by default</text>
+            <text x="756" y="632">GENEVE tunnel, port 6081</text>
+            <text x="756" y="647">one flow always to one appliance</text>
+            <text x="756" y="662">see Day 2</text>
+          </g>
+          <rect x="720" y="22" width="256" height="58" rx="8" fill="var(--card)" stroke="var(--region)" stroke-width="2"/>
+          <text x="732" y="40" font-size="12" font-weight="700" style="fill:var(--region)">Global Accelerator</text>
+          <text x="732" y="56" font-size="10" style="fill:var(--muted)">2 static anycast addresses · nearest edge</text>
+          <text x="732" y="70" font-size="10" style="fill:var(--muted)">AWS backbone to a load balancer, any Region</text>
+          <path d="M740 81 V145" fill="none" stroke="var(--region)" stroke-width="2.5" marker-end="url(#arrowR)"/>
+        </g>
+      </svg>
+    </div>
+    <p id="caption">Full picture: a fleet behind a load balancer. Clients resolve a DNS name and reach a <b>load balancer node</b> in one of the AZs. The <b>listener</b> ends TLS and its <b>rules</b> choose a <b>target group</b>. Each node sends requests to the healthy targets, in every AZ when <b>cross-zone</b> is on. A target that fails its <b>health check</b> gets no requests. A target that leaves is <b>draining</b>: it finishes what it has and gets nothing new. The instances belong to an <b>Auto Scaling group</b>, which keeps the desired number running and changes that number when a <b>scaling policy</b> asks. <b>Lifecycle hooks</b> make the group wait at launch and at termination, and a <b>warm pool</b> keeps prepared instances ready. <b>Instance refresh</b> replaces the fleet in batches. A <b>Network Load Balancer</b> does the same job at layer 4, and <b>Global Accelerator</b> gives fixed addresses in front of it all.</p>
+    <div class="legend">
+      <span style="--c:var(--edge)">Load balancers, listeners, rules</span>
+      <span style="--c:var(--priv)">Target group</span>
+      <span style="--c:var(--orange)">Instances and the Auto Scaling group</span>
+      <span style="--c:var(--dc)">Clients, warm pool</span>
+      <span style="--c:var(--region)">Global Accelerator</span>
+      <span style="--c:var(--bad)">Unhealthy targets and errors</span>
+    </div>
+  </div>
+
+  <h2>A deploy, second by second</h2>
+  <div class="card sim">
+    <p>Four instances are behind an Application Load Balancer. A deploy replaces the application on them. The application needs 30 seconds to stop and start again. Choose how the deploy takes an instance out and how the target group is set. Before you read the result, say which status code the clients get, and for how long.</p>
+    <div class="seg" id="dpMethod"></div>
+    <div class="seg" id="dpDelay"></div>
+    <div class="seg" id="dpLong"></div>
+    <div class="seg" id="dpHc"></div>
+    <div class="seg" id="dpBatch"></div>
+    <div class="seg" id="dpKeep"></div>
+    <div class="calc">
+      <div><div class="lbl">During the deploy, clients see</div><div class="big" id="dpSees"></div></div>
+      <div><div class="lbl">The setting behind it</div><div class="big" id="dpWhy"></div></div>
+      <div><div class="lbl">The deploy takes</div><div class="big" id="dpTime"></div></div>
+      <div><div class="lbl">Between deploys</div><div class="big" id="dpStray"></div></div>
+    </div>
+    <div class="table-wrap"><table id="dpTable"></table></div>
+    <p class="result" id="dpMsg"></p>
+    <p class="note">The health check here needs 2 failures in a row to mark a target unhealthy and 3 successes in a row to mark it healthy. The idle timeout of the load balancer is the default, 60 seconds. Times are rounded: a health check does not start at the same second as the deploy.</p>
+  </div>
+
+  <h2>A traffic jump: how long is the fleet overloaded?</h2>
+  <div class="card sim">
+    <p>A fleet of <code>m7g.large</code> instances runs at its target value. Then the traffic jumps, at once. A scaling policy must notice it, ask for instances, and wait until they can take requests. Choose the size of the jump, the target, the policy and how an instance gets ready. Before you read the result, say whether the fleet is overloaded and for how many minutes.</p>
+    <div class="seg" id="scJump"></div>
+    <div class="seg" id="scTarget"></div>
+    <div class="seg" id="scPolicy"></div>
+    <div class="seg" id="scReady"></div>
+    <div class="calc">
+      <div><div class="lbl">Headroom before the jump</div><div class="big" id="scHead"></div></div>
+      <div><div class="lbl">Overloaded for</div><div class="big" id="scOver"></div></div>
+      <div><div class="lbl">Back at the target after</div><div class="big" id="scBack"></div></div>
+      <div><div class="lbl">Fleet for the normal load</div><div class="big" id="scFleet"></div></div>
+    </div>
+    <div class="table-wrap"><table id="scTable"></table></div>
+    <p class="result" id="scMsg"></p>
+    <p class="note">A model, with these assumptions: detailed monitoring, so one datapoint a minute; the scale-out alarm of target tracking needs 3 datapoints above the target; a later round needs 1 more minute and the time to get ready; the instance warm-up equals the time to get ready; the maximum size of the group allows every step. For the request metric, the target is the request rate at which an instance runs at the chosen CPU. The price is the list price for US East (N. Virginia).</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>What a load balancer is made of</h3>
+      <ul>
+        <li>A load balancer is not one machine. It is a <b>DNS name</b> and a set of <b>nodes</b>, at least one in every AZ that you enable.</li>
+        <li>An ALB needs two AZs or more. In each, it needs a subnet of <code>/27</code> or larger with 8 free addresses. The nodes take addresses from it when they scale.</li>
+        <li>The addresses of an ALB <b>change</b>. Point to it with a Route 53 alias record, never with an IP address. An NLB has one fixed address per AZ.</li>
+        <li><b>Internet-facing</b> nodes have public addresses. <b>Internal</b> nodes have private ones only. In both cases the targets can be in private subnets.</li>
+        <li>An ALB adds capacity within minutes. A jump of several times within seconds can be faster than that. Before a known event, reserve capacity for it (an LCU reservation).</li>
+        <li>The ALB has a security group. The security group of the targets allows the application port from that group and from nothing else.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>ALB: listeners and rules</h3>
+      <ul>
+        <li>A <b>listener</b> is a protocol and a port: HTTP or HTTPS. It also carries HTTP/2, gRPC and WebSockets.</li>
+        <li>A listener has <b>rules</b> with a priority. The load balancer tries them from the lowest number up. The first match wins. The <b>default rule</b> is last.</li>
+        <li><b>Conditions:</b> host header, path, any HTTP header, method, query string, source IP.</li>
+        <li><b>Actions:</b> forward to one target group, or to several by weight. Redirect, for example HTTP to HTTPS. Return a fixed response. Authenticate the user with OIDC or Cognito first.</li>
+        <li>The weighted forward is how blue/green and canary releases work on an ALB (Day 16).</li>
+        <li>The target sees the address of the load balancer node as the source. The client's address is in the header <code>X-Forwarded-For</code>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Target groups and target types</h3>
+      <ul>
+        <li>A target group is a protocol, a port, a health check and a list of targets. The routing settings also belong to it: algorithm, stickiness, slow start, deregistration delay.</li>
+        <li><code>instance</code>: targets by instance ID. An Auto Scaling group registers them for you.</li>
+        <li><code>ip</code>: any private address. ECS tasks, Kubernetes pods, servers on premises through Direct Connect.</li>
+        <li><code>lambda</code>: ALB only. One function. Request and response are limited to 1 MB.</li>
+        <li><code>alb</code>: NLB only. It puts the fixed addresses of an NLB, or PrivateLink, in front of an ALB.</li>
+        <li>You cannot change the type of a target group later.</li>
+        <li><b>Algorithm:</b> round robin by default. <b>Least outstanding requests</b> is better when requests differ much in duration, or instances in size.</li>
+        <li><b>Slow start</b> (30 to 900 s) raises the share of a new target step by step. <b>Stickiness</b> ties a client to one target with a cookie. Avoid it where you can: the load becomes uneven.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Health checks</h3>
+      <ul>
+        <li>Every load balancer node checks every target: a path, an interval, a timeout and the status codes that count as success.</li>
+        <li>After the <b>unhealthy threshold</b> of failures in a row, the target gets no new requests. After the <b>healthy threshold</b> of successes in a row, it gets them again. A new target starts as <code>initial</code> and must pass the healthy threshold first.</li>
+        <li>ALB defaults: every 30 s, 5 s timeout, 5 successes, 2 failures. So a failure is found after about 60 s, and a new target waits 2.5 minutes for its first request.</li>
+        <li>A health check finds a failure <b>after it has happened</b>. For a removal that you planned, deregister the target instead.</li>
+        <li>Keep the check <b>shallow</b>: “this process can serve”. A check that calls the database marks every target unhealthy at the same moment when the database is slow.</li>
+        <li>If all targets of a group are unhealthy, the ALB sends to all of them. It <b>fails open</b>.</li>
+        <li>The Auto Scaling group looks only at EC2 status checks unless you set its <b>health check type to ELB</b>. Then it replaces the instances that the load balancer calls unhealthy.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Cross-zone load balancing</h3>
+      <ul>
+        <li>DNS spreads the clients over the nodes, about evenly. Each node then divides its share among targets.</li>
+        <li><b>Off:</b> a node uses only the targets in its own AZ. With 2 targets in one AZ and 8 in the other, each of the 2 gets 25% of all requests and each of the 8 gets 6.25%.</li>
+        <li><b>On:</b> every node uses every target. Each of the 10 gets 10%.</li>
+        <li>On an ALB it is always on; you can turn it off for one target group. On an NLB and a Gateway Load Balancer it is off by default.</li>
+        <li>On an NLB, traffic that crosses to another AZ is charged as data transfer between AZs. On an ALB it is not charged.</li>
+        <li>Off has one use: each AZ is independent, so you can move traffic away from a bad AZ cleanly (Day 24). Then every AZ needs the same number of targets.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Deregistration delay</h3>
+      <ul>
+        <li>When you deregister a target, its state becomes <code>draining</code>. It gets no new requests. The requests that are running may finish.</li>
+        <li>When the <b>deregistration delay</b> ends, the load balancer closes what is left and the target is gone. The default is 300 s.</li>
+        <li>Set it a little above your longest request. With 300 s for an API that answers in one second, every deploy and every scale-in waits five minutes for nothing.</li>
+        <li>The application must <b>stay up</b> during the delay. An Auto Scaling group waits for it before it terminates an instance. A deploy script that stops the application itself must deregister and wait first.</li>
+        <li>On <code>SIGTERM</code> the application should finish its running requests and then exit.</li>
+        <li>In Kubernetes a pod gets <code>SIGTERM</code> at the moment its deregistration starts. A short <code>preStop</code> sleep covers the gap (Day 13).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Timeouts and the three error codes</h3>
+      <ul>
+        <li><b>502 Bad Gateway:</b> the load balancer reached for a target and got no valid answer. The connection was refused, reset, or closed in the middle. Deploys and keep-alive settings cause most of them.</li>
+        <li><b>503 Service Unavailable:</b> there is no target to send to. The target group is empty, or every target is draining or still <code>initial</code>.</li>
+        <li><b>504 Gateway Timeout:</b> the target did not answer within the idle timeout, or the connection to it was not made within 10 s. A slow application, or a security group that drops the packets.</li>
+        <li>The <b>idle timeout</b> is 60 s by default. The keep-alive timeout of the application must be <b>longer</b>. If it is shorter, the load balancer reuses a connection at the moment the application closes it: a 502.</li>
+        <li>Two metrics tell you who made the error. <code>HTTPCode_ELB_5XX_Count</code>: the load balancer. <code>HTTPCode_Target_5XX_Count</code>: your application.</li>
+        <li>In the access log, <code>target_status_code</code> is <code>-</code> when the target never answered.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>TLS and SNI</h3>
+      <ul>
+        <li>An HTTPS listener ends TLS at the load balancer. The certificate comes from ACM, costs nothing and renews itself.</li>
+        <li>A listener has one default certificate and up to 25 more. The client names the host in the TLS handshake (<b>SNI</b>), and the load balancer picks the certificate that matches. One listener serves many domains.</li>
+        <li>The <b>security policy</b> fixes the TLS versions and ciphers. Use a TLS 1.3 policy, such as <code>ELBSecurityPolicy-TLS13-1-2-2021-06</code>, unless old clients force you lower.</li>
+        <li>From load balancer to target you choose HTTP or HTTPS. With HTTPS the ALB encrypts and does <b>not</b> validate the target's certificate.</li>
+        <li><b>Mutual TLS:</b> the ALB can verify client certificates against a trust store, or pass them to the target in a header.</li>
+        <li>On an NLB, a TLS listener ends TLS. A TCP listener passes it through unchanged, for a target that must do the handshake itself.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Network Load Balancer</h3>
+      <ul>
+        <li>Layer 4: TCP, UDP and TLS. It does not read HTTP, so there are no rules by host or path. A listener is a port that forwards to one target group.</li>
+        <li>One <b>static address</b> per AZ, and it can be an Elastic IP. Customers can put it in a firewall list.</li>
+        <li>It takes very high rates and sudden jumps without warming, and adds less latency than an ALB.</li>
+        <li>It chooses a target <b>per connection</b>, by a hash of the flow. The connection stays there for its whole life. Long-lived connections do not move when you add targets.</li>
+        <li>The target sees the <b>client's address</b>. Its security group must allow the clients, not only the load balancer.</li>
+        <li>The idle timeout for TCP is 350 s. After that the NLB forgets the flow without telling anybody, and the next packet gets a reset. Set TCP keep-alive below it.</li>
+        <li>An endpoint service for PrivateLink needs an NLB (Day 3).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Gateway Load Balancer</h3>
+      <ul>
+        <li>Layer 3. It takes every IP packet, of any protocol, sends it through a fleet of appliances and gets it back.</li>
+        <li>A route table sends the traffic to a <b>Gateway Load Balancer endpoint</b>. The packets reach the appliance in a GENEVE tunnel on port 6081, unchanged inside.</li>
+        <li>One flow always goes to the same appliance, in both directions. A stateful firewall needs that.</li>
+        <li>Health checks take a failed appliance out, and an Auto Scaling group replaces it.</li>
+        <li>It is for inspection, not for applications. Day 2 has the routing.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>The Auto Scaling group</h3>
+      <ul>
+        <li>Three numbers: <b>minimum</b>, <b>maximum</b>, <b>desired</b>. The group has one job: keep the desired number of healthy instances running, spread evenly over its AZs.</li>
+        <li>A <b>launch template</b> says what to launch: AMI, type, role, security groups, user data. Launch configurations are the old form; do not use them.</li>
+        <li>The group replaces an instance that fails its health check. The <b>health check grace period</b> gives a new instance time to start before failures count.</li>
+        <li>With a target group attached, the group registers each new instance and deregisters each one before it terminates it.</li>
+        <li>On scale-in, the default <b>termination policy</b> first keeps the AZs balanced, then removes instances with the oldest launch template. <b>Scale-in protection</b> keeps one instance out of it.</li>
+        <li>All of this assumes that instances can be thrown away. Nothing that matters is stored on them.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Dynamic scaling: target tracking and step</h3>
+      <ul>
+        <li><b>Target tracking:</b> you name a metric and a value, such as average CPU at 50%. The policy makes two alarms. Above the target for 3 minutes: scale out. Well below it for 15 minutes: scale in. Out is fast, in is slow.</li>
+        <li>The metric must fall when you add instances, in proportion. Average CPU and requests per target do. Latency and the total request count do not.</li>
+        <li>For workers on a queue, publish the <b>backlog per instance</b> as a custom metric and track that.</li>
+        <li><b>Step scaling:</b> you write the alarm and the steps: 10% over, add 2; 30% over, add 6. More control, and more to tune. <b>Simple scaling</b> is the old form, with a cooldown after every change.</li>
+        <li><b>Instance warm-up</b> is the time until a new instance counts in the metric. Without it, the policy sees the same high average and launches again.</li>
+        <li>Turn on <b>detailed monitoring</b>. With 5-minute metrics, every decision is late.</li>
+        <li>A policy never goes below the minimum or above the maximum. A maximum set too low is an outage that waits for a busy day.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Scheduled and predictive scaling</h3>
+      <ul>
+        <li>A <b>scheduled action</b> sets minimum, maximum or desired at a time you give, once or by a cron expression. For events with a date.</li>
+        <li><b>Predictive scaling</b> learns the daily and weekly pattern from the history of the group. It needs at least 24 hours of data and uses up to 14 days.</li>
+        <li>It forecasts the next 48 hours and launches capacity <b>before</b> each hour needs it, earlier by a buffer time that you set.</li>
+        <li>Start in <b>forecast only</b> mode. Compare the forecast with what happened. Then let it scale.</li>
+        <li>It only adds capacity. Keep a target tracking policy next to it, for the jump that was in no forecast and for scaling in.</li>
+        <li>It pays off when the load has a rhythm and the instances are slow to start.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Lifecycle hooks</h3>
+      <ul>
+        <li>A hook holds an instance at launch (<code>Pending:Wait</code>) or before termination (<code>Terminating:Wait</code>) until you say that it may go on.</li>
+        <li><b>At launch:</b> install software, fetch configuration, warm a cache. Until the hook is completed, the instance is not registered with the load balancer. The instance can complete its own hook at the end of user data.</li>
+        <li><b>At termination:</b> finish the job in progress, upload logs, leave a cluster.</li>
+        <li>You end the wait with <code>complete-lifecycle-action</code>, as <code>CONTINUE</code> or <code>ABANDON</code>. At launch, <code>ABANDON</code> terminates the instance. At termination, both go on to terminate.</li>
+        <li>The timeout is 1 hour by default, and <code>ABANDON</code> is the default result. A heartbeat extends the wait, up to 48 hours.</li>
+        <li>The hook sends an event to EventBridge, so a Lambda function or an SSM Automation can do the work.</li>
+        <li>A Spot interruption gives 2 minutes. No hook can hold the instance longer.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>Warm pools</h3>
+      <ul>
+        <li>A warm pool is a set of instances that have already done their first boot. They wait <b>stopped</b> (you pay for the volumes), hibernated, or running.</li>
+        <li>A scale-out takes from the pool first. A stopped instance is in service in seconds, where a new one takes minutes.</li>
+        <li>Lifecycle hooks run when an instance enters the pool, and again when it leaves it.</li>
+        <li>With a reuse policy, a scale-in returns instances to the pool instead of terminating them.</li>
+        <li>By default the pool holds the difference between maximum and desired. Set a smaller prepared capacity.</li>
+        <li>A warm pool does not work with a mixed instances policy or with Spot.</li>
+        <li>Try the cheaper fix first: a baked AMI (Day 4).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Mixed instances and Spot</h3>
+      <ul>
+        <li>One group can use several instance types and both purchase options.</li>
+        <li>You set an <b>On-Demand base</b>, and above it the share of On-Demand and Spot.</li>
+        <li>List many types of similar size, across families and generations. Or give attributes (vCPUs, memory) and let EC2 choose the types.</li>
+        <li>The Spot allocation strategy <code>price-capacity-optimized</code> takes the pools with the most spare capacity at a low price. That gives fewer interruptions than the lowest price alone.</li>
+        <li>An interruption comes with <b>2 minutes</b> notice. <b>Capacity Rebalancing</b> launches a replacement earlier, when EC2 signals that an instance is at risk.</li>
+        <li>When sizes differ, give each type a <b>weight</b>, and the group counts capacity in units instead of instances.</li>
+        <li>With targets of different size, use least outstanding requests on the target group.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Instance refresh</h3>
+      <ul>
+        <li>An instance refresh replaces the instances of a group after the launch template changed: a new AMI, a new type, new user data.</li>
+        <li><b>Minimum healthy percentage</b> (default 90) is the share of the desired capacity that must stay in service. It fixes the batch size.</li>
+        <li><b>Maximum healthy percentage</b> (up to 200) lets the group launch new instances before it terminates old ones, so capacity never falls.</li>
+        <li>After each batch it waits for the health checks and the instance warm-up.</li>
+        <li><b>Checkpoints</b> stop the refresh at a percentage, so you can look. <b>Auto rollback</b> returns to the old template when the refresh fails or a CloudWatch alarm fires.</li>
+        <li><b>Skip matching</b> leaves the instances that already have the new configuration.</li>
+        <li>Every replaced instance goes through the deregistration delay and the lifecycle hooks, as in any scale-in.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Global Accelerator</h3>
+      <ul>
+        <li>Global Accelerator gives you two <b>static anycast</b> IPv4 addresses. AWS announces them from its edge locations all over the world.</li>
+        <li>A client's packets enter the AWS network at the nearest edge and travel on the AWS backbone to an endpoint: an ALB, an NLB, an instance or an Elastic IP, in one Region or several.</li>
+        <li>It works at layer 4, for TCP and UDP. It does not cache and does not read HTTP. CloudFront is for HTTP content (Day 20).</li>
+        <li>It checks the health of the endpoints and moves traffic to another Region in under a minute. The failover does not wait for a DNS TTL.</li>
+        <li>A <b>traffic dial</b> per Region and a weight per endpoint let you move traffic by percentage.</li>
+        <li>Choose it for fixed addresses, for protocols that are not HTTP, and for fast failover between Regions.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Numbers to remember</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>What</th><th>Number</th><th>Why it matters</th><th>Can it be raised?</th></tr>
+      <tr><td>ALB idle timeout</td><td class="num">60 s</td><td>A request that takes longer gets a 504. The keep-alive timeout of the application must be above it.</td><td>1 to 4,000 s</td></tr>
+      <tr><td>ALB time to connect to a target</td><td class="num">10 s</td><td>After that, a 504. A dropped packet at a security group looks like this.</td><td>No</td></tr>
+      <tr><td>Deregistration delay</td><td class="num">300 s</td><td>How long a draining target may finish its requests. Every deploy and scale-in waits for it.</td><td>0 to 3,600 s</td></tr>
+      <tr><td>ALB health check defaults</td><td class="num">30 s interval · 5 s timeout<br>5 healthy · 2 unhealthy</td><td>About 60 s to find a failure, and 150 s before a new target gets requests.</td><td>Interval 5 to 300 s<br>thresholds 2 to 10</td></tr>
+      <tr><td>Slow start</td><td class="num">30 to 900 s</td><td>Off by default. For applications that are slow until their caches and pools are full.</td><td>—</td></tr>
+      <tr><td>Rules per ALB</td><td class="num">100</td><td>Not counting the default rules. One ALB can serve many services by host name.</td><td>Yes</td></tr>
+      <tr><td>Certificates per ALB</td><td class="num">25</td><td>Not counting the default certificate. Chosen by SNI.</td><td>Yes</td></tr>
+      <tr><td>Targets per ALB</td><td class="num">1,000</td><td>Also 100 target groups per ALB.</td><td>Yes</td></tr>
+      <tr><td>Load balancers per Region</td><td class="num">50</td><td>Of each kind. A load balancer per microservice reaches this, and the bill, quickly.</td><td>Yes</td></tr>
+      <tr><td>Subnet for an ALB</td><td class="num">/27 · 8 free addresses</td><td>A full subnet stops the ALB from scaling.</td><td>—</td></tr>
+      <tr><td>Lambda as a target</td><td class="num">1 MB</td><td>Request body and response body.</td><td>No</td></tr>
+      <tr><td>NLB idle timeout</td><td class="num">350 s TCP · 120 s UDP</td><td>Idle connections are forgotten without a notice.</td><td>TCP: 60 to 6,000 s</td></tr>
+      <tr><td>Cross-zone, by default</td><td class="num">ALB on · NLB off · GWLB off</td><td>With it off, unequal AZs give unequal load.</td><td>A setting</td></tr>
+      <tr><td>Target tracking alarms</td><td class="num">3 min out · 15 min in</td><td>Datapoints of one minute. The group grows fast and shrinks carefully.</td><td>No; use step scaling</td></tr>
+      <tr><td>Default cooldown</td><td class="num">300 s</td><td>Only for simple scaling. Target tracking and step scaling use the instance warm-up.</td><td>Yes</td></tr>
+      <tr><td>Health check grace period</td><td class="num">300 s console · 0 s API</td><td>Shorter than the boot: the group terminates instances that are still starting.</td><td>Yes</td></tr>
+      <tr><td>Lifecycle hook timeout</td><td class="num">3,600 s</td><td>From 30 to 7,200 s. With heartbeats, at most 48 hours in total.</td><td>Yes</td></tr>
+      <tr><td>Spot interruption notice</td><td class="num">2 minutes</td><td>Everything the instance must do to leave cleanly has to fit.</td><td>No</td></tr>
+      <tr><td>Predictive scaling</td><td class="num">24 h · 14 days · 48 h</td><td>History it needs, history it uses, and how far it forecasts.</td><td>—</td></tr>
+      <tr><td>Instance refresh, minimum healthy</td><td class="num">90%</td><td>Default. A group of 4 at 90% cannot replace any instance unless it may launch first.</td><td>0 to 100%</td></tr>
+      <tr><td>Instance types in one group</td><td class="num">40</td><td>Overrides in a mixed instances policy. More with attribute-based selection.</td><td>No</td></tr>
+      <tr><td>Auto Scaling groups per Region</td><td class="num">500</td><td>Also 50 scaling policies and 50 lifecycle hooks per group.</td><td>Yes</td></tr>
+      <tr><td>Global Accelerator addresses</td><td class="num">2 static IPv4</td><td>From two separate network zones. You can bring your own addresses.</td><td>—</td></tr>
+    </table>
+    <p class="note">Defaults from the Elastic Load Balancing and EC2 Auto Scaling user guides and quota pages. AWS changes these; check Service Quotas in your own account before you design against a number.</p>
+  </div>
+
+  <h2>How it fails in production</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Symptom</th><th>Cause</th><th>How you find it</th><th>Fix</th></tr>
+      <tr>
+        <td><b>Every deploy gives 502 errors for 30 to 60 seconds.</b></td>
+        <td>The deploy stops the application while the target is still registered. The load balancer learns of it only from failed health checks.</td>
+        <td><code>HTTPCode_ELB_502_Count</code> rises at each deploy. Access log lines with <code>target_status_code</code> <code>-</code>.</td>
+        <td>Deregister, wait for the delay, then stop. Or replace instances with an instance refresh, which does this.</td>
+      </tr>
+      <tr>
+        <td><b>A few 502 errors all day, with no line in the application log.</b> More of them when traffic is low.</td>
+        <td>The keep-alive timeout of the application is shorter than the idle timeout of the ALB. Node.js closes idle connections after 5 s by default.</td>
+        <td>The errors are in the ELB metric and not in the target metric. The server's keep-alive setting is below 60 s.</td>
+        <td>Set the application's keep-alive timeout above the idle timeout, for example 65 s.</td>
+      </tr>
+      <tr>
+        <td><b>An export always fails with a 504 after exactly 60 seconds.</b></td>
+        <td>The request takes longer than the idle timeout and sends no data in that time.</td>
+        <td>Access log: <code>elb_status_code</code> 504 and a request time of 60 s.</td>
+        <td>Raise the idle timeout. Better: start a job, return at once, and let the client fetch the result.</td>
+      </tr>
+      <tr>
+        <td><b>The whole site returns 503.</b> The instances are running.</td>
+        <td>The target group has no usable target: nothing is registered, the targets are in an AZ that is not enabled on the load balancer, or all were replaced at once.</td>
+        <td><code>HealthyHostCount</code> is 0. <code>describe-target-health</code> shows <code>unused</code>, <code>draining</code> or <code>initial</code>.</td>
+        <td>Enable the AZ. Attach the target group to the Auto Scaling group. Replace in batches.</td>
+      </tr>
+      <tr>
+        <td><b>New instances start, live for a few minutes, and are terminated. Again and again.</b></td>
+        <td>The health check grace period is shorter than the time the application needs to start. The group sees a failed ELB health check and replaces the instance.</td>
+        <td>Activity history of the group: “taken out of service in response to an ELB system health check failure”, shortly after each launch.</td>
+        <td>A longer grace period, or a launch lifecycle hook. And a faster boot.</td>
+      </tr>
+      <tr>
+        <td><b>All targets become unhealthy in the same minute.</b> The processes are fine.</td>
+        <td>A deep health check. It calls the database or another service, and that was slow.</td>
+        <td><code>UnHealthyHostCount</code> jumps to the full number at once. The reason is <code>Target.Timeout</code>.</td>
+        <td>A shallow health check. Report the state of dependencies in a separate endpoint for monitoring.</td>
+      </tr>
+      <tr>
+        <td><b>Targets in a new target group never become healthy.</b> On the instance, <code>curl localhost</code> works.</td>
+        <td>The security group of the target does not allow the load balancer on the health check port. Or the path answers 301, 302 or 401.</td>
+        <td>The reason in <code>describe-target-health</code>: <code>Target.Timeout</code> for the first, <code>Target.ResponseCodeMismatch</code> for the second.</td>
+        <td>Allow the load balancer's security group. Give the health check a path that returns 200 without a login.</td>
+      </tr>
+      <tr>
+        <td><b>The group scales out, in, and out again within the hour.</b></td>
+        <td>No instance warm-up, so new instances pull the average down before they carry load. Or two policies on metrics that disagree.</td>
+        <td>The activity history shows launch and terminate in turns.</td>
+        <td>Set the default instance warm-up to the real start time. Use one target tracking policy on one metric.</td>
+      </tr>
+      <tr>
+        <td><b>At the peak the group does not grow.</b> CPU is at 100%.</td>
+        <td>The group is at its maximum. Or the launch fails: the vCPU quota is reached, or there is no capacity for the one instance type.</td>
+        <td>Desired equals maximum. Or failed activities with <code>VcpuLimitExceeded</code> or <code>InsufficientInstanceCapacity</code>.</td>
+        <td>Raise the maximum and the quota before the season. Allow several instance types and AZs.</td>
+      </tr>
+      <tr>
+        <td><b>One AZ runs at 90% CPU and the other at 20%.</b></td>
+        <td>Cross-zone is off and the AZs have different numbers of targets. Or sticky sessions. Or long-lived connections on an NLB that were made before the new targets existed.</td>
+        <td>CPU per AZ, and the attributes of the load balancer and the target group.</td>
+        <td>Turn on cross-zone, or keep the AZs equal. Remove stickiness. Make clients reconnect from time to time.</td>
+      </tr>
+      <tr>
+        <td><b>Through an NLB, a connection that was idle for six minutes fails on its next use.</b> Often a database connection pool.</td>
+        <td>The NLB forgot the flow after 350 s without a packet. It sends no notice. The next packet gets a reset.</td>
+        <td><code>TCP_ELB_Reset_Count</code> on the load balancer. “Connection reset” in the client after a quiet period.</td>
+        <td>TCP keep-alive below 350 s, or a shorter idle time in the pool, or a longer NLB idle timeout.</td>
+      </tr>
+      <tr>
+        <td><b>An instance calls its own service through an internal NLB. About one call in N times out.</b></td>
+        <td>The NLB keeps the client's address. When it picks the calling instance itself as the target, source and destination are the same host and the connection fails.</td>
+        <td>The share of failures is close to one divided by the number of targets.</td>
+        <td>Register targets by IP, or turn off client IP preservation on the target group.</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2>What drives the bill</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Item</th><th>How it is charged</th><th>Figure</th><th>How to pay less</th></tr>
+      <tr><td><b>ALB hours</b></td><td>Per hour that the load balancer exists, with or without traffic.</td><td class="num">$0.0225 / hour</td><td>About $16.40 a month each. Share one ALB between services with host and path rules.</td></tr>
+      <tr><td><b>ALB capacity units (LCU)</b></td><td>Per LCU-hour. You pay for the highest of four measures: 25 new connections a second, 3,000 active connections, 1 GB an hour to instance targets, 1,000 rule evaluations a second.</td><td class="num">$0.008 / LCU-hour</td><td>100 GB a day is about 4.2 LCUs: $24 a month. The first 10 rules are not counted. Keep-alive lowers the number of new connections.</td></tr>
+      <tr><td><b>NLB</b></td><td>Per hour, plus per NLCU-hour: 800 new TCP connections a second, 100,000 active, 1 GB an hour.</td><td class="num">$0.0225 / hour<br>$0.006 / NLCU-hour</td><td>For the same bytes an NLB costs less than an ALB. Do not pay for layer 7 when you do not use it.</td></tr>
+      <tr><td><b>Gateway Load Balancer</b></td><td>Per hour and per GLCU-hour. The endpoint is charged separately, per hour and per GB.</td><td class="num">$0.0125 / hour<br>$0.004 / GLCU-hour</td><td>Send only the traffic that needs inspection through it (Day 2).</td></tr>
+      <tr><td><b>Public IPv4 addresses</b></td><td>Each address of an internet-facing load balancer, per hour.</td><td class="num">$0.005 / hour</td><td>An ALB in 3 AZs has at least 3: about $11 a month. Make a load balancer internal when only your own network uses it.</td></tr>
+      <tr><td><b>Cross-zone on an NLB</b></td><td>Data transfer between AZs, in each direction.</td><td class="num">$0.01 / GB</td><td>Leave it off and keep the AZs equal, or accept the charge for even load. On an ALB there is no charge.</td></tr>
+      <tr><td><b>Global Accelerator</b></td><td>Per hour for each accelerator, plus a premium per GB that depends on the two ends.</td><td class="num">$0.025 / hour<br>from $0.015 / GB</td><td>About $18 a month before traffic. Use it where fixed addresses or fast failover are worth it.</td></tr>
+      <tr><td><b>Headroom</b></td><td>Instances that run below their capacity so that a jump can be absorbed.</td><td class="num">35 or 20 instances</td><td>The same load at a target of 40% or 70%. A faster start (baked AMI, warm pool) lets you run a higher target.</td></tr>
+      <tr><td><b>Warm pool</b></td><td>Stopped instances: their EBS volumes and Elastic IPs. Running instances: the full price.</td><td class="num">$0.08 / GiB-month</td><td>Keep the pool stopped, and limit its size with a maximum prepared capacity.</td></tr>
+      <tr><td><b>Spot</b></td><td>The Spot price of the pool, per second.</td><td class="num">up to 90% less</td><td>For stateless fleets: an On-Demand base, Spot above it, many instance types.</td></tr>
+      <tr><td><b>Detailed monitoring</b></td><td>One-minute metrics for each instance.</td><td class="num">about $2.10 / instance-month</td><td>Worth it on every group that scales on CPU. Without it the scaling is late.</td></tr>
+      <tr><td><b>Free</b></td><td colspan="3">Auto Scaling groups, scaling policies, predictive scaling, lifecycle hooks, instance refresh, target groups, health checks, and public certificates from ACM. You pay for the instances, the load balancers and the CloudWatch metrics behind them.</td></tr>
+    </table>
+    <p class="note">Figures are list prices for US East (N. Virginia) from the AWS pricing pages when this page was written. Prices differ by Region and change over time. Check the pricing page for your Region.</p>
+  </div>
+
+  <h2>ALB, NLB or Gateway Load Balancer?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Application Load Balancer</th><th>Network Load Balancer</th><th>Gateway Load Balancer</th></tr>
+      <tr><td><b>Layer</b></td><td>7: HTTP requests</td><td>4: connections</td><td>3: IP packets</td></tr>
+      <tr><td><b>Protocols</b></td><td>HTTP, HTTPS, gRPC, WebSockets</td><td>TCP, UDP, TLS</td><td>Any IP traffic</td></tr>
+      <tr><td><b>Chooses a target</b></td><td>Per request, by rules on host, path and headers</td><td>Per connection, by a hash of the flow</td><td>Per flow, always the same appliance</td></tr>
+      <tr><td><b>Addresses</b></td><td>A DNS name; the addresses change</td><td>One static address per AZ</td><td>Reached through endpoints in route tables</td></tr>
+      <tr><td><b>Client address at the target</b></td><td>In <code>X-Forwarded-For</code></td><td>The real source address</td><td>The original packet, unchanged</td></tr>
+      <tr><td><b>TLS</b></td><td>Ends it; certificates by SNI; mutual TLS</td><td>Ends it, or passes it through</td><td>Does not touch it</td></tr>
+      <tr><td><b>Target types</b></td><td>instance, ip, lambda</td><td>instance, ip, alb</td><td>instance, ip</td></tr>
+      <tr><td><b>Cross-zone by default</b></td><td>On</td><td>Off</td><td>Off</td></tr>
+      <tr><td><b>A sudden jump in traffic</b></td><td>Scales in minutes; reserve capacity before an event</td><td>Takes it</td><td>Takes it</td></tr>
+      <tr><td><b>PrivateLink endpoint service</b></td><td>Only behind an NLB</td><td>Yes</td><td>Yes, for appliances</td></tr>
+      <tr><td><b>Choose it when</b></td><td>Web applications and APIs: routing by host and path, authentication, WAF, many services on one load balancer</td><td>Protocols that are not HTTP, fixed addresses, very high or sudden load, TLS that must reach the target, PrivateLink</td><td>Firewalls and inspection appliances from a vendor, in the path of the traffic</td></tr>
+    </table>
+    <p class="note">The Classic Load Balancer is the generation before these three. You will meet it in old accounts. Do not start anything new on it.</p>
+  </div>
+
+  <h2>Target tracking, step, scheduled or predictive?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th></th><th>Target tracking</th><th>Step scaling</th><th>Scheduled</th><th>Predictive</th></tr>
+      <tr><td><b>You give</b></td><td>A metric and a target value</td><td>An alarm, and steps by the size of the breach</td><td>A time and the new sizes</td><td>A metric and a target; it makes the forecast</td></tr>
+      <tr><td><b>It reacts to</b></td><td>The metric now</td><td>The metric now</td><td>The clock</td><td>The pattern of the last 14 days</td></tr>
+      <tr><td><b>Capacity arrives</b></td><td>3 minutes plus the start time, after the load</td><td>As fast as your alarm, plus the start time, after the load</td><td>Before the load</td><td>Before the load</td></tr>
+      <tr><td><b>Scales in</b></td><td>Yes, slowly</td><td>With a second policy</td><td>With a second action</td><td>No</td></tr>
+      <tr><td><b>What goes wrong</b></td><td>A metric that does not fall when instances are added</td><td>Steps tuned for last year's traffic</td><td>The event moves and the schedule does not</td><td>A day that does not look like the days before</td></tr>
+      <tr><td><b>Choose it when</b></td><td>Almost always. Start here.</td><td>You need a different reaction at different levels, or a faster alarm than three minutes</td><td>A known event: a sale, a batch window, office hours</td><td>A daily rhythm, and instances that take minutes to start</td></tr>
+    </table>
+    <p class="note">They combine. A common set: target tracking for the unknown, predictive scaling for the daily curve, and a scheduled action that raises the minimum before a sale. When several policies ask for different sizes, the largest wins.</p>
+  </div>
+
+  <h2>Hands-on lab</h2>
+  <div class="card lab">
+    <p><b>Goal:</b> build an ALB and an Auto Scaling group of two instances. Remove an instance the wrong way and watch the errors. Remove one the right way and see none. Then add a target tracking policy and replace the fleet with an instance refresh. About 45 minutes.</p>
+    <p><b>Cost:</b> under $0.15 for an hour: one ALB, two or three <code>t4g</code> instances and their public IPv4 addresses. The lab uses the default VPC.</p>
+    <ol>
+      <li>Find two default subnets and create two security groups. The load balancer accepts port 80 from your address only. The instances accept port 80 from the load balancer only.
+<pre class="code">export AWS_DEFAULT_REGION=ap-south-1
+
+VPC=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true --query 'Vpcs[0].VpcId' --output text)
+SUB1=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC Name=default-for-az,Values=true \
+  --query 'Subnets[0].SubnetId' --output text)
+SUB2=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC Name=default-for-az,Values=true \
+  --query 'Subnets[1].SubnetId' --output text)
+
+ALB_SG=$(aws ec2 create-security-group --group-name day05-alb --description "day05 alb" \
+  --vpc-id $VPC --query GroupId --output text)
+APP_SG=$(aws ec2 create-security-group --group-name day05-app --description "day05 app" \
+  --vpc-id $VPC --query GroupId --output text)
+aws ec2 authorize-security-group-ingress --group-id $ALB_SG --protocol tcp --port 80 \
+  --cidr $(curl -s https://checkip.amazonaws.com)/32
+aws ec2 authorize-security-group-ingress --group-id $APP_SG --protocol tcp --port 80 \
+  --source-group $ALB_SG</pre>
+      </li>
+      <li>Create the load balancer, a target group and a listener. The health check is fast (every 10 s, 2 failures, 2 successes) and the deregistration delay is 30 s, so that you do not wait long.
+<pre class="code">ALB=$(aws elbv2 create-load-balancer --name day05 --subnets $SUB1 $SUB2 \
+  --security-groups $ALB_SG --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+TG=$(aws elbv2 create-target-group --name day05 --protocol HTTP --port 80 --vpc-id $VPC \
+  --health-check-path / --health-check-interval-seconds 10 \
+  --healthy-threshold-count 2 --unhealthy-threshold-count 2 \
+  --query 'TargetGroups[0].TargetGroupArn' --output text)
+aws elbv2 modify-target-group-attributes --target-group-arn $TG \
+  --attributes Key=deregistration_delay.timeout_seconds,Value=30
+aws elbv2 create-listener --load-balancer-arn $ALB --protocol HTTP --port 80 \
+  --default-actions Type=forward,TargetGroupArn=$TG
+DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB \
+  --query 'LoadBalancers[0].DNSName' --output text)</pre>
+      </li>
+      <li>Write a launch template. The user data starts a small web server that answers with the instance ID. Then create the Auto Scaling group over both subnets, attached to the target group, with the health check type <code>ELB</code>.
+<pre class="code">cat &gt; userdata.sh &lt;&lt;'EOF'
+#!/bin/bash
+TOKEN=$(curl -s -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
+mkdir -p /srv/www
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id &gt; /srv/www/index.html
+systemd-run --unit=web python3 -m http.server 80 --directory /srv/www
+EOF
+
+AMI=$(aws ssm get-parameter \
+  --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 \
+  --query Parameter.Value --output text)
+aws ec2 create-launch-template --launch-template-name day05 --launch-template-data "{
+  \"ImageId\": \"$AMI\", \"InstanceType\": \"t4g.micro\",
+  \"SecurityGroupIds\": [\"$APP_SG\"],
+  \"MetadataOptions\": {\"HttpTokens\": \"required\"},
+  \"UserData\": \"$(base64 -w0 userdata.sh)\" }"
+
+aws autoscaling create-auto-scaling-group --auto-scaling-group-name day05 \
+  --launch-template 'LaunchTemplateName=day05,Version=$Latest' \
+  --min-size 2 --max-size 4 --desired-capacity 2 \
+  --vpc-zone-identifier "$SUB1,$SUB2" --target-group-arns $TG \
+  --health-check-type ELB --health-check-grace-period 60 --default-instance-warmup 30</pre>
+        On macOS, write <code>base64 -i userdata.sh</code> in place of <code>base64 -w0 userdata.sh</code>.
+      </li>
+      <li>Watch the targets go from <code>initial</code> to <code>healthy</code>. Repeat the first command until both are healthy. Then send a few requests.
+<pre class="code">aws elbv2 describe-target-health --target-group-arn $TG \
+  --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State,TargetHealth.Reason]' --output text
+
+for i in 1 2 3 4 5 6; do curl -s http://$DNS/; echo; done</pre>
+        You see two instance IDs in turn. That is round robin.
+      </li>
+      <li>Open a second terminal, set <code>DNS</code> there to the same value, and start a loop that prints the status code of two requests a second. Leave it running until the end of the lab.
+<pre class="code">while true; do curl -s -o /dev/null -m 12 -w '%{http_code} ' http://$DNS/; sleep 0.5; done</pre>
+      </li>
+      <li><b>The wrong way.</b> Terminate one instance through EC2. Nobody tells the load balancer. Before you run it, say what the loop will print.
+<pre class="code">VICTIM=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names day05 \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+aws ec2 terminate-instances --instance-ids $VICTIM</pre>
+        For some seconds the loop shows <code>502</code> or <code>504</code> between the <code>200</code>s: half of the requests still go to a target that is shutting down, until two health checks have failed. Then the group launches a replacement. Wait until two targets are healthy again.
+      </li>
+      <li><b>The right way.</b> Ask the Auto Scaling group to terminate an instance. It deregisters the target first and waits for the delay.
+<pre class="code">VICTIM=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names day05 \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+aws autoscaling terminate-instance-in-auto-scaling-group --instance-id $VICTIM \
+  --no-should-decrement-desired-capacity
+
+aws elbv2 describe-target-health --target-group-arn $TG \
+  --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output text</pre>
+        The target is <code>draining</code> for 30 seconds while the instance still runs. The loop prints only <code>200</code>.
+      </li>
+      <li>Add a target tracking policy, and look at the alarms that it made.
+<pre class="code">aws autoscaling put-scaling-policy --auto-scaling-group-name day05 --policy-name cpu50 \
+  --policy-type TargetTrackingScaling --target-tracking-configuration \
+  '{"PredefinedMetricSpecification":{"PredefinedMetricType":"ASGAverageCPUUtilization"},"TargetValue":50}'
+
+aws cloudwatch describe-alarms --alarm-name-prefix TargetTracking-day05 \
+  --query 'MetricAlarms[].[ComparisonOperator,Threshold,EvaluationPeriods,Period]' --output text</pre>
+        Two alarms. One is above 50 for 3 periods of 60 seconds: scale out. The other has a lower threshold and 15 periods: scale in. You did not choose the lower threshold; the policy did, so that the group does not go back and forth.
+      </li>
+      <li>Change the launch template and replace the fleet. With a maximum healthy percentage of 150, the group launches a new instance before it removes an old one.
+<pre class="code">aws ec2 create-launch-template-version --launch-template-name day05 --source-version 1 \
+  --launch-template-data '{"InstanceType":"t4g.small"}'
+aws autoscaling start-instance-refresh --auto-scaling-group-name day05 \
+  --preferences '{"MinHealthyPercentage":100,"MaxHealthyPercentage":150,"InstanceWarmup":30}'
+
+aws autoscaling describe-instance-refreshes --auto-scaling-group-name day05 \
+  --query 'InstanceRefreshes[0].[Status,PercentageComplete,StatusReason]' --output text</pre>
+        Repeat the last command until the status is <code>Successful</code>. The loop in the second terminal stays at <code>200</code> the whole time, and the instance IDs in the answers change.
+      </li>
+      <li>Clean up. Stop the loop with Ctrl-C first.
+<pre class="code">aws autoscaling delete-auto-scaling-group --auto-scaling-group-name day05 --force-delete
+until [ "$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names day05 \
+  --query 'length(AutoScalingGroups)')" = "0" ]; do sleep 10; done
+
+aws elbv2 delete-load-balancer --load-balancer-arn $ALB
+aws elbv2 wait load-balancers-deleted --load-balancer-arns $ALB
+aws elbv2 delete-target-group --target-group-arn $TG
+aws ec2 delete-launch-template --launch-template-name day05
+sleep 60   # the network interfaces of the load balancer need a moment to go
+aws ec2 delete-security-group --group-id $APP_SG
+aws ec2 delete-security-group --group-id $ALB_SG
+rm userdata.sh</pre>
+        If a security group reports a dependency, wait a minute and delete it again. Deleting the group also deletes its scaling policy and the two alarms.
+      </li>
+    </ol>
+  </div>
+
+  <h2>Interview questions</h2>
+  <details><summary>A deploy causes 502 errors for 30 seconds. Which settings are involved?</summary><p>A 502 means the load balancer sent a request to a target and got no valid answer, so a target was registered and not serving. I look at four things. First, how the deploy takes an instance out: if it stops the application without deregistering the target, the load balancer keeps sending until health checks fail. Second, the health check interval and unhealthy threshold, because their product is how long that lasts; 30 seconds fits an application that was back before two checks at a 30-second interval had failed, or checks every 15 seconds with a threshold of 2. Third, the deregistration delay: it must be longer than the longest request, and the application must stay up until it ends. Fourth, the way in: the new target must pass the healthy threshold on a health check that is true only when the application can really serve. The fix is to deregister, wait, stop, start, register and wait for healthy, which an instance refresh or CodeDeploy does for me. I also check the keep-alive timeout of the application against the idle timeout of the ALB, because that gives stray 502s that people blame on deploys.</p></details>
+  <details><summary>502, 503 and 504 from an ALB: what does each one tell you?</summary><p>All three are made by the load balancer, not by my application, and the metric <code>HTTPCode_ELB_5XX_Count</code> counts them separately from the target's own errors. A 502 says a target was chosen and the connection to it was refused, reset or closed before a full answer came: an application that stopped while registered, or closed an idle connection that the load balancer then reused. A 503 says there was no target to choose: an empty target group, targets in an AZ that is not enabled, or all of them replaced at once. A 504 says a target was chosen and did not answer in time: the request ran longer than the idle timeout of 60 seconds, or the connection could not be made within 10 seconds, which is often a security group. So 502 sends me to deploys and keep-alive settings, 503 to registration and batch size, and 504 to slow code and network rules.</p></details>
+  <details><summary>When do you choose an NLB over an ALB?</summary><p>The ALB is my default for HTTP, because it routes by host and path, ends TLS with certificates chosen by SNI, can authenticate users and works with WAF. I choose an NLB when one of five things is true. The protocol is not HTTP: plain TCP, UDP, or TLS that the target must end itself. The clients need fixed addresses for their firewalls. The load is very high or jumps suddenly, which an NLB takes without scaling first. The target must see the real client address at the network level. Or I am publishing a service through PrivateLink, which needs an NLB. I accept what comes with it: no routing by content, a target chosen per connection and not per request, cross-zone off by default, and an idle timeout of 350 seconds that drops quiet connections without a notice. When I need both fixed addresses and layer 7 rules, I put an NLB in front of an ALB.</p></details>
+  <details><summary>What is cross-zone load balancing, and when would you turn it off?</summary><p>DNS spreads clients over the load balancer nodes, one or more per AZ. Without cross-zone, a node sends only to targets in its own AZ, so if one AZ has two targets and another has eight, the two get four times the load each. With cross-zone, every node sends to every target and the load is even. On an ALB it is on and free. On an NLB it is off by default, and turning it on adds data transfer charges between AZs. I turn it off, or leave it off, when I want each AZ to stand alone: for zonal shift, where I move traffic away from an AZ that has a problem, and to avoid the transfer cost. The condition is that I then keep the same capacity in every AZ, which the Auto Scaling group does when it is balanced.</p></details>
+  <details><summary>How does target tracking work, and how do you choose the metric?</summary><p>I give a metric and a value, and the policy keeps the metric near that value by changing the desired capacity. It makes two CloudWatch alarms: one fires after three minutes above the target and scales out, the other after fifteen minutes well below it and scales in. The metric must be an average per instance that falls in proportion when I add instances. CPU is the usual start for CPU-bound services. Requests per target is better for a web fleet, because it has no ceiling: CPU cannot read above 100%, so after a large jump a CPU policy adds too few instances and needs several rounds. For queue workers I publish the backlog per instance. I do not use latency, because it does not fall in proportion and depends on things that more instances do not fix. I set the instance warm-up to the real start time, turn on detailed monitoring, and choose a target low enough that the fleet survives the time until new instances help.</p></details>
+  <details><summary>How do you design a health check for a load balancer?</summary><p>The health check answers one question: can this process serve a request now? So it is a cheap endpoint that returns 200 when the application has started, its configuration is loaded and its pools exist. I do not let it call the database or other services. If it does, a slow database makes every target unhealthy in the same minute, and the load balancer then has nothing useful to do; a failure of one dependency has become a failure of the whole site. The state of dependencies goes to a second endpoint that monitoring reads. For the numbers, a 10-second interval with 2 or 3 as thresholds finds a dead target in 20 to 30 seconds without reacting to one slow answer. I set the Auto Scaling group's health check type to ELB, so that it replaces what the load balancer rejects, and the grace period longer than the start time, so that it does not kill instances that are still booting.</p></details>
+  <details><summary>The fleet needs eight minutes to add capacity after a traffic jump. How do you shorten that?</summary><p>I split the eight minutes into detection, launch and readiness. Detection: target tracking needs three one-minute datapoints, and with basic monitoring the data is five minutes old, so detailed monitoring comes first; a step policy on a faster alarm can react sooner. Launch and readiness is usually the largest part. A baked AMI removes the installation at boot. A warm pool of stopped instances brings the start down to seconds. A lower healthy threshold and a shorter health check interval bring the target into service sooner, and slow start is off unless the application needs it. Then I ask whether the capacity can be there before the load: predictive scaling for a daily curve, a scheduled action for a known event. Last, headroom: a lower target value means the fleet can take a bigger jump while it waits. I check that the maximum size, the vCPU quota and the load balancer itself allow the new size.</p></details>
+  <details><summary>What are lifecycle hooks for, and what happens when one times out?</summary><p>A hook makes the Auto Scaling group wait at a transition so that I can do work. At launch the instance stays in <code>Pending:Wait</code>: I install or configure, and only when I complete the hook is it registered with the load balancer. At termination it stays in <code>Terminating:Wait</code>: a worker finishes its job, logs are uploaded, a node leaves its cluster. I complete the hook with <code>CONTINUE</code> or <code>ABANDON</code>. If nobody completes it, the heartbeat timeout ends the wait, one hour by default, with the default result, which is <code>ABANDON</code>. At launch that terminates the instance and the group tries again; at termination the instance is terminated either way. So a broken launch hook gives a group that launches and kills instances every hour, and a broken termination hook gives a scale-in that takes an hour per instance. I set a timeout that matches the work, and send heartbeats when a job is long.</p></details>
+  <details><summary>How do you roll out a new AMI to 200 instances without losing capacity?</summary><p>With an instance refresh on the Auto Scaling group. I make a new launch template version with the new AMI and start the refresh with a minimum healthy percentage of 100 and a maximum of, for example, 110. The group then launches 20 new instances, waits until they pass the load balancer health check and the warm-up, and only then removes 20 old ones, which drain for the deregistration delay. I add a checkpoint at a small percentage with a wait, so that the first batch runs with real traffic for a while, and I turn on auto rollback with a CloudWatch alarm on the error rate, so that a bad image stops the refresh and brings back the old template. Before I start I check that the maximum size and the vCPU quota allow 220 instances. The deregistration delay and the warm-up decide how long the whole thing takes, so I make them fit the application and not the defaults.</p></details>
+  <details><summary>How do you run a fleet on Spot without outages?</summary><p>Spot is for work that can lose an instance at any time, so the service must be stateless and behind a load balancer or a queue. I use a mixed instances policy: an On-Demand base that can carry the minimum acceptable load, and Spot above it. I allow many instance types across families, sizes and generations, in all AZs, because each combination is a separate capacity pool and one pool can be empty. The allocation strategy is price-capacity-optimized, which avoids the pools that are most likely to be interrupted. I turn on Capacity Rebalancing, so that a replacement starts when EC2 signals a risk, before the two-minute notice. On the notice, the instance is deregistered and drains, so the deregistration delay must be well under two minutes. I also plan for the case where no Spot capacity exists: the group must be allowed to grow on On-Demand.</p></details>
+  <details><summary>Global Accelerator, CloudFront, or Route 53 latency routing: which one for a service in two Regions?</summary><p>They work at different layers. Route 53 latency routing answers a DNS query with the nearest Region. It is cheap and simple; failover waits for health checks and for the TTL in every resolver and client, and some clients keep an address much longer. CloudFront is an HTTP proxy with a cache at the edge: the right choice when the content can be cached or when I need its features, such as edge functions and origin failover. Global Accelerator gives two fixed anycast addresses, takes TCP and UDP into the AWS network at the nearest edge, and sends each connection to the nearest healthy Region. Its failover takes well under a minute and does not depend on DNS. So for a cacheable web application I use CloudFront, for a non-HTTP protocol, clients that need fixed addresses, or strict failover time I use Global Accelerator, and for the simple case I start with Route 53.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-06/index.html">Day 6: S3 and storage</a>.</b> The fleet is stateless, so its data must live elsewhere. Tomorrow you open S3: storage classes and lifecycle, versioning and replication, the layers of access control that decide a request, encryption, and the file services next to it.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — A load balancer is a name and a set of nodes.</b> Clients resolve the DNS name and get the address of a node in each enabled AZ. An Application Load Balancer needs at least two AZs. Its nodes sit in public subnets, and their addresses change when the load balancer scales, so you always point to the name.",
+    "<b>Step 2 — The listener and its rules.</b> A listener is a protocol and a port. An HTTPS listener ends TLS and picks the certificate by the host name the client sent (SNI). Then the rules are tried from the lowest number up: by host, path, header, method, query string or source address. The first match decides the target group. The default rule takes the rest.",
+    "<b>Step 3 — The target group.</b> A target group is a list of targets with a protocol and a port. Here the targets are instances in private subnets of both AZs. A target can also be an IP address, a Lambda function, or, behind a Network Load Balancer, an ALB. Each node sends each request to one target, in turn.",
+    "<b>Step 4 — Health checks.</b> Every node asks every target for /health at an interval. After two failures in a row the target is unhealthy and gets no new requests. It needs five successes in a row to come back. This finds a failure after it has happened: about a minute with the defaults. If every target is unhealthy, the load balancer sends to all of them.",
+    "<b>Step 5 — Cross-zone.</b> With cross-zone load balancing, a node sends to the targets in every AZ, not only its own. The load is then even per target, whatever the number of targets in each AZ. An ALB always does this. On a Network Load Balancer it is off by default, and traffic that crosses an AZ is charged.",
+    "<b>Step 6 — Leaving without errors.</b> A target that is deregistered goes to draining. It gets no new requests and may finish the running ones, for the deregistration delay of 300 seconds by default. If the application stops before that, or was never deregistered, clients get a 502. A 503 means there was no target at all. A 504 means the target did not answer in time.",
+    "<b>Step 7 — The Auto Scaling group.</b> The instances belong to a group with a launch template and three numbers: minimum, desired, maximum. The group keeps the desired number of healthy instances, spread over the AZs, and registers them with the target group. Scaling policies change the desired number: target tracking keeps a metric at a value, step scaling follows your alarm, scheduled and predictive scaling act before the load.",
+    "<b>Step 8 — Hooks and the warm pool.</b> A lifecycle hook makes the group wait: at launch until your setup is done, at termination until the instance has finished its work. A warm pool holds instances that have already booted once and were stopped. A scale-out starts them in seconds, and you pay only for their volumes while they wait.",
+    "<b>Step 9 — Replacing and mixing.</b> An instance refresh replaces the fleet after the launch template changed: in batches, keeping a minimum share healthy, with checkpoints and a rollback on an alarm. A mixed instances policy lets one group use several instance types, with an On-Demand base and Spot above it. Spot instances can be taken back with two minutes of notice.",
+    "<b>Step 10 — The other load balancers.</b> A Network Load Balancer works at layer 4: TCP, UDP and TLS, one static address per AZ, the client's address kept. A Gateway Load Balancer works at layer 3 and passes packets through firewall appliances. Global Accelerator stands in front of load balancers in one or more Regions: two fixed anycast addresses, entry at the nearest edge, and failover without DNS."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const num = x => Math.round(x).toLocaleString("en-US");
+  const pill = (kind, text) => `<span class="pill ${kind}">${text}</span>`;
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+  // A row of buttons; the one whose key equals state[field] is highlighted by the paint function
+  function buttons(id, title, items, onPick) {
+    $(id).innerHTML = `<b>${title}</b>`;
+    items.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.onclick = () => onPick(key);
+      $(id).appendChild(b);
+    });
+  }
+  const mark = (id, keys, cur) => [...$(id).querySelectorAll("button")].forEach((b, i) => b.classList.toggle("on", keys[i] === cur));
+
+  // ================= Deploy: what the clients see, second by second =================
+  const DOWN = 30;   // seconds the application needs to stop and start again
+  const IDLE = 60;   // idle timeout of the load balancer
+  const secs = s => s >= 120 ? `${Math.round(s / 6) / 10} min` : `${s} s`;
+  const dp = { method: "restart", delay: 300, long: 2, hc: 30, batch: 1, keep: 75 };
+  function paintDeploy() {
+    mark("dpMethod", ["restart", "dereg"], dp.method); mark("dpDelay", [0, 30, 300], dp.delay); mark("dpLong", [2, 45], dp.long);
+    mark("dpHc", [30, 10, 5], dp.hc); mark("dpBatch", [1, 4], dp.batch); mark("dpKeep", [5, 75], dp.keep);
+    // The deregistration delay plays no part when the target is never deregistered
+    [...$("dpDelay").querySelectorAll("button")].forEach(b => b.disabled = dp.method === "restart");
+    const detect = 2 * dp.hc, back = 3 * dp.hc, all = dp.batch === 4;
+    const share = all ? "every request" : "25% of the requests";
+    const rows = [];   // [time, what happens, pill kind, pill text]
+    let code, sees, why, time, msg;
+
+    if (dp.method === "restart") {
+      const win = all ? DOWN : Math.min(DOWN, detect);
+      rows.push(["0 s", `The deploy stops the application on ${all ? "all four instances" : "one instance"}. Nobody tells the load balancer: ${all ? "the targets are" : "the target is"} still registered and still counted as healthy. Requests that are running there are cut, unless the application finishes them before it exits.`, "no", "502"]);
+      if (detect < DOWN) {
+        rows.push([`0 – ${detect} s`, `The load balancer keeps sending ${share} to a closed port. The connection is refused.`, "no", "502"]);
+        rows.push([`${detect} s`, all ? "Two health checks in a row have failed on every target. With no healthy target left, the load balancer sends to all of them anyway: it fails open. The ports are still closed."
+          : "Two health checks in a row have failed. The target is unhealthy, and the other three take its share.", all ? "no" : "yes", all ? "502" : "200"]);
+        rows.push([`${DOWN} s`, all ? "The new version listens. Requests succeed from this moment, although the targets still count as unhealthy." : "The new version listens. It gets no requests yet.", "yes", "200"]);
+        rows.push([`about ${DOWN + back} s`, `Three health checks in a row have passed. ${all ? "The targets are" : "The target is"} healthy again.`, "yes", "200"]);
+      } else {
+        rows.push([`0 – ${DOWN} s`, `The load balancer keeps sending ${share} to a closed port. The connection is refused.`, "no", "502"]);
+        rows.push([`${DOWN} s`, `The new version listens. A target is marked unhealthy after two failed checks, which takes ${detect} s here. The application was back before that, so the load balancer never noticed anything.`, "yes", "200"]);
+      }
+      code = 502; sees = `502 for ${win} s, on ${share}`; why = "The load balancer was not told";
+      time = all ? DOWN : 4 * (DOWN + (detect < DOWN ? back : 0));
+      msg = all ? `<b>Every request fails for the whole restart.</b> No health check setting helps when all targets go at the same moment${detect < DOWN ? ": when the last one is marked unhealthy, the load balancer fails open and sends to the closed ports anyway" : ""}. Deploy in batches, and deregister each batch first.`
+        : detect >= DOWN ? `<b>This is the deploy from the question.</b> A quarter of the requests fail for ${DOWN} seconds. The health check runs every ${dp.hc} s and needs two failures, so the load balancer would have noticed after ${detect} s; the application was back after ${DOWN}. Three settings are involved: the health check interval, the unhealthy threshold, and the step that is missing from the deploy. Try a faster health check. Then try deregistering first.`
+        : `<b>A faster health check shortens the errors from ${DOWN} s to ${detect} s. It cannot remove them.</b> A health check finds a failure after it has happened, so two intervals of errors always come first. Health checks are for failures that nobody planned. A deploy is planned: tell the load balancer, by deregistering the target first.`;
+    } else {
+      const cut = dp.delay < dp.long, gone = dp.delay + DOWN + back;
+      rows.push(["0 s", `The deploy deregisters ${all ? "all four targets" : "the target"}. The state is <code>draining</code>: no new requests, and the requests that are running may finish. ` +
+        (all ? "The target group now has no target that can take a request." : "The other three targets take the new requests."), all ? "no" : "yes", all ? "503" : "200"]);
+      if (dp.delay === 0)
+        rows.push(["0 s", "The delay is 0, so the target is removed at once and the deploy stops the application at once. The requests that were running are cut. For a few seconds some load balancer nodes may still send to it, because the change must reach every node.", "no", "502"]);
+      else
+        rows.push([`${dp.delay} s`, cut ? `The delay ends. A request can run for ${dp.long} s here, so some are still running. The load balancer closes them, and the deploy stops the application.`
+          : `The delay ends. The longest request takes ${dp.long} s, so nothing is running any more. The deploy stops the application and nobody notices.`, cut ? "no" : all ? "no" : "yes", cut ? "502" : all ? "503" : "200"]);
+      rows.push([`${dp.delay + DOWN} s`, "The new version listens, and the deploy registers the target. The state is <code>initial</code>: health checks begin, and no request arrives yet.", all ? "no" : "yes", all ? "503" : "200"]);
+      rows.push([`about ${gone} s`, "Three health checks in a row have passed. The target is <code>healthy</code> and takes requests." + (all ? "" : " The deploy moves to the next instance."), "yes", "200"]);
+      time = (all ? 1 : 4) * gone;
+      const also = dp.delay === 0 || cut ? " The requests that were still running got a 502 as well." : "";
+      if (all) {
+        code = 503; sees = `503 for ${secs(gone)}, on every request`; why = "All targets at once";
+        msg = `<b>The draining was done correctly, and the site was still down for ${secs(gone)}.</b> A target group in which every target is draining or still <code>initial</code> has nothing to send to, and the load balancer answers 503.${also} The setting behind it is the batch size: the minimum healthy percentage of an instance refresh, or the batch of your deploy tool. Replace one part of the fleet at a time, and check that the rest can carry the load.`;
+      } else if (dp.delay === 0) {
+        code = 502; sees = "502 for a few seconds"; why = "Deregistration delay of 0";
+        msg = "<b>A delay of 0 is almost the same as no deregistration.</b> The target is removed and stopped in the same second. The requests that were running are cut, and the nodes that have not yet heard of the change send a few more. Give the target time: a delay a little above your longest request.";
+      } else if (cut) {
+        code = 502; sees = `502 on requests longer than ${dp.delay} s`; why = "Deregistration delay too short";
+        msg = `<b>The short requests are safe. The long ones are cut.</b> The delay must be longer than the longest request: here ${dp.long} s, so set 60. Better still, take the long work out of the request: start a job, answer at once, and let the client fetch the result. Then a short delay is enough and deploys are fast.`;
+      } else {
+        code = 0; sees = "No errors"; why = "Nothing";
+        msg = dp.delay === 300 && dp.long === 2 ? `<b>No errors, and a slow deploy.</b> Every instance waits 300 s for requests that end in ${dp.long} s. For four instances that is ${secs(time)}, most of it waiting. The default of 300 is a safe guess for an application that AWS does not know. You know yours: set the delay a little above the longest request, for example 30 s.`
+          : `<b>No errors.</b> This is the pattern: deregister, wait a little longer than the longest request, stop, start, register, wait for the healthy threshold. An instance refresh and CodeDeploy do these steps for you; a script of your own must do each of them. The settings that are left decide only the time: ${secs(time)} for four instances. A faster health check shortens it.`;
+      }
+    }
+
+    const stray = dp.keep < IDLE;
+    if (stray) {
+      rows.push(["Any time", `The load balancer keeps idle connections to the targets open, to use them again, for up to ${IDLE} s. The application closes an idle connection after ${dp.keep} s. Now and then the load balancer sends a request on a connection at the moment the application closes it.`, "no", "502"]);
+      msg += ` <b>Separately from the deploy:</b> the application's keep-alive timeout of ${dp.keep} s is below the load balancer's idle timeout of ${IDLE} s. That gives a stray 502 now and then, all day, with no line in the application log. People often blame the deploy for them. Set the keep-alive timeout above ${IDLE} s.`;
+    }
+    big("dpSees", sees, code ? "bad" : "pub");
+    big("dpWhy", why, code ? "bad" : "pub");
+    big("dpTime", secs(time), "text");
+    big("dpStray", stray ? "A stray 502 now and then" : "Nothing", stray ? "bad" : "pub");
+    $("dpTable").innerHTML = "<tr><th>Time</th><th>What happens</th><th>Clients see</th></tr>" +
+      rows.map(r => `<tr><td class="when">${r[0]}</td><td>${r[1]}</td><td>${pill(r[2], r[3])}</td></tr>`).join("");
+    $("dpMsg").innerHTML = msg;
+    Object.assign($("dpMsg").dataset, { code, sees, time, stray: String(stray) });
+  }
+  buttons("dpMethod", "The deploy", [["restart", "Restarts the application in place"], ["dereg", "Deregisters, waits, then stops"]], k => { dp.method = k; paintDeploy(); });
+  buttons("dpDelay", "Deregistration delay", [[0, "0 s"], [30, "30 s"], [300, "300 s (default)"]], k => { dp.delay = k; paintDeploy(); });
+  buttons("dpLong", "Longest request", [[2, "2 s (an API call)"], [45, "45 s (an export)"]], k => { dp.long = k; paintDeploy(); });
+  buttons("dpHc", "Health check every", [[30, "30 s (default)"], [10, "10 s"], [5, "5 s"]], k => { dp.hc = k; paintDeploy(); });
+  buttons("dpBatch", "Instances at a time", [[1, "1 of 4"], [4, "All 4"]], k => { dp.batch = k; paintDeploy(); });
+  buttons("dpKeep", "App keep-alive", [[5, "5 s (Node.js default)"], [75, "75 s"]], k => { dp.keep = k; paintDeploy(); });
+  paintDeploy();
+
+  // ================= Scaling: how long is the fleet overloaded? =================
+  const LOAD = 14;                 // the normal load, in instances running at 100% CPU
+  const PRICE = 0.0816 * 730;      // m7g.large, On-Demand, a month
+  const mins = m => `${Math.round(m * 10) / 10} min`;
+  const POLICIES = [["cpu", "Target tracking on CPU"], ["req", "Target tracking on requests per target"], ["pred", "Predictive or scheduled"]];
+  const sc = { jump: 2, target: 50, policy: "cpu", ready: 300 };
+  function paintScale() {
+    mark("scJump", [1.5, 2, 4], sc.jump); mark("scTarget", [40, 50, 70], sc.target);
+    mark("scPolicy", POLICIES.map(p => p[0]), sc.policy); mark("scReady", [300, 90, 30], sc.ready);
+    const T = sc.target, J = sc.jump, head = 100 / T;
+    const fleet = Math.round(LOAD * 100 / T);              // instances that run the normal load at the target
+    const need = LOAD * J;                                 // instances that carry the new load at 100% CPU
+    const atTarget = Math.ceil(fleet * J - 1e-9);          // instances that carry it at the target
+    const cpuAt = c => 100 * need / c;                     // what the load asks of c instances; may be above 100
+    const rows = [];                                       // [minutes after the jump, instances in service]
+    if (sc.policy === "pred") rows.push([0, atTarget]);
+    else {
+      let c = fleet, t = 0;
+      rows.push([0, c]);
+      for (let i = 0; i < 8; i++) {
+        // CPU cannot read above 100%. Requests per target can.
+        const seen = sc.policy === "cpu" ? Math.min(100, cpuAt(c)) : cpuAt(c);
+        const want = Math.ceil(c * seen / T - 1e-9);
+        if (want <= c) break;
+        t += (i ? 1 : 3) + sc.ready / 60; c = want;
+        rows.push([t, c]);
+      }
+    }
+    const firstOk = rows.find(r => r[1] >= need - 1e-9), over = firstOk[0], back = rows[rows.length - 1][0];
+    const rounds = rows.indexOf(firstOk), cpu0 = cpuAt(rows[0][1]);
+
+    big("scHead", `×${head.toFixed(2)}`, J <= head ? "pub" : "bad");
+    big("scOver", over ? mins(over) : "Not overloaded", over ? "bad" : "pub");
+    big("scBack", back ? mins(back) : "At once", "text");
+    big("scFleet", `${fleet} instances · $${num(fleet * PRICE)} a month`, "text");
+
+    const line = (when, c, cpu) => {
+      const served = Math.min(100, 100 * c / need);
+      return `<tr><td class="when">${when}</td><td>${num(c)}</td><td>${cpu > 100 + 1e-9 ? `100% (the load asks for ${num(cpu)}%)` : num(cpu) + "%"}</td><td>${served >= 100 - 1e-9 ? pill("yes", "All") : pill("no", Math.round(served) + "%")}</td></tr>`;
+    };
+    $("scTable").innerHTML = "<tr><th>Time</th><th>Instances in service</th><th>Average CPU</th><th>Requests answered</th></tr>" +
+      `<tr><td class="when">Before</td><td>${fleet}</td><td>${T}%</td><td>${pill("yes", "All")}</td></tr>` +
+      rows.map((r, i) => line(i ? `+ ${mins(r[0])}` : `The jump, ×${J}`, r[1], cpuAt(r[1]))).join("");
+
+    let msg;
+    if (sc.policy === "pred") {
+      msg = `<b>The capacity was in service before the traffic came.</b> A scheduled action, or the forecast of predictive scaling, raised the group to ${atTarget} instances ahead of the peak. The time to detect and the time to start do not matter any more. This works only for a peak that a person or the history predicted: the morning rise, the Monday batch, a sale with a date. Predictive scaling needs at least a day of history, and it only adds capacity. Keep a target tracking policy next to it, for the jump that was in no forecast and for scaling in.`;
+    } else if (!over) {
+      msg = `<b>The headroom takes the jump.</b> At a target of ${T}%, the fleet can carry ×${head.toFixed(2)} before the CPU reaches 100%. The jump of ×${J} brings it to ${num(cpu0)}%` +
+        (back ? `, and the policy brings it back to the target after ${mins(back)}.` : ".") +
+        (cpu0 >= 90 ? " At that level there is nothing left: response times rise, and one more request is too many. This is the edge." : "") +
+        (T < 70 ? ` The headroom has a price: ${fleet} instances for a load that 20 carry at a target of 70%.` : "");
+    } else {
+      const served = Math.round(100 * rows[0][1] / need);
+      msg = `<b>Overloaded for ${mins(over)}.</b> The jump of ×${J} is more than the headroom of ×${head.toFixed(2)}. At first the fleet can answer only ${served}% of the requests. The others wait, time out, or get an error from the load balancer.`;
+      if (sc.policy === "cpu" && rounds > 1)
+        msg += ` <b>The CPU metric made it longer.</b> CPU cannot read above 100%, so the policy saw 100% where the load asked for ${num(cpu0)}%. It added too few instances and needed ${rounds} rounds to cover the load. Requests per target has no such ceiling: change the policy and compare.`;
+      else if (sc.policy === "cpu" && rows.length > 2)
+        msg += ` CPU cannot read above 100%, so the policy saw less than the real size of the jump. Its first step covered the load, and it needed ${rows.length - 1} steps to come back to the target.`;
+      else if (sc.policy === "req")
+        msg += ` The policy saw the full size of the jump and asked for ${atTarget} instances in one step. What is left is 3 minutes to detect and the time an instance needs to get ready.`;
+      msg += sc.ready === 300 ? " Five minutes of every round is an instance that installs software. Put the software in the AMI (Day 4), or keep a warm pool."
+        : sc.ready === 90 ? " To shorten it more: a warm pool, a lower target, or capacity that arrives before the load."
+        : " The instances are ready in seconds now, so most of the time that is left is detection. Only headroom, or capacity that arrives before the load, removes that.";
+    }
+    $("scMsg").innerHTML = msg;
+    Object.assign($("scMsg").dataset, { over, back, fleet, rounds });
+  }
+  buttons("scJump", "Traffic jump", [[1.5, "×1.5"], [2, "×2"], [4, "×4"]], k => { sc.jump = k; paintScale(); });
+  buttons("scTarget", "Target value", [[40, "40% CPU"], [50, "50% CPU"], [70, "70% CPU"]], k => { sc.target = k; paintScale(); });
+  buttons("scPolicy", "Policy", POLICIES, k => { sc.policy = k; paintScale(); });
+  buttons("scReady", "Instance is ready in", [[300, "5 min (user data installs)"], [90, "90 s (baked AMI)"], [30, "30 s (warm pool)"]], k => { sc.ready = k; paintScale(); });
+  paintScale();
+</script>
+</body>
+</html>
