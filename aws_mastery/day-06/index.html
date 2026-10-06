@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 6 — S3 and Storage</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .sim .calc { margin: 14px 0 12px; }
+  .sim .calc .big { font-size: 21px; }
+  .sim h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .sim .seg b { min-width: 150px; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .lab li { margin-bottom: 12px; }
+  svg .box { fill: var(--card); stroke: var(--border); stroke-width: 1.2; }
+  svg .lbl { font-size: 12.5px; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  svg .title { font-size: 13px; font-weight: 700; }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--pub); }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-05/index.html">← Day 5</a><a href="../README.md">30-day plan</a><a href="../day-07/index.html">Day 7 →</a></nav>
+  <header>
+    <div class="tag">Day 6 of 30 · Week 1 — Identity, Networking, Compute, Storage</div>
+    <h1>S3 and Storage</h1>
+    <p class="lead">The fleet from yesterday is stateless, so its data lives somewhere else. Most of it lives in S3. S3 looks simple: a bucket, a key, an object. Inside it is a request pipeline with seven places where a request can be denied, a set of storage classes with very different bills, and features such as versioning, replication and Object Lock that quietly change what a delete means. The centre of the page is one request: a bucket policy allows it, and S3 still says <code>AccessDenied</code>. Which layer said no? Around S3 sit the file and transfer services: EFS, FSx, Storage Gateway, DataSync and AWS Backup.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 600" role="img" aria-label="An S3 request passes access-control layers and encryption, then lands in a versioned bucket with storage classes, lifecycle, replication, events and the file services around it">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke" style="fill: var(--muted)"/></marker>
+        </defs>
+
+        <!-- Step 1: client, endpoint, Region, bucket -->
+        <g data-step="1">
+          <rect x="12" y="12" width="976" height="420" rx="14" fill="var(--region-fill)" stroke="var(--region)" stroke-width="1.5"/>
+          <text x="28" y="34" class="title" style="fill: var(--region)">Region (a bucket lives in exactly one)</text>
+          <rect x="30" y="60" width="140" height="70" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="100" y="86" text-anchor="middle" class="title">Client</text>
+          <text x="100" y="104" text-anchor="middle" class="small">SigV4-signed request</text>
+          <text x="100" y="119" text-anchor="middle" class="small">PUT / GET / DELETE / LIST</text>
+          <path d="M170 95 L218 95" class="arrow"/>
+          <rect x="220" y="55" width="150" height="80" rx="10" class="box" style="stroke: var(--orange)"/>
+          <text x="295" y="80" text-anchor="middle" class="title" style="fill: var(--orange)">S3 endpoint</text>
+          <text x="295" y="98" text-anchor="middle" class="small">s3.region.amazonaws.com</text>
+          <text x="295" y="113" text-anchor="middle" class="small">or a gateway / interface VPC endpoint</text>
+          <text x="295" y="128" text-anchor="middle" class="small">authenticates, then authorises</text>
+          <rect x="650" y="55" width="320" height="300" rx="12" fill="var(--cloud-fill)" stroke="var(--orange)" stroke-width="1.5"/>
+          <text x="810" y="78" text-anchor="middle" class="title" style="fill: var(--orange)">Bucket  ·  flat namespace, globally unique name</text>
+          <text x="810" y="95" text-anchor="middle" class="small">key = "2026/10/06/invoice-1042.pdf"  ·  object ≤ 5 TB  ·  11 nines of durability over 3+ AZs</text>
+        </g>
+
+        <!-- Step 2: access control layers -->
+        <g data-step="2">
+          <path d="M370 95 L408 95" class="arrow"/>
+          <rect x="410" y="48" width="225" height="150" rx="10" class="box" style="stroke: var(--bad)"/>
+          <text x="522" y="68" text-anchor="middle" class="title" style="fill: var(--bad)">Authorisation: every layer must agree</text>
+          <text x="424" y="88" class="lbl">1. Block Public Access (account, bucket)</text>
+          <text x="424" y="105" class="lbl">2. SCP, then IAM identity policy + boundary</text>
+          <text x="424" y="122" class="lbl">3. Bucket policy (cross-account needs both)</text>
+          <text x="424" y="139" class="lbl">4. VPC endpoint policy, if used</text>
+          <text x="424" y="156" class="lbl">5. Access Point policy, if used</text>
+          <text x="424" y="173" class="lbl">6. Object ACL (legacy) · 7. KMS key policy</text>
+          <text x="522" y="190" text-anchor="middle" class="small">one explicit Deny anywhere → AccessDenied</text>
+        </g>
+
+        <!-- Step 3: encryption -->
+        <g data-step="3">
+          <rect x="410" y="215" width="225" height="90" rx="10" class="box" style="stroke: var(--priv)"/>
+          <text x="522" y="235" text-anchor="middle" class="title" style="fill: var(--priv)">Encryption at rest, per object</text>
+          <text x="424" y="255" class="lbl">SSE-S3 (default, free)  ·  SSE-KMS (key policy, audit)</text>
+          <text x="424" y="272" class="lbl">DSSE-KMS (two layers)  ·  SSE-C (your key, each call)</text>
+          <text x="424" y="289" class="lbl">Bucket Keys cut KMS calls ~99%  ·  TLS in transit</text>
+          <path d="M522 198 L522 213" class="arrow"/>
+          <path d="M635 260 L648 260" class="arrow"/>
+        </g>
+
+        <!-- Step 4: versioning inside the bucket -->
+        <g data-step="4">
+          <rect x="665" y="108" width="140" height="92" rx="8" class="box"/>
+          <text x="735" y="126" text-anchor="middle" class="title">Versioning</text>
+          <text x="735" y="143" text-anchor="middle" class="small">v3  (current)</text>
+          <text x="735" y="157" text-anchor="middle" class="small">v2</text>
+          <text x="735" y="171" text-anchor="middle" class="small">v1</text>
+          <text x="735" y="190" text-anchor="middle" class="small" style="fill: var(--bad)">DELETE adds a delete marker</text>
+        </g>
+
+        <!-- Step 5: storage classes and lifecycle -->
+        <g data-step="5">
+          <rect x="815" y="108" width="145" height="92" rx="8" class="box"/>
+          <text x="887" y="126" text-anchor="middle" class="title">Storage class</text>
+          <text x="887" y="143" text-anchor="middle" class="small">Standard → Standard-IA</text>
+          <text x="887" y="157" text-anchor="middle" class="small">→ Glacier IR → Flexible</text>
+          <text x="887" y="171" text-anchor="middle" class="small">→ Deep Archive  ·  One Zone-IA</text>
+          <text x="887" y="190" text-anchor="middle" class="small" style="fill: var(--orange)">Intelligent-Tiering moves for you</text>
+          <rect x="665" y="212" width="295" height="46" rx="8" class="box" style="stroke: var(--orange); stroke-dasharray: 4 3"/>
+          <text x="812" y="230" text-anchor="middle" class="title">Lifecycle rules (run once a day)</text>
+          <text x="812" y="247" text-anchor="middle" class="small">transition after N days · expire · clean old versions · abort incomplete multipart uploads</text>
+        </g>
+
+        <!-- Step 6: Object Lock and replication -->
+        <g data-step="6">
+          <rect x="665" y="270" width="140" height="72" rx="8" class="box" style="stroke: var(--bad)"/>
+          <text x="735" y="289" text-anchor="middle" class="title" style="fill: var(--bad)">Object Lock</text>
+          <text x="735" y="306" text-anchor="middle" class="small">WORM · needs versioning</text>
+          <text x="735" y="320" text-anchor="middle" class="small">Governance vs Compliance</text>
+          <text x="735" y="334" text-anchor="middle" class="small">Legal hold</text>
+          <rect x="815" y="270" width="145" height="72" rx="8" class="box" style="stroke: var(--region)"/>
+          <text x="887" y="289" text-anchor="middle" class="title" style="fill: var(--region)">Replication</text>
+          <text x="887" y="306" text-anchor="middle" class="small">CRR / SRR · new objects only</text>
+          <text x="887" y="320" text-anchor="middle" class="small">needs versioning + a role</text>
+          <text x="887" y="334" text-anchor="middle" class="small">RTC: 15 min SLA · Batch for old</text>
+          <path d="M960 306 L985 306" class="arrow" style="stroke: var(--region)"/>
+          <text x="975" y="296" text-anchor="end" class="small" style="fill: var(--region)">to another Region</text>
+        </g>
+
+        <!-- Step 7: event notifications -->
+        <g data-step="7">
+          <path d="M810 355 L810 380" class="arrow"/>
+          <rect x="665" y="382" width="295" height="40" rx="8" class="box" style="stroke: var(--edge)"/>
+          <text x="812" y="399" text-anchor="middle" class="title" style="fill: var(--edge)">Event notifications</text>
+          <text x="812" y="414" text-anchor="middle" class="small">s3:ObjectCreated:* → EventBridge (all events, filters) · SQS · SNS · Lambda</text>
+        </g>
+
+        <!-- Step 8: big uploads and presigned URLs -->
+        <g data-step="8">
+          <rect x="30" y="160" width="340" height="135" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="200" y="180" text-anchor="middle" class="title" style="fill: var(--edge)">Moving bytes in and out</text>
+          <text x="44" y="201" class="lbl"><tspan font-weight="700">Multipart upload:</tspan> required over 5 GB, use over 100 MB</text>
+          <text x="44" y="218" class="lbl">parts 5 MB–5 GB, up to 10,000, in parallel, resumable</text>
+          <text x="44" y="238" class="lbl"><tspan font-weight="700">Presigned URL:</tspan> your credentials, their browser, a deadline</text>
+          <text x="44" y="255" class="lbl">(≤ 7 days with IAM user keys; a role's expiry otherwise)</text>
+          <text x="44" y="275" class="lbl"><tspan font-weight="700">Transfer Acceleration:</tspan> upload via the nearest edge</text>
+          <text x="44" y="290" class="small">Performance: 3,500 PUT / 5,500 GET per second per prefix; spread keys over prefixes</text>
+          <path d="M200 160 L200 140" class="arrow" style="marker-end: none"/>
+          <path d="M200 140 L218 110" class="arrow"/>
+        </g>
+
+        <!-- Step 9: file and transfer services -->
+        <g data-step="9">
+          <rect x="30" y="315" width="605" height="107" rx="10" fill="var(--az-fill)" stroke="var(--az)" stroke-width="1.3"/>
+          <text x="46" y="335" class="title" style="fill: var(--az)">File and transfer services next to S3</text>
+          <rect x="44" y="345" width="135" height="66" rx="8" class="box"/>
+          <text x="111" y="363" text-anchor="middle" class="title">EFS</text>
+          <text x="111" y="379" text-anchor="middle" class="small">NFS · mount target per AZ</text>
+          <text x="111" y="393" text-anchor="middle" class="small">Regional / One Zone</text>
+          <text x="111" y="406" text-anchor="middle" class="small">Elastic throughput, IA class</text>
+          <rect x="190" y="345" width="135" height="66" rx="8" class="box"/>
+          <text x="257" y="363" text-anchor="middle" class="title">FSx</text>
+          <text x="257" y="379" text-anchor="middle" class="small">Windows (SMB, AD)</text>
+          <text x="257" y="393" text-anchor="middle" class="small">Lustre (HPC, S3-linked)</text>
+          <text x="257" y="406" text-anchor="middle" class="small">NetApp ONTAP · OpenZFS</text>
+          <rect x="336" y="345" width="135" height="66" rx="8" class="box"/>
+          <text x="403" y="363" text-anchor="middle" class="title">Storage Gateway</text>
+          <text x="403" y="379" text-anchor="middle" class="small">File (NFS/SMB → S3)</text>
+          <text x="403" y="393" text-anchor="middle" class="small">Volume (iSCSI, cached/stored)</text>
+          <text x="403" y="406" text-anchor="middle" class="small">Tape (VTL → Glacier)</text>
+          <rect x="482" y="345" width="140" height="66" rx="8" class="box"/>
+          <text x="552" y="363" text-anchor="middle" class="title">DataSync · Backup</text>
+          <text x="552" y="379" text-anchor="middle" class="small">DataSync: agent, bulk moves</text>
+          <text x="552" y="393" text-anchor="middle" class="small">AWS Backup: one policy for</text>
+          <text x="552" y="406" text-anchor="middle" class="small">EBS, EFS, RDS, S3, DynamoDB…</text>
+        </g>
+
+        <!-- Footer: the request result -->
+        <g data-step="2">
+          <rect x="30" y="450" width="940" height="130" rx="12" class="box"/>
+          <text x="46" y="472" class="title">How a request is decided</text>
+          <text x="46" y="494" class="lbl">1. Is the caller in this account? Then IAM identity policy <tspan font-weight="700">or</tspan> bucket policy may allow. Cross-account: the caller's IAM <tspan font-weight="700">and</tspan> the bucket policy must both allow.</text>
+          <text x="46" y="514" class="lbl">2. Block Public Access and any explicit Deny (SCP, boundary, identity, bucket, endpoint, Access Point) win over every Allow.</text>
+          <text x="46" y="534" class="lbl">3. Object owned by another account with ACLs still enabled? The bucket owner may not read it. Fix: Object Ownership = Bucket owner enforced.</text>
+          <text x="46" y="554" class="lbl">4. SSE-KMS object? The caller also needs <tspan class="mono">kms:Decrypt</tspan> (GET) or <tspan class="mono">kms:GenerateDataKey</tspan> (PUT), allowed by the key policy.</text>
+          <text x="46" y="572" class="small">A 403 from S3 never tells you which layer denied. CloudTrail data events and IAM Access Analyzer's policy check do.</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption"><b>The whole picture.</b> A signed request reaches the S3 endpoint for the bucket's Region. S3 authenticates it and then walks the authorisation layers; every one must allow and none may deny. The object is encrypted with the method chosen for it, written as a new version if versioning is on, placed in a storage class that lifecycle rules may change later, perhaps locked, perhaps replicated to another Region, and an event is published. Around the bucket are the ways bytes get in and the file services for workloads that need a file system rather than an object store.</p>
+    <div class="legend">
+      <span style="--c:var(--region)">Region, replication</span>
+      <span style="--c:var(--orange)">S3 bucket, endpoint, lifecycle</span>
+      <span style="--c:var(--bad)">Authorisation and Object Lock</span>
+      <span style="--c:var(--priv)">Encryption</span>
+      <span style="--c:var(--edge)">Clients, transfers, events</span>
+      <span style="--c:var(--az)">File services</span>
+    </div>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>What S3 is, and is not</h3>
+      <ul>
+        <li>An <b>object store</b>: a key maps to bytes plus metadata. There are no directories; the <code>/</code> in a key is a character that the console and <code>LIST</code> treat as a delimiter.</li>
+        <li>A bucket name is <b>globally unique</b> and the bucket lives in <b>one Region</b>. Objects never leave that Region unless you replicate or copy them.</li>
+        <li>Writes are <b>atomic per object</b> and reads are <b>strongly consistent</b> since 2020: a GET after a PUT returns the new object. There is no partial update; you replace the whole object.</li>
+        <li>Durability of 99.999999999% comes from storing every object on several devices in at least three AZs. Availability is 99.99% for Standard, lower for the IA and One Zone classes.</li>
+        <li>Objects are up to 5 TB. One PUT is up to 5 GB. Anything larger is a multipart upload.</li>
+        <li>There are <b>general purpose</b> buckets, <b>directory</b> buckets (S3 Express One Zone: single-digit millisecond latency, one AZ, a different namespace) and <b>table</b> buckets for Iceberg tables.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Performance and prefixes</h3>
+      <ul>
+        <li>Each <b>prefix</b> gives at least 3,500 PUT/COPY/POST/DELETE and 5,500 GET/HEAD requests per second. S3 adds partitions over time as load grows; a sudden jump on one prefix returns <code>503 SlowDown</code> until it has.</li>
+        <li>A prefix is any string before the key, not only up to a <code>/</code>. Keys that start with a date all share a few prefixes; add a hash or an id early in the key to spread them.</li>
+        <li>Large downloads: use <b>ranged GETs</b> in parallel. Large uploads: multipart with parts of 8 to 100 MB, which the CLI and SDKs do for you.</li>
+        <li>First-byte latency is 100 to 200 ms. For many small objects that latency dominates; batch or pack them, or use S3 Express One Zone.</li>
+        <li>Retry on 503 with backoff and jitter. The SDKs do; your own HTTP client must.</li>
+        <li>Clients in a VPC reach S3 through a <b>gateway endpoint</b> (free, a route) or an <b>interface endpoint</b> (PrivateLink, hourly cost, reachable from on-premises). Day 2 covers both.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>The access control layers</h3>
+      <ul>
+        <li><b>Block Public Access</b> is a switch at the account and bucket level. With it on, a policy or ACL that would grant public access is ignored or rejected. Leave it on everywhere; serve public content through CloudFront.</li>
+        <li><b>Bucket policy</b>: a resource policy, up to 20 KB, the place for cross-account grants, TLS-only conditions (<code>aws:SecureTransport</code>), VPC-endpoint conditions and deny-everything-else rules.</li>
+        <li><b>IAM identity policy</b>: for callers in the same account, either the identity policy or the bucket policy may allow. Cross-account, <b>both</b> must allow.</li>
+        <li><b>ACLs</b> are legacy. With <b>Object Ownership = Bucket owner enforced</b> they are disabled, every object belongs to the bucket owner, and the "I own the bucket but cannot read the object" problem disappears.</li>
+        <li><b>Access Points</b>: a named endpoint with its own policy and optional VPC restriction, so that one bucket with many teams does not need one giant bucket policy. <b>Multi-Region Access Points</b> route to the nearest replicated bucket.</li>
+        <li><b>VPC endpoint policy</b> and <b>KMS key policy</b> are two more places a request can die. Then <b>S3 Object Lambda</b> can rewrite what a GET returns.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Encryption</h3>
+      <ul>
+        <li>Every new object is encrypted. <b>SSE-S3</b> (AES-256, keys S3 manages) is the default and free.</li>
+        <li><b>SSE-KMS</b> uses a KMS key: the key policy becomes a second gate, CloudTrail shows every use, and you can revoke access by changing the key policy. Each PUT and GET calls KMS unless <b>S3 Bucket Keys</b> are on, which cuts calls and cost by about 99%.</li>
+        <li><b>DSSE-KMS</b> encrypts twice for rules that demand two layers. <b>SSE-C</b>: you send the key with every request over TLS and S3 keeps nothing.</li>
+        <li><b>Client-side</b>: encrypt before upload with the Encryption SDK; S3 never sees plaintext.</li>
+        <li>A bucket's <b>default encryption</b> applies to objects that arrive without a header. A bucket policy can deny PUTs that do not ask for KMS.</li>
+        <li>Enforce TLS with a Deny on <code>aws:SecureTransport = false</code>. Enforce a minimum TLS version with <code>s3:TlsVersion</code>.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Versioning and what a delete means</h3>
+      <ul>
+        <li>Versioning is off, <b>enabled</b> or <b>suspended</b>; once enabled a bucket can never go back to off.</li>
+        <li>Every PUT writes a new version with a new version id. A DELETE without a version id writes a <b>delete marker</b> and hides the object; the data is still there and still billed.</li>
+        <li>To really delete, delete the specific version id. To restore, delete the delete marker.</li>
+        <li><b>MFA Delete</b> requires the root user's MFA to change the versioning state or delete a version. Rarely used; Object Lock is the modern answer.</li>
+        <li>Lifecycle has separate actions for <b>noncurrent versions</b>: transition them after N days, expire them after N days or keep only the newest N. Without these, a versioned bucket grows forever.</li>
+        <li>Replication and Object Lock both <b>require</b> versioning.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Storage classes</h3>
+      <ul>
+        <li><b>Standard</b>: frequent access, no retrieval fee, no minimum duration.</li>
+        <li><b>Standard-IA</b> and <b>One Zone-IA</b>: about half the storage price, a retrieval fee per GB, a 30-day minimum and a 128 KB minimum object size. One Zone is one AZ: for data you can recreate.</li>
+        <li><b>Glacier Instant Retrieval</b>: milliseconds, 90-day minimum, higher retrieval fee. For quarterly access.</li>
+        <li><b>Glacier Flexible Retrieval</b>: minutes to hours, 90-day minimum. <b>Deep Archive</b>: 12 to 48 hours, 180-day minimum, the cheapest. Both need a <code>RestoreObject</code> call before a GET.</li>
+        <li><b>Intelligent-Tiering</b>: a small monitoring fee per object and no retrieval fees; S3 moves objects between tiers by access. The right default when you do not know the pattern. Objects under 128 KB are never moved and are not charged the fee.</li>
+        <li><b>Express One Zone</b>: for latency-critical, small-object, high-request workloads in one AZ, with a per-request price far below Standard.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Lifecycle rules</h3>
+      <ul>
+        <li>A rule has a <b>filter</b> (prefix, tags, object size) and <b>actions</b>: transition current versions, transition noncurrent versions, expire current, expire noncurrent, remove delete markers, abort incomplete multipart uploads.</li>
+        <li>Rules run <b>once a day</b> (UTC midnight); a transition happens the day after the object reaches the age, and the bill changes when the transition completes.</li>
+        <li>Transitions go <b>down</b> only: Standard → IA → Glacier classes. To move an object back up, copy it.</li>
+        <li>Transitions cost a <b>per-request fee</b>. Moving millions of tiny objects to Glacier can cost more than leaving them, and each Glacier object carries 32 KB plus 8 KB of overhead.</li>
+        <li>Minimum durations are charged early: delete an IA object after 10 days and you pay for 30.</li>
+        <li>Always add <b>abort incomplete multipart uploads after 7 days</b>. Half-finished uploads are invisible and billed.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Replication</h3>
+      <ul>
+        <li><b>Cross-Region</b> (CRR) or <b>Same-Region</b> (SRR), to one or more destination buckets, in the same or another account. Both buckets need versioning and S3 needs a role.</li>
+        <li>Only <b>new objects</b> replicate. Existing ones need <b>S3 Batch Replication</b>.</li>
+        <li>By default delete markers do <b>not</b> replicate, so a delete at the source leaves the copy. You can turn marker replication on. Version deletes never replicate.</li>
+        <li>Replication is asynchronous and usually completes within minutes. <b>Replication Time Control</b> gives an SLA of 15 minutes for 99.99% of objects, with metrics and events for the rest.</li>
+        <li>Objects encrypted with SSE-KMS replicate only if you say so, and the destination key is a different key in the destination Region.</li>
+        <li>Replicas can land in a <b>different storage class</b> and under a <b>different owner</b> (owner override) for a separate audit account.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Object Lock</h3>
+      <ul>
+        <li>WORM: write once, read many. Enabled at bucket creation (or by support later), needs versioning, and locks <b>versions</b>, not keys. A new PUT still creates a new version.</li>
+        <li><b>Retention period</b>: a date until which the version cannot be deleted or overwritten. Set a <b>default</b> on the bucket or per object.</li>
+        <li><b>Governance mode</b>: users with <code>s3:BypassGovernanceRetention</code> can still remove it. For protection against mistakes.</li>
+        <li><b>Compliance mode</b>: nobody, not even the root user, can shorten it, and the bucket cannot be deleted while a locked version exists. For regulation, and for ransomware-proof backups.</li>
+        <li><b>Legal hold</b>: an on/off flag with no date, independent of retention.</li>
+        <li>Test compliance mode with a retention of one day before you commit to one of ten years.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Events, inventory and batch</h3>
+      <ul>
+        <li><b>Event notifications</b> to SQS, SNS or Lambda: one destination per event type and prefix/suffix filter, and overlapping filters are rejected. Delivery is at-least-once, usually within seconds.</li>
+        <li>Sending to <b>EventBridge</b> is a single switch: every event, including the ones the classic path lacks (lifecycle transitions, restores, replication, tagging), with content-based rules and many targets.</li>
+        <li><b>S3 Inventory</b> gives a daily or weekly CSV/Parquet listing of every object with its size, class, encryption and replication status. Cheaper than LIST for millions of objects.</li>
+        <li><b>S3 Batch Operations</b> runs one action over an inventory or a manifest: copy, tag, restore, invoke Lambda, set retention, replicate.</li>
+        <li><b>Storage Lens</b> shows usage and activity over the whole organisation, with free and paid metrics, and finds incomplete uploads and cold data.</li>
+        <li><b>Requester pays</b> makes the caller pay for requests and transfer, for public datasets.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Presigned URLs and uploads from browsers</h3>
+      <ul>
+        <li>A presigned URL is a normal S3 URL with your <b>credentials' signature</b> and an expiry. Whoever holds it can do that one operation on that one key until the expiry.</li>
+        <li>It can live up to 7 days when signed with IAM user keys, and only until the session expires when signed with a role's temporary credentials. A Lambda signing with its role gives URLs that die with its credentials, sometimes within an hour.</li>
+        <li>The signer must have the permission; the URL cannot grant more than the signer has, and a bucket policy Deny still applies.</li>
+        <li><b>Presigned POST</b> lets a browser form upload with conditions on size, content type and key prefix.</li>
+        <li>Browsers need a <b>CORS</b> configuration on the bucket before they can PUT to it.</li>
+        <li>For a mobile app: the backend signs, the device uploads straight to S3, and an event tells the backend when the object is there.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>EFS</h3>
+      <ul>
+        <li>A managed <b>NFS v4</b> file system; thousands of instances, containers and Lambda functions can mount it at once. Grows and shrinks on its own, petabyte scale.</li>
+        <li>A <b>mount target</b> per AZ, with an ENI and a security group that allows port 2049. Mount through the AZ's own target to avoid cross-AZ charges and latency.</li>
+        <li><b>Regional</b> (three AZs) or <b>One Zone</b> (cheaper, one AZ). Classes: Standard and Infrequent Access, with lifecycle policies between them.</li>
+        <li>Throughput modes: <b>Elastic</b> (pay for what you use, the default), Provisioned, or Bursting (tied to size, credits run out).</li>
+        <li><b>Access points</b> fix a POSIX user and a root directory per application. IAM policies on the file system can require TLS and deny root.</li>
+        <li>Latency is in milliseconds per operation; a workload that opens thousands of small files is slow on any network file system.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>FSx, Storage Gateway, DataSync, Transfer, Backup</h3>
+      <ul>
+        <li><b>FSx for Windows</b>: SMB, Active Directory, DFS, Multi-AZ. <b>FSx for Lustre</b>: HPC and ML scratch at hundreds of GB/s, linked to an S3 bucket. <b>FSx for NetApp ONTAP</b>: NFS, SMB and iSCSI together, snapshots, dedup, SnapMirror from on-premises NetApp. <b>FSx for OpenZFS</b>: NFS with ZFS snapshots and clones.</li>
+        <li><b>Storage Gateway</b> runs on-premises: <b>S3 File Gateway</b> (NFS/SMB share backed by S3, with a local cache), <b>Volume Gateway</b> (iSCSI, cached or stored, snapshots to EBS), <b>Tape Gateway</b> (a virtual tape library for backup software, tapes in Glacier).</li>
+        <li><b>DataSync</b>: an agent that copies file systems, S3, EFS, FSx and other clouds, with checksums, scheduling and bandwidth limits. For migrations and recurring sync, not for a live mount.</li>
+        <li><b>Transfer Family</b>: managed SFTP, FTPS, FTP and AS2 endpoints in front of S3 or EFS, for partners who send files.</li>
+        <li><b>AWS Backup</b>: one plan, one vault, one policy across EBS, EFS, RDS, Aurora, DynamoDB, S3, FSx, EC2 and more, with cross-Region and cross-account copies and <b>vault lock</b> for immutability.</li>
+        <li>Snow family: physical devices when the network is too slow; Day 28.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="next">
+    <b>Next — <a href="../day-07/index.html">Day 7: Review, troubleshooting lab</a>.</b> Ten broken setups from Days 1 to 6: an instance that cannot reach the internet, a role that cannot assume, a 502 that will not go away, a bucket that denies its own owner. You find each fault from the symptoms, against a timer.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — A bucket in a Region, an endpoint, a signed request.</b> A bucket has a globally unique name and lives in one Region. Every request is signed with SigV4 and reaches the Regional endpoint directly, through a gateway VPC endpoint (a route, free) or through an interface endpoint (PrivateLink). Keys are a flat namespace; the slashes are only characters. Objects are up to 5 TB and are stored across at least three AZs.",
+    "<b>Step 2 — Authorisation: every layer must agree.</b> After authentication S3 evaluates the request against Block Public Access, the SCPs and the caller's IAM policies and boundary, the bucket policy, the VPC endpoint policy, the Access Point policy, the object ACL if ACLs are still enabled, and the KMS key policy if the object uses SSE-KMS. An explicit Deny anywhere ends it. In the same account either the identity policy or the bucket policy may allow; across accounts both must. The 403 never says which layer refused, so you read CloudTrail data events.",
+    "<b>Step 3 — Encryption at rest, per object.</b> Every object is encrypted when it is written: with S3-managed keys (SSE-S3, the default and free), a KMS key (SSE-KMS: a key policy to satisfy, a CloudTrail entry per use, and Bucket Keys to avoid a KMS call for every request), two layers (DSSE-KMS) or a key you send (SSE-C). The bucket's default encryption applies when the request does not choose. A bucket policy can deny plain HTTP and PUTs without KMS.",
+    "<b>Step 4 — Versioning.</b> With versioning enabled every PUT adds a version and a DELETE without a version id adds a delete marker that hides the object without removing anything. Old versions are billed until a lifecycle rule or an explicit versioned delete removes them. Versioning cannot be turned off again, only suspended, and both replication and Object Lock need it.",
+    "<b>Step 5 — Storage classes and lifecycle.</b> Standard for frequent access, Standard-IA and One Zone-IA with a retrieval fee and a 30-day minimum, Glacier Instant Retrieval with milliseconds and a 90-day minimum, Glacier Flexible Retrieval and Deep Archive with a restore step and minimums of 90 and 180 days. Intelligent-Tiering moves objects itself for a small monitoring fee. Lifecycle rules run once a day and only move down: transition after N days, expire, clean noncurrent versions, and abort incomplete multipart uploads, a rule every bucket should have.",
+    "<b>Step 6 — Object Lock and replication.</b> Object Lock makes a version immutable until a date: governance mode can be bypassed with a permission, compliance mode cannot be shortened by anyone. Replication copies new objects to a bucket in the same or another Region or account, asynchronously, within minutes, or within 15 minutes with Replication Time Control. Existing objects need Batch Replication, and delete markers replicate only if you ask.",
+    "<b>Step 7 — Events.</b> A write, delete, restore or lifecycle action can publish an event. The classic path sends to SQS, SNS or Lambda with prefix and suffix filters that may not overlap. One switch sends everything to EventBridge instead, where rules match on any field and fan out to many targets. Delivery is at least once, so the consumer must tolerate a duplicate.",
+    "<b>Step 8 — Moving bytes.</b> Over 5 GB a multipart upload is required and over 100 MB it is the sensible choice: parts in parallel, resumable, and an incomplete one is billed until it is aborted. A presigned URL lets a browser or partner do one operation on one key with your permissions until a deadline. Transfer Acceleration uploads through the nearest CloudFront edge. Each prefix gives 3,500 writes and 5,500 reads a second; spread hot keys over prefixes.",
+    "<b>Step 9 — When you need a file system.</b> EFS is NFS from any number of instances and containers, with a mount target per AZ. FSx gives Windows (SMB), Lustre (HPC, linked to S3), NetApp ONTAP and OpenZFS. Storage Gateway bridges on-premises servers to S3, EBS snapshots and Glacier tapes. DataSync moves data in bulk, Transfer Family exposes SFTP in front of S3, and AWS Backup runs one backup policy across all of them."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+</body>
+</html>
