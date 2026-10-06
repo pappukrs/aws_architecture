@@ -199,6 +199,45 @@
     </div>
   </div>
 
+  <h2>A request, layer by layer: who said no?</h2>
+  <div class="card sim">
+    <p>A role in account A calls <code>GetObject</code> on <code>s3://reports/q3/summary.pdf</code>. The bucket policy allows the role. Set the other layers and, before you read the result, say whether the request succeeds and, if not, which layer refused it. S3 itself will only say <code>AccessDenied</code>.</p>
+    <div class="seg" id="rqAcct"></div>
+    <div class="seg" id="rqIam"></div>
+    <div class="seg" id="rqBpa"></div>
+    <div class="seg" id="rqOwner"></div>
+    <div class="seg" id="rqEnc"></div>
+    <div class="seg" id="rqVpce"></div>
+    <div class="seg" id="rqTls"></div>
+    <div class="calc">
+      <div><div class="lbl">Result</div><div class="big" id="rqResult"></div></div>
+      <div><div class="lbl">Layer that decided</div><div class="big" id="rqLayer"></div></div>
+      <div><div class="lbl">Where you see it</div><div class="big" id="rqWhere"></div></div>
+    </div>
+    <div class="table-wrap"><table id="rqTable"></table></div>
+    <p class="result" id="rqMsg"></p>
+    <p class="note">Order shown is the order in which an engineer should check, not an internal S3 order: the evaluation is one pass, and any explicit Deny wins over any Allow. Block Public Access only matters for grants to <code>Principal: *</code>; here it is shown for a bucket policy that also has a public statement.</p>
+  </div>
+
+  <h2>What does 10 TB cost for a year?</h2>
+  <div class="card sim">
+    <p>You store 10 TB of files. Choose how they are accessed, the storage class, whether versioning is on without a noncurrent-version rule, and whether incomplete uploads are cleaned. Before you read the result, guess the yearly storage bill and say which class is cheapest for this pattern.</p>
+    <div class="seg" id="csAccess"></div>
+    <div class="seg" id="csClass"></div>
+    <div class="seg" id="csSize"></div>
+    <div class="seg" id="csVer"></div>
+    <div class="seg" id="csMpu"></div>
+    <div class="calc">
+      <div><div class="lbl">Storage per year</div><div class="big" id="csStore"></div></div>
+      <div><div class="lbl">Retrieval and requests per year</div><div class="big" id="csRetr"></div></div>
+      <div><div class="lbl">Waste per year</div><div class="big" id="csWaste"></div></div>
+      <div><div class="lbl">Total per year</div><div class="big" id="csTotal"></div></div>
+    </div>
+    <div class="table-wrap"><table id="csTable"></table></div>
+    <p class="result" id="csMsg"></p>
+    <p class="note">List prices for US East (N. Virginia), rounded, when this page was written: Standard $0.023/GB-month; Standard-IA $0.0125 + $0.01/GB retrieved; One Zone-IA $0.01; Glacier IR $0.004 + $0.03/GB retrieved; Glacier Flexible $0.0036 + $0.01/GB (standard retrieval); Deep Archive $0.00099 + $0.02/GB; Intelligent-Tiering $0.0025 per 1,000 objects monitored and the tier prices. Egress to the internet ($0.09/GB after 100 GB) is left out; it is the same for every class. Versioning waste assumes every file is rewritten once a quarter. Incomplete uploads assume 2% of uploads fail and are never aborted.</p>
+  </div>
+
   <h2>How it works inside</h2>
   <div class="grid">
     <div class="card" style="border-top:4px solid var(--orange)">
@@ -346,6 +385,247 @@
     </div>
   </div>
 
+  <h2>Numbers to remember</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>What</th><th>Number</th><th>Why it matters</th><th>Can it be raised?</th></tr>
+      <tr><td>Object size</td><td class="num">5 TB</td><td>Largest object. A single PUT is 5 GB; above that, multipart.</td><td>No</td></tr>
+      <tr><td>Multipart parts</td><td class="num">5 MB – 5 GB · 10,000 parts</td><td>The last part may be smaller. 10,000 × 5 GB is the 5 TB limit. Incomplete uploads are billed.</td><td>No</td></tr>
+      <tr><td>Requests per prefix per second</td><td class="num">3,500 write · 5,500 read</td><td>A sudden jump above this on one prefix gives 503 SlowDown. Spread keys over prefixes.</td><td>Scales on its own, with time</td></tr>
+      <tr><td>Buckets per account</td><td class="num">10,000</td><td>Was 100 for years. Still: one bucket per team or per data set, not per user.</td><td>Yes, to 1,000,000</td></tr>
+      <tr><td>Bucket policy size</td><td class="num">20 KB</td><td>A bucket with many cross-account grants runs out. Use Access Points.</td><td>No</td></tr>
+      <tr><td>Access Points per Region</td><td class="num">10,000</td><td>Each with its own policy.</td><td>Yes</td></tr>
+      <tr><td>Presigned URL lifetime</td><td class="num">≤ 7 days (IAM user) · session expiry (role)</td><td>A URL signed by a Lambda role dies when the role's credentials expire.</td><td>No</td></tr>
+      <tr><td>Minimum storage duration</td><td class="num">IA 30 d · Glacier IR / Flexible 90 d · Deep Archive 180 d</td><td>Delete early and you pay the rest. Lifecycle to IA before 30 days is refused.</td><td>No</td></tr>
+      <tr><td>Minimum billable object</td><td class="num">128 KB (IA, Glacier IR)</td><td>Smaller objects are billed as 128 KB. Glacier adds 40 KB of overhead per object.</td><td>No</td></tr>
+      <tr><td>Retrieval time</td><td class="num">Glacier IR ms · Flexible 1–5 min to 12 h · Deep Archive 12–48 h</td><td>Flexible: expedited, standard, bulk. Bulk is nearly free but slow.</td><td>Expedited capacity can be provisioned</td></tr>
+      <tr><td>Lifecycle rules per bucket</td><td class="num">1,000</td><td>Rules run once a day, UTC. Transitions take effect the next day.</td><td>No</td></tr>
+      <tr><td>Replication Time Control</td><td class="num">15 min for 99.99%</td><td>The only replication SLA. Without RTC: usually minutes, sometimes hours.</td><td>—</td></tr>
+      <tr><td>Durability · availability</td><td class="num">11 nines · 99.99% (Standard), 99.9% (IA), 99.5% (One Zone-IA)</td><td>Durability is the same for every class except that One Zone can lose an AZ.</td><td>—</td></tr>
+      <tr><td>Event notification filters</td><td class="num">No overlap</td><td>Two Lambda destinations on overlapping prefixes are rejected. EventBridge has no such limit.</td><td>—</td></tr>
+      <tr><td>EFS</td><td class="num">1 mount target per AZ · port 2049 · 1,000 access points</td><td>Mount through the local AZ target. The security group on the target must allow NFS.</td><td>—</td></tr>
+      <tr><td>EFS file size</td><td class="num">47.9 TiB</td><td>Single file. The file system itself has no limit.</td><td>No</td></tr>
+      <tr><td>Object Lock</td><td class="num">Set at creation · retention up to 100 years</td><td>Compliance mode cannot be shortened by anyone, including root and AWS Support.</td><td>Enabling later needs Support</td></tr>
+      <tr><td>Gateway endpoint</td><td class="num">Free · same Region only</td><td>A route to S3 that avoids the NAT gateway. Not reachable from on-premises or peered VPCs; interface endpoints are.</td><td>—</td></tr>
+    </table>
+  </div>
+
+  <h2>How it fails in production</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Symptom</th><th>Likely cause</th><th>How you find out</th><th>Fix</th></tr>
+      <tr><td><code>AccessDenied</code> although the bucket policy allows</td><td>An explicit Deny elsewhere: SCP, permission boundary, VPC endpoint policy, Block Public Access, or a cross-account caller whose own IAM policy lacks the action.</td><td>CloudTrail data events for the bucket, the IAM policy simulator, IAM Access Analyzer.</td><td>Find the Deny and scope it; for cross-account, grant on both sides.</td></tr>
+      <tr><td><code>AccessDenied</code> on GET, but PUT works</td><td>The object is SSE-KMS and the caller lacks <code>kms:Decrypt</code>, or the key policy does not list the caller.</td><td>CloudTrail shows a KMS <code>Decrypt</code> failure next to the S3 call.</td><td>Allow the caller in the key policy or grant via IAM when the key policy delegates to IAM.</td></tr>
+      <tr><td>Bucket owner cannot read objects another account uploaded</td><td>ACLs enabled; the uploader owns the object and did not grant <code>bucket-owner-full-control</code>.</td><td><code>GetObjectAcl</code> shows a foreign owner.</td><td>Set Object Ownership to Bucket owner enforced; existing objects need a copy onto themselves.</td></tr>
+      <tr><td><code>503 SlowDown</code> during a batch job</td><td>The request rate on one prefix jumped above what S3 has partitioned so far.</td><td>The error in the SDK logs; the <code>5xxErrors</code> request metric.</td><td>Retry with backoff, spread keys over prefixes, ramp up gradually, ask Support to pre-partition.</td></tr>
+      <tr><td>The bill grows although data is deleted</td><td>Versioning: deletes write markers, old versions stay. Or incomplete multipart uploads.</td><td>Storage Lens and the <code>NumberOfObjects</code> and <code>BucketSizeBytes</code> metrics by storage type; Inventory lists noncurrent versions.</td><td>Lifecycle rules for noncurrent versions and for aborting incomplete uploads.</td></tr>
+      <tr><td>A lifecycle move to Glacier made the bill higher</td><td>Millions of small objects: per-request transition fees plus 40 KB overhead each.</td><td>The Cost and Usage Report shows request charges.</td><td>Filter the rule by object size (minimum 128 KB or more); pack small files first.</td></tr>
+      <tr><td>Deleted objects are still in the other Region</td><td>Delete markers do not replicate by default.</td><td>Compare Inventory of both buckets.</td><td>Turn on delete marker replication, or accept that the replica is a backup and treat it so.</td></tr>
+      <tr><td>Old objects never appeared in the replica</td><td>Replication applies to objects written after the rule existed.</td><td>Replication status in Inventory is empty for them.</td><td>Run an S3 Batch Replication job.</td></tr>
+      <tr><td>Presigned URLs stop working after about an hour</td><td>Signed with a role's temporary credentials, which expire.</td><td>The error says the token has expired, not that the URL has.</td><td>Sign with longer-lived session credentials or re-issue URLs; keep the lifetime short by design.</td></tr>
+      <tr><td>Browser upload fails with a CORS error</td><td>No CORS configuration on the bucket, or the origin or method is missing.</td><td>The browser console; the preflight OPTIONS request returns 403.</td><td>Add a CORS rule with the origin, PUT/POST, and the headers used by the SDK.</td></tr>
+      <tr><td>Lambda event fires twice for one upload</td><td>At-least-once delivery, or the object was written by a multipart upload and a copy.</td><td>Duplicate request ids in logs.</td><td>Make the consumer idempotent: key on bucket, key and version id.</td></tr>
+      <tr><td>Instances in a private subnet cannot reach S3</td><td>No gateway endpoint and no NAT, or the endpoint's route is missing from that subnet's route table, or the endpoint policy denies.</td><td>Reachability Analyzer; the route table; CloudTrail shows nothing because the request never arrives.</td><td>Add the gateway endpoint to the route table; check the endpoint policy.</td></tr>
+      <tr><td>Bucket name taken</td><td>Names are global across all accounts. A deleted name may take hours to free, and someone else may claim it.</td><td>The create call fails.</td><td>Use a naming scheme with the account id or a random suffix; never delete a bucket to recreate it.</td></tr>
+      <tr><td>EFS mount hangs</td><td>Security group on the mount target does not allow port 2049 from the instance, or DNS for the file system fails because DNS hostnames are off in the VPC.</td><td>The mount times out; <code>nc -zv</code> to port 2049 fails.</td><td>Allow 2049 from the instance's security group; enable DNS hostnames and resolution.</td></tr>
+      <tr><td>EFS throughput collapses after a few hours</td><td>Bursting mode: credits exhausted on a small file system.</td><td><code>BurstCreditBalance</code> at zero in CloudWatch.</td><td>Switch to Elastic throughput.</td></tr>
+      <tr><td>Glacier GET returns <code>InvalidObjectState</code></td><td>The object is archived and has not been restored, or the restored copy expired.</td><td>The error itself; <code>HeadObject</code> shows the restore status.</td><td>Call <code>RestoreObject</code>, wait, read within the restore window.</td></tr>
+    </table>
+  </div>
+
+  <h2>What drives the bill</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Item</th><th>How it is charged</th><th>Figure</th><th>How to pay less</th></tr>
+      <tr><td><b>Storage</b></td><td>Per GB-month, by class, measured several times a day.</td><td class="num">Standard $0.023 · IA $0.0125 · Glacier IR $0.004 · Deep Archive $0.00099</td><td>Lifecycle rules, or Intelligent-Tiering when the pattern is unknown. 10 TB in Standard is about $2,800 a year; in Deep Archive about $120.</td></tr>
+      <tr><td><b>Requests</b></td><td>Per 1,000 requests. PUT, COPY, POST, LIST cost more than GET.</td><td class="num">PUT $0.005 · GET $0.0004 per 1,000 (Standard)</td><td>Fewer, larger objects. A million tiny PUTs cost $5; the same bytes in one object cost nothing to speak of.</td></tr>
+      <tr><td><b>Retrieval</b></td><td>Per GB read from IA and Glacier classes, plus a per-request fee for restores.</td><td class="num">IA $0.01 · Glacier IR $0.03 · Deep Archive $0.02 (standard)</td><td>Do not put data that is read monthly in Glacier IR; one read a month costs more than the storage saving.</td></tr>
+      <tr><td><b>Early deletion</b></td><td>The rest of the minimum duration.</td><td class="num">30 / 90 / 180 days</td><td>Only move data you will keep. Filter lifecycle rules by prefix and size.</td></tr>
+      <tr><td><b>Data transfer out</b></td><td>To the internet, per GB, after the first 100 GB a month per account. Free into S3, free to EC2 in the same Region.</td><td class="num">$0.09 / GB</td><td>Serve through CloudFront, whose transfer from S3 is free and whose own egress is cheaper. Keep compute in the bucket's Region.</td></tr>
+      <tr><td><b>Cross-Region replication</b></td><td>Transfer between Regions, per GB, plus storage at the destination and the replication PUTs.</td><td class="num">$0.02 / GB</td><td>Replicate only the prefixes you need; land replicas in a cheaper class.</td></tr>
+      <tr><td><b>SSE-KMS</b></td><td>KMS requests per object operation, unless Bucket Keys are on.</td><td class="num">$0.03 per 10,000 KMS requests</td><td>Turn on S3 Bucket Keys: about 99% fewer KMS calls. SSE-S3 is free.</td></tr>
+      <tr><td><b>Intelligent-Tiering</b></td><td>A monitoring fee per object, on objects of 128 KB and more.</td><td class="num">$0.0025 per 1,000 objects a month</td><td>Negligible for large objects; for millions of tiny ones, choose a class yourself.</td></tr>
+      <tr><td><b>Lifecycle transitions</b></td><td>Per 1,000 transition requests, highest into Glacier classes.</td><td class="num">$0.01 (IA) to $0.05 (Deep Archive) per 1,000</td><td>Pack small objects before archiving them.</td></tr>
+      <tr><td><b>Interface endpoint for S3</b></td><td>Per hour per AZ plus per GB.</td><td class="num">$0.01 / hour · $0.01 / GB</td><td>Use the free gateway endpoint from inside the VPC; the interface endpoint is for on-premises and peered access.</td></tr>
+      <tr><td><b>EFS</b></td><td>Per GB-month by class, plus Elastic throughput per GB read and written.</td><td class="num">Standard $0.30 · IA $0.016 / GB-month · $0.03 / GB read</td><td>Lifecycle to IA after 30 days; One Zone for data you can recreate. EFS is 13× Standard S3 per GB: use it only for real file-system needs.</td></tr>
+      <tr><td><b>FSx</b></td><td>Per GB-month of provisioned capacity plus throughput capacity, per hour.</td><td class="num">Windows SSD from $0.13 / GB-month</td><td>Provision what you need, use HDD for cold shares, deduplicate.</td></tr>
+      <tr><td><b>Free</b></td><td colspan="3">Buckets, policies, Access Points, versioning, lifecycle rules themselves, event notifications, SSE-S3, Block Public Access, the gateway VPC endpoint, transfer into S3, and transfer to CloudFront. You pay for bytes stored, requests made, bytes retrieved from cold classes and bytes leaving the Region.</td></tr>
+    </table>
+    <p class="note">Figures are list prices for US East (N. Virginia) from the AWS pricing pages when this page was written. Prices differ by Region and change over time. Check the pricing page for your Region.</p>
+  </div>
+
+  <h2>Which storage class?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>The data</th><th>Class</th><th>Why</th></tr>
+      <tr><td>Served to users every day, logs of the last week, anything an application reads often</td><td><b>Standard</b></td><td>No retrieval fee, no minimum; the cheapest when read more than about twice a month.</td></tr>
+      <tr><td>Read a few times a year, must be available in milliseconds: old invoices, finished projects</td><td><b>Standard-IA</b></td><td>Half the storage price; retrieval fees stay small at that rate. Objects over 128 KB, kept over 30 days.</td></tr>
+      <tr><td>Same, but you can recreate it: thumbnails, transcodes, a second copy</td><td><b>One Zone-IA</b></td><td>20% cheaper than IA; one AZ, so a lost AZ loses the data.</td></tr>
+      <tr><td>Pattern unknown or changing; a data lake with hot and cold partitions</td><td><b>Intelligent-Tiering</b></td><td>No retrieval fees and no early-deletion fees; S3 tiers each object. Add the optional archive tiers only if you accept restore latency.</td></tr>
+      <tr><td>Archive read quarterly and needed at once: medical images, media masters</td><td><b>Glacier Instant Retrieval</b></td><td>Milliseconds at a quarter of the Standard price; 90-day minimum, retrieval fee higher than IA.</td></tr>
+      <tr><td>Backups and archives read rarely, hours of waiting acceptable</td><td><b>Glacier Flexible Retrieval</b></td><td>Bulk retrieval is nearly free; expedited is minutes at a price.</td></tr>
+      <tr><td>Compliance retention of years, read almost never</td><td><b>Glacier Deep Archive</b></td><td>About $1 per TB per month. 12 hours to restore, 180-day minimum.</td></tr>
+      <tr><td>Millions of small objects per second with single-digit millisecond latency, in one AZ</td><td><b>Express One Zone</b></td><td>A directory bucket co-located with the compute; request prices far lower, storage higher.</td></tr>
+    </table>
+  </div>
+
+  <h2>S3, EFS, FSx or EBS?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Need</th><th>Choose</th><th>Because</th></tr>
+      <tr><td>Objects written whole and read whole: files, images, backups, data lake, static sites</td><td><b>S3</b></td><td>Cheapest, most durable, unlimited, reachable over HTTP from anywhere. No partial writes and 100 ms latency per call.</td></tr>
+      <tr><td>Many Linux instances or containers share one POSIX file tree</td><td><b>EFS</b></td><td>NFS that grows on its own, multi-AZ, mounted by thousands of clients. Pay more per GB; slow for millions of tiny files.</td></tr>
+      <tr><td>Windows file shares with Active Directory permissions</td><td><b>FSx for Windows</b></td><td>SMB, NTFS ACLs, DFS, shadow copies. EFS does not speak SMB.</td></tr>
+      <tr><td>Scratch space for HPC or ML training, fed from S3</td><td><b>FSx for Lustre</b></td><td>Hundreds of GB/s and sub-millisecond latency; lazy-loads from and writes back to a bucket.</td></tr>
+      <tr><td>Multi-protocol enterprise NAS, snapshots, replication from on-premises NetApp</td><td><b>FSx for NetApp ONTAP</b></td><td>NFS, SMB and iSCSI on one file system, with the ONTAP tool set.</td></tr>
+      <tr><td>A database or any one instance's disk</td><td><b>EBS</b> (Day 4)</td><td>Block storage with the lowest latency, attached to one instance (or a few with Multi-Attach io2).</td></tr>
+      <tr><td>On-premises servers that must keep a local file share but store in AWS</td><td><b>S3 File Gateway</b></td><td>NFS or SMB locally, objects in S3, a cache for hot files.</td></tr>
+      <tr><td>Move 50 TB from a NAS to S3 once, or every night</td><td><b>DataSync</b></td><td>Agent, checksums, scheduling, throttling. For over about 100 TB with slow links, Snowball.</td></tr>
+    </table>
+  </div>
+
+  <h2>Hands-on lab</h2>
+  <div class="card lab">
+    <p><b>Goal:</b> build a locked-down versioned bucket, prove that a delete does not delete, make the owner lose and regain access to an object, trace a denied request in CloudTrail, add lifecycle and event rules, and mount EFS from two instances. About 45 minutes.</p>
+    <p><b>Cost:</b> a few cents: a handful of objects, a KMS key ($1 a month, delete it at the end), a CloudTrail data-event trail for an hour, and two <code>t4g.nano</code> instances for the EFS part.</p>
+    <ol>
+      <li>Create a bucket with versioning, Block Public Access, bucket-owner-enforced ownership and default SSE-S3. Then write a bucket policy that denies plain HTTP.
+<pre class="code">export AWS_DEFAULT_REGION=ap-south-1
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+B=day06-$ACCT-$RANDOM
+
+aws s3api create-bucket --bucket $B --create-bucket-configuration LocationConstraint=$AWS_DEFAULT_REGION \
+  --object-ownership BucketOwnerEnforced
+aws s3api put-public-access-block --bucket $B --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws s3api put-bucket-versioning --bucket $B --versioning-configuration Status=Enabled
+
+cat > policy.json <<JSON
+{ "Version": "2012-10-17", "Statement": [ {
+  "Sid": "TLSOnly", "Effect": "Deny", "Principal": "*", "Action": "s3:*",
+  "Resource": ["arn:aws:s3:::$B", "arn:aws:s3:::$B/*"],
+  "Condition": { "Bool": { "aws:SecureTransport": "false" } } } ] }
+JSON
+aws s3api put-bucket-policy --bucket $B --policy file://policy.json</pre></li>
+
+      <li>Upload a file three times, delete it, and see that nothing is gone.
+<pre class="code">for i in 1 2 3; do echo "version $i" > report.txt; aws s3 cp report.txt s3://$B/q3/report.txt; done
+aws s3 rm s3://$B/q3/report.txt
+aws s3 ls s3://$B/q3/                     # empty: the object is hidden
+aws s3api list-object-versions --bucket $B --prefix q3/ \
+  --query '{versions:Versions[].[VersionId,IsLatest,Size],markers:DeleteMarkers[].[VersionId,IsLatest]}'</pre>
+        Three versions and one delete marker. Restore by deleting the marker:
+<pre class="code">MK=$(aws s3api list-object-versions --bucket $B --prefix q3/ --query 'DeleteMarkers[0].VersionId' --output text)
+aws s3api delete-object --bucket $B --key q3/report.txt --version-id $MK
+aws s3 cp s3://$B/q3/report.txt -          # "version 3" is back</pre></li>
+
+      <li>Make the KMS layer say no. Create a key whose policy allows only your identity, upload with it, then read as a role that has <code>s3:*</code> but no KMS permission.
+<pre class="code">ME=$(aws sts get-caller-identity --query Arn --output text)
+KEY=$(aws kms create-key --description day06 --query KeyMetadata.KeyId --output text)
+aws s3 cp report.txt s3://$B/secret/report.txt --sse aws:kms --sse-kms-key-id $KEY
+
+cat > trust.json <<JSON
+{ "Version": "2012-10-17", "Statement": [ { "Effect": "Allow",
+  "Principal": { "AWS": "$ME" }, "Action": "sts:AssumeRole" } ] }
+JSON
+aws iam create-role --role-name day06-reader --assume-role-policy-document file://trust.json
+aws iam attach-role-policy --role-name day06-reader --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+sleep 10
+CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$ACCT:role/day06-reader --role-session-name t --query Credentials)
+export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .AccessKeyId) AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .SecretAccessKey) AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .SessionToken)
+
+aws s3 cp s3://$B/q3/report.txt -          # works: SSE-S3
+aws s3 cp s3://$B/secret/report.txt -      # AccessDenied: the key policy does not allow this role
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN</pre>
+        S3 full access was not enough. Before you fix it, say which document you would change: the role's IAM policy or the key policy, and why the answer depends on whether the key policy delegates to IAM.</li>
+
+      <li>Trace the denial. Turn on data events for the bucket, repeat the failing read, then query CloudTrail.
+<pre class="code">aws cloudtrail create-trail --name day06 --s3-bucket-name $B --query TrailARN   # (first add the CloudTrail bucket policy the console offers, or use an existing trail bucket)
+aws cloudtrail put-event-selectors --trail-name day06 --event-selectors \
+  '[{"ReadWriteType":"All","IncludeManagementEvents":false,"DataResources":[{"Type":"AWS::S3::Object","Values":["arn:aws:s3:::'$B'/"]}]}]'
+aws cloudtrail start-logging --name day06
+# ... repeat step 3's denied read, wait ~5 minutes, then:
+aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=GetObject \
+  --query 'Events[].CloudTrailEvent' --output text | jq 'select(.errorCode!=null) | {errorCode, errorMessage, user: .userIdentity.arn}'</pre>
+        The S3 event shows <code>AccessDenied</code>; the neighbouring KMS <code>Decrypt</code> event names the real cause.</li>
+
+      <li>Lifecycle and events. Add the two rules every bucket should have, then route every object event to EventBridge and watch one arrive.
+<pre class="code">cat > lifecycle.json <<JSON
+{ "Rules": [
+  { "ID": "abort-mpu", "Status": "Enabled", "Filter": {}, "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 } },
+  { "ID": "old-versions", "Status": "Enabled", "Filter": {},
+    "NoncurrentVersionTransitions": [ { "NoncurrentDays": 30, "StorageClass": "STANDARD_IA" } ],
+    "NoncurrentVersionExpiration": { "NoncurrentDays": 365, "NewerNoncurrentVersions": 3 } },
+  { "ID": "archive-q3", "Status": "Enabled", "Filter": { "And": { "Prefix": "q3/", "ObjectSizeGreaterThan": 131072 } },
+    "Transitions": [ { "Days": 90, "StorageClass": "GLACIER_IR" }, { "Days": 365, "StorageClass": "DEEP_ARCHIVE" } ] }
+] }
+JSON
+aws s3api put-bucket-lifecycle-configuration --bucket $B --lifecycle-configuration file://lifecycle.json
+aws s3api put-bucket-notification-configuration --bucket $B --notification-configuration '{"EventBridgeConfiguration":{}}'
+
+aws logs create-log-group --log-group-name /day06/s3-events
+aws events put-rule --name day06-s3 --event-pattern '{"source":["aws.s3"],"detail":{"bucket":{"name":["'$B'"]}}}'
+aws events put-targets --rule day06-s3 --targets Id=1,Arn=arn:aws:logs:$AWS_DEFAULT_REGION:$ACCT:log-group:/day06/s3-events
+aws s3 cp report.txt s3://$B/q3/new.txt
+sleep 20; aws logs tail /day06/s3-events --since 2m | head -c 1500</pre>
+        Note the <code>detail.object.version-id</code> in the event: that is the idempotency key a consumer should use.</li>
+
+      <li>A presigned URL, two ways. Sign one with your long-lived identity and one from an assumed role, and compare the lifetimes.
+<pre class="code">aws s3 presign s3://$B/q3/report.txt --expires-in 604800   # 7 days: accepted only if your credentials are IAM user keys
+curl -s "$(aws s3 presign s3://$B/q3/report.txt --expires-in 60)"
+sleep 61; curl -s "$(aws s3 presign s3://$B/q3/report.txt --expires-in 60)" ; # fresh URL works; the old one would now return "Request has expired"</pre></li>
+
+      <li>EFS from two AZs. Create a file system with a mount target in two default subnets and mount it on two instances; write from one, read from the other.
+<pre class="code">VPC=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true --query 'Vpcs[0].VpcId' --output text)
+SUBS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC Name=default-for-az,Values=true --query 'Subnets[0:2].SubnetId' --output text)
+SG=$(aws ec2 create-security-group --group-name day06-efs --description efs --vpc-id $VPC --query GroupId --output text)
+aws ec2 authorize-security-group-ingress --group-id $SG --protocol tcp --port 2049 --source-group $SG
+
+FS=$(aws efs create-file-system --performance-mode generalPurpose --throughput-mode elastic --encrypted \
+  --tags Key=Name,Value=day06 --query FileSystemId --output text)
+for S in $SUBS; do aws efs create-mount-target --file-system-id $FS --subnet-id $S --security-groups $SG; done
+
+AMI=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 --query Parameter.Value --output text)
+for S in $SUBS; do
+  aws ec2 run-instances --image-id $AMI --instance-type t4g.nano --subnet-id $S --security-group-ids $SG \
+    --iam-instance-profile Name=day04-ssm --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=day06-efs}]' \
+    --user-data "#!/bin/bash
+dnf install -y amazon-efs-utils; mkdir -p /mnt/efs; mount -t efs -o tls $FS:/ /mnt/efs; hostname > /mnt/efs/\$(hostname).txt" \
+    --query 'Instances[0].InstanceId' --output text
+done
+# after ~2 minutes, Session Manager into either instance (Day 4's day04-ssm profile):  ls /mnt/efs   → two files, one from each AZ</pre>
+        Then stop one instance and confirm the file it wrote is still there: the data lives in the file system, not on the instance.</li>
+
+      <li>Clean up. Versioned buckets must be emptied of every version and marker first.
+<pre class="code">aws ec2 terminate-instances --instance-ids $(aws ec2 describe-instances --filters Name=tag:Name,Values=day06-efs Name=instance-state-name,Values=running --query 'Reservations[].Instances[].InstanceId' --output text)
+for MT in $(aws efs describe-mount-targets --file-system-id $FS --query 'MountTargets[].MountTargetId' --output text); do aws efs delete-mount-target --mount-target-id $MT; done
+sleep 60; aws efs delete-file-system --file-system-id $FS
+aws ec2 delete-security-group --group-id $SG
+aws cloudtrail delete-trail --name day06
+aws events remove-targets --rule day06-s3 --ids 1; aws events delete-rule --name day06-s3; aws logs delete-log-group --log-group-name /day06/s3-events
+aws iam detach-role-policy --role-name day06-reader --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess; aws iam delete-role --role-name day06-reader
+aws kms schedule-key-deletion --key-id $KEY --pending-window-in-days 7
+
+aws s3api list-object-versions --bucket $B --output json \
+  --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][]}' > all.json
+aws s3api delete-objects --bucket $B --delete file://all.json
+aws s3api delete-bucket --bucket $B</pre></li>
+    </ol>
+    <p class="note">Write your three lines in <code>notes.md</code>: one thing that surprised you, one limit to remember, one mistake to avoid. For most people the surprise is step 2: the delete that did not delete.</p>
+  </div>
+
+  <h2>Interview questions</h2>
+  <details><summary>A bucket policy allows access but the request is still denied. Name four possible reasons.</summary><p>S3 is only one voter and any explicit Deny wins, so I go looking for the Deny or the missing Allow in another layer. One: the caller is in another account, and cross-account access needs both the bucket policy and the caller's own IAM policy to allow the action; the bucket policy alone is not enough. Two: an SCP or a permission boundary on the caller denies S3, or limits it to certain Regions or buckets. Three: the object is encrypted with SSE-KMS and the caller cannot use the key, because the key policy does not list it; the S3 call fails with AccessDenied although the S3 permissions are fine. Four: the request arrives through a VPC endpoint with a policy that does not allow this bucket, or the bucket policy has a condition on <code>aws:SourceVpce</code> and the request came another way. I would add two more: Block Public Access overrides a policy that grants to everyone, and if ACLs are still enabled the object may belong to another account that uploaded it, so even the bucket owner cannot read it. Since the 403 does not say which layer refused, I turn on CloudTrail data events, repeat the call and read the error and the neighbouring KMS event.</p></details>
+  <details><summary>Bucket policy, IAM policy, ACL or Access Point: when do you use each?</summary><p>For callers inside my own account I prefer IAM identity policies, because permissions then live with the identity and I can read what a role can do in one place. The bucket policy is for things that belong to the bucket: cross-account grants, denying plain HTTP, requiring a VPC endpoint, requiring encryption, and a service principal such as CloudTrail or a CloudFront origin access control. ACLs I disable with Bucket owner enforced; the only place they still appear is the log delivery group of some older services, and that is being replaced by policies too. Access Points come in when one bucket serves many teams or applications: each gets its own endpoint with its own policy, optionally reachable only from one VPC, and the bucket policy delegates to them with one statement. That keeps the bucket policy under its 20 KB limit and lets each team change its own policy without touching the others.</p></details>
+  <details><summary>How do you give a mobile app access to upload files without giving it AWS credentials?</summary><p>The app never holds AWS credentials. It authenticates to my backend, with Cognito or my own login, and asks for permission to upload one file. The backend, which has a role with <code>s3:PutObject</code> on a prefix, generates a presigned URL or a presigned POST for a key it chooses, such as <code>uploads/{userId}/{uuid}</code>, with a short expiry of a few minutes and, with a presigned POST, conditions on content length and content type. The device PUTs straight to S3 over that URL, so the bytes never pass through my servers. The bucket has a CORS rule if a browser is involved, Block Public Access on, and an event notification on <code>uploads/</code> that tells the backend, through SQS or EventBridge, that the object exists; the backend validates it and moves or records it. Reads work the same way in reverse, or through CloudFront with signed URLs when many users read the same files. If the backend is a Lambda, I remember that its URLs die when its role credentials expire, so I keep the expiry short on purpose.</p></details>
+  <details><summary>Versioning is on. A developer deletes a prefix with 10 million objects by mistake. What happened, and how do you recover?</summary><p>Nothing was lost. Each delete without a version id wrote a delete marker on top of the current version; the data is still there and still billed. Recovery is to remove the delete markers. For ten million keys I do not script a loop. I generate an S3 Inventory or list the versions for the prefix, filter to the delete markers that are the latest version, and run an S3 Batch Operations job, or a short script over the list, that deletes those marker version ids. The objects reappear as they were. Afterwards I ask how the developer had <code>s3:DeleteObject</code> on production at all, and I consider two protections: a bucket policy that denies <code>s3:DeleteObjectVersion</code> to everyone except a break-glass role, so that versions can only be hidden and never destroyed, and Object Lock for the data that must survive even a malicious actor. If versioning had been off, the answer would have been the replica in the other Region, or AWS Backup, or an apology.</p></details>
+  <details><summary>Design the storage for 50 TB of application logs that are read heavily for a week, occasionally for 90 days, and kept for 7 years.</summary><p>The lifecycle rule writes itself from the access pattern. Logs land in Standard, where the week of heavy reading has no retrieval fee. After 30 days, the earliest allowed, they move to Standard-IA: half the price and the occasional read costs a cent a gigabyte. After 90 days they move to Glacier Deep Archive, at about a dollar per terabyte per month, and expire after 7 years. I key the objects by source and time with a hash or source id early in the key, so that the write rate spreads over prefixes, and I compress and batch them, because logs are small and the IA and Glacier classes bill a minimum of 128 KB and add 40 KB per object in Glacier. If the retention is a legal requirement I enable Object Lock in compliance mode with a 7-year default retention and keep a replica in another Region. The rule also aborts incomplete multipart uploads after 7 days. For queries I point Athena at the Standard and IA data and accept that anything older needs a restore first. Over 7 years that is roughly 2.5 PB in Deep Archive, about $30,000 a year, against about $700,000 a year if it all stayed in Standard.</p></details>
+  <details><summary>When would you choose Intelligent-Tiering over writing lifecycle rules yourself?</summary><p>When I cannot predict access per object. A data lake where some partitions are hot for months and others are never read again, user uploads where a few files become popular, or a bucket shared by many teams with different habits. Intelligent-Tiering watches each object and moves it to the infrequent tier after 30 days without access and to the archive instant tier after 90, and back to frequent the moment it is read, with no retrieval fee and no early-deletion fee. The price is a monitoring fee per object, which is nothing for large objects and a real cost for millions of tiny ones; objects under 128 KB are excluded and simply stay at the frequent price. I write my own rules when the pattern is known and time-based, as with logs, because then IA and Glacier are cheaper than the tiers and I can choose Deep Archive, which Intelligent-Tiering only reaches through the optional asynchronous archive tiers that bring back restore latency.</p></details>
+  <details><summary>Explain how S3 cross-Region replication behaves on deletes and on existing data, and when you would use Replication Time Control.</summary><p>Replication copies new objects, their metadata and tags to the destination after they are written, asynchronously, usually within minutes. Three things surprise people. Objects that existed before the rule do not replicate, so the first step on an existing bucket is a Batch Replication job. A delete without a version id writes a delete marker, and markers are not replicated unless I turn that on, so by default the replica keeps the object; a delete of a specific version is never replicated, which protects the replica from a destructive mistake. And SSE-KMS objects replicate only when the rule says so, using a different key in the destination Region. I turn on Replication Time Control when the replica is part of a recovery objective: it gives a 15-minute SLA for 99.99% of objects, metrics for the replication latency and the bytes pending, and an event when an object misses the window, which is what lets me put a number on the data I could lose in a Regional failover.</p></details>
+  <details><summary>Your batch job gets 503 SlowDown errors from S3. What is happening and what do you do?</summary><p>S3 partitions a bucket by key prefix and each partition serves about 3,500 writes and 5,500 reads a second. S3 splits partitions as load grows, but it takes time, and a job that starts at full speed on one prefix exceeds the current partition and gets 503s until the split has happened. First I make sure the client retries with exponential backoff and jitter, which the SDKs do by default and which turns the errors into a slower start rather than failures. Then I look at the keys: if they share a long prefix such as a date, I add a few characters of hash or an id early in the key so that the load spreads over many partitions. I ramp the job up over minutes instead of seconds. For a known future load I can ask AWS Support to pre-partition the prefix. And I check whether the job is doing more requests than it needs, such as a HEAD before every GET or a LIST per object.</p></details>
+  <details><summary>S3, EFS or FSx for a fleet of web servers that need shared uploaded files?</summary><p>I ask whether the application needs a file system or only thinks it does. If it writes a file and later reads the whole file, S3 is right: it is far cheaper, needs no mount, scales without limits, and the servers stay stateless; a small change in the code, or a library that maps a path to a bucket, usually does it. If the application uses POSIX semantics, such as appending, locking, renaming or listing directories at speed, or is third-party software I cannot change, I use EFS: NFS from every instance, a mount target in each AZ, Elastic throughput, access points for per-application roots, and a lifecycle policy to the infrequent access class. If the servers are Windows and the application wants SMB and Active Directory permissions, FSx for Windows. I would warn that EFS costs about 13 times S3 per gigabyte and that a workload opening thousands of small files is slow on any network file system, so the thumbnail directory with a million files belongs in S3 either way.</p></details>
+  <details><summary>How do you protect backups in S3 against ransomware that has taken over the account?</summary><p>I assume the attacker has the credentials of an administrator in the production account, so permissions alone are not a defence. First, versioning plus Object Lock in compliance mode on the backup bucket, with a retention equal to the backup retention: nobody, not even root, can delete a locked version early, and the bucket cannot be deleted while one exists. Second, a copy in a separate account that production cannot assume into, written by replication or by AWS Backup cross-account copy with a vault lock; the attacker's account is then not the one that holds the only copy. Third, the backup account's own Block Public Access and SCPs that deny disabling versioning, changing lock settings or deleting the bucket. Fourth, detection: CloudTrail to a locked bucket in the security account, GuardDuty S3 protection, and alarms on mass deletes and on changes to replication or lifecycle, because a lifecycle rule that expires everything after one day is the quiet way to destroy a bucket. Last, I test a restore, because a backup that was never restored is a hope, not a backup.</p></details>
+
   <div class="next">
     <b>Next — <a href="../day-07/index.html">Day 7: Review, troubleshooting lab</a>.</b> Ten broken setups from Days 1 to 6: an instance that cannot reach the internet, a role that cannot assume, a 502 that will not go away, a bucket that denies its own owner. You find each fault from the symptoms, against a timer.
   </div>
@@ -366,5 +646,177 @@
   ];
 </script>
 <script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const money = x => "$" + Math.round(x).toLocaleString("en-US");
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+  function buttons(id, title, items, onPick) {
+    $(id).innerHTML = `<b>${title}</b>`;
+    items.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.dataset.key = key;
+      b.onclick = () => onPick(key);
+      $(id).appendChild(b);
+    });
+  }
+  const mark = (id, key) => [...$(id).querySelectorAll("button")].forEach(b => b.classList.toggle("on", b.dataset.key === key));
+
+  // ---------- Simulator 1: who said no? ----------
+  const rq = { acct: "same", iam: "allow", bpa: "on", owner: "enforced", enc: "s3", vpce: "none", tls: "https" };
+  buttons("rqAcct", "Caller is in", [["same", "the same account"], ["other", "another account"]], k => { rq.acct = k; paintRq(); });
+  buttons("rqIam", "Caller's IAM policy", [["allow", "allows s3:GetObject"], ["none", "says nothing about S3"], ["deny", "denies s3:* outside eu-west-1"]], k => { rq.iam = k; paintRq(); });
+  buttons("rqBpa", "Block Public Access", [["on", "on (bucket policy also has a Principal:* statement)"], ["off", "off"]], k => { rq.bpa = k; paintRq(); });
+  buttons("rqOwner", "Object ownership", [["enforced", "Bucket owner enforced"], ["acl", "ACLs enabled, object uploaded by a partner account"]], k => { rq.owner = k; paintRq(); });
+  buttons("rqEnc", "Object encryption", [["s3", "SSE-S3"], ["kms-ok", "SSE-KMS, key policy allows caller"], ["kms-no", "SSE-KMS, key policy does not"]], k => { rq.enc = k; paintRq(); });
+  buttons("rqVpce", "Path to S3", [["none", "internet / NAT"], ["vpce-ok", "gateway endpoint, policy allows bucket"], ["vpce-no", "gateway endpoint, policy allows other buckets only"]], k => { rq.vpce = k; paintRq(); });
+  buttons("rqTls", "Transport", [["https", "HTTPS"], ["http", "HTTP (bucket policy denies aws:SecureTransport=false)"]], k => { rq.tls = k; paintRq(); });
+
+  function paintRq() {
+    Object.entries({ rqAcct: rq.acct, rqIam: rq.iam, rqBpa: rq.bpa, rqOwner: rq.owner, rqEnc: rq.enc, rqVpce: rq.vpce, rqTls: rq.tls }).forEach(([id, k]) => mark(id, k));
+    const rows = [];
+    let denied = null, where = "";
+    const add = (layer, verdict, note) => rows.push([layer, verdict, note]);
+
+    // Checks in the order an engineer walks them. First explicit denies.
+    if (rq.tls === "http") { add("Bucket policy: TLS-only Deny", "DENY", "aws:SecureTransport is false."); denied = denied || ["Bucket policy (Deny)", "CloudTrail: AccessDenied, no KMS event"]; }
+    else add("Bucket policy: TLS-only Deny", "pass", "Request is HTTPS.");
+
+    if (rq.iam === "deny") { add("IAM: explicit Deny", "DENY", "s3:* denied outside eu-west-1; the bucket is in ap-south-1."); denied = denied || ["IAM identity policy (Deny)", "Policy simulator; CloudTrail AccessDenied"]; }
+    else add("IAM: explicit Deny", "pass", "No Deny statement applies.");
+
+    if (rq.vpce === "vpce-no") { add("VPC endpoint policy", "DENY", "The endpoint policy lists other buckets; an implicit deny for this one."); denied = denied || ["VPC endpoint policy", "CloudTrail: vpcEndpointId in the event, AccessDenied"]; }
+    else add("VPC endpoint policy", rq.vpce === "none" ? "n/a" : "pass", rq.vpce === "none" ? "No endpoint in the path." : "Endpoint policy allows this bucket.");
+
+    add("Block Public Access", rq.bpa === "on" ? "ignores Principal:* grant" : "n/a", rq.bpa === "on" ? "The public statement is ignored; the role's grant still counts." : "The public statement would also allow anyone on the internet.");
+
+    // Allows
+    if (rq.acct === "same") {
+      add("Allow: same account", rq.iam === "none" ? "pass (bucket policy)" : "pass", rq.iam === "none" ? "IAM is silent, but in the same account the bucket policy's Allow is enough." : "Either the IAM policy or the bucket policy allows.");
+    } else {
+      if (rq.iam === "none") { add("Allow: cross-account", "DENY", "Cross-account needs the caller's IAM policy AND the bucket policy. IAM is silent."); denied = denied || ["Caller's IAM policy (missing Allow)", "CloudTrail in the bucket account: AccessDenied, principal from account A"]; }
+      else add("Allow: cross-account", "pass", "Both the caller's IAM policy and the bucket policy allow.");
+    }
+
+    if (rq.owner === "acl") { add("Object ACL / ownership", "DENY", "The partner account owns the object and did not grant the bucket owner. The bucket policy cannot grant what the bucket owner does not own."); denied = denied || ["Object ACL (foreign owner)", "GetObjectAcl shows the partner as owner"]; }
+    else add("Object ACL / ownership", "pass", "Bucket owner enforced: every object belongs to the bucket owner; ACLs are off.");
+
+    if (rq.enc === "kms-no") { add("KMS key policy", "DENY", "GetObject needs kms:Decrypt on the key; the key policy does not allow the caller."); denied = denied || ["KMS key policy", "CloudTrail: a kms:Decrypt AccessDenied next to the S3 GetObject"]; }
+    else add("KMS key policy", rq.enc === "s3" ? "n/a" : "pass", rq.enc === "s3" ? "SSE-S3 needs no KMS permission." : "Key policy allows kms:Decrypt.");
+
+    $("rqTable").innerHTML = "<tr><th>Layer</th><th>Verdict</th><th>Why</th></tr>" + rows.map(r =>
+      `<tr${r[1].startsWith("DENY") ? ' style="color:var(--bad)"' : ""}><td>${r[0]}</td><td class="num">${r[1]}</td><td>${r[2]}</td></tr>`).join("");
+
+    const nDeny = rows.filter(r => r[1].startsWith("DENY")).length;
+    if (denied) {
+      big("rqResult", "403 AccessDenied", "bad");
+      big("rqLayer", denied[0], "bad");
+      big("rqWhere", denied[1], "muted");
+      $("rqMsg").innerHTML = nDeny > 1
+        ? `<b>${nDeny} layers refuse.</b> Fixing the first one you find will not be enough; the error message will look exactly the same afterwards. This is why you read CloudTrail before you change anything.`
+        : `<b>One layer refuses.</b> S3 says only AccessDenied. Nothing in the message points at "${denied[0]}". The bucket policy's Allow was real and irrelevant.`;
+    } else {
+      big("rqResult", "200 OK", "pub");
+      big("rqLayer", "Every layer allowed", "pub");
+      big("rqWhere", "CloudTrail data event: GetObject, no errorCode", "muted");
+      $("rqMsg").innerHTML = `<b>The object is returned.</b> ${rq.acct === "same" && rq.iam === "none" ? "Note that the IAM policy said nothing about S3 and it still worked: in the same account the bucket policy alone is enough. Move the caller to another account and watch it fail." : "Now flip one setting at a time and say, before you look, which layer will refuse."}`;
+    }
+  }
+  paintRq();
+
+  // ---------- Simulator 2: 10 TB for a year ----------
+  const cs = { access: "weekly", cls: "standard", size: "large", ver: "rule", mpu: "abort" };
+  buttons("csAccess", "How often is the data read?", [["daily", "all of it, daily"], ["weekly", "20% of it, weekly"], ["quarterly", "5% of it, once a quarter"], ["never", "almost never (1% a year)"]], k => { cs.access = k; paintCs(); });
+  buttons("csClass", "Storage class", [["standard", "Standard"], ["ia", "Standard-IA"], ["it", "Intelligent-Tiering"], ["gir", "Glacier IR"], ["gfr", "Glacier Flexible"], ["da", "Deep Archive"]], k => { cs.cls = k; paintCs(); });
+  buttons("csSize", "Object size", [["large", "100 MB files (100k objects)"], ["small", "50 KB files (200M objects)"]], k => { cs.size = k; paintCs(); });
+  buttons("csVer", "Versioning", [["rule", "on, noncurrent versions expired after 30 days"], ["norule", "on, no noncurrent-version rule"], ["off", "off"]], k => { cs.ver = k; paintCs(); });
+  buttons("csMpu", "Incomplete multipart uploads", [["abort", "aborted after 7 days by lifecycle"], ["keep", "no rule"]], k => { cs.mpu = k; paintCs(); });
+
+  const TB = 10 * 1024; // GB
+  const CLASSES = {
+    standard: { name: "Standard", store: 0.023, retr: 0, min: 0, minObj: 0, note: "No retrieval fee, no minimum." },
+    ia: { name: "Standard-IA", store: 0.0125, retr: 0.01, min: 30, minObj: 128, note: "Retrieval $0.01/GB; 30-day minimum; 128 KB minimum per object." },
+    it: { name: "Intelligent-Tiering", store: null, retr: 0, min: 0, minObj: 0, note: "No retrieval fee; monitoring fee per object ≥ 128 KB; tiers by access." },
+    gir: { name: "Glacier Instant Retrieval", store: 0.004, retr: 0.03, min: 90, minObj: 128, note: "Retrieval $0.03/GB; 90-day minimum; milliseconds." },
+    gfr: { name: "Glacier Flexible Retrieval", store: 0.0036, retr: 0.01, min: 90, minObj: 0, note: "Standard retrieval $0.01/GB, hours; 90-day minimum; 40 KB overhead per object." },
+    da: { name: "Glacier Deep Archive", store: 0.00099, retr: 0.02, min: 180, minObj: 0, note: "Retrieval $0.02/GB, 12–48 h; 180-day minimum; 40 KB overhead per object." },
+  };
+  const ACCESS = { daily: 365 * 1.0, weekly: 52 * 0.2, quarterly: 4 * 0.05, never: 0.01 }; // fraction of the data read per year
+
+  function paintCs() {
+    Object.entries({ csAccess: cs.access, csClass: cs.cls, csSize: cs.size, csVer: cs.ver, csMpu: cs.mpu }).forEach(([id, k]) => mark(id, k));
+    const c = CLASSES[cs.cls];
+    const objects = cs.size === "large" ? 100_000 : 200_000_000;
+    const objKB = cs.size === "large" ? 100 * 1024 : 50;
+    const readFrac = ACCESS[cs.access];
+    const rows = [];
+
+    // billable GB: minimum object size and Glacier overhead
+    let billGB = TB;
+    if (c.minObj && objKB < c.minObj) billGB = objects * c.minObj / 1024 / 1024;
+    if (cs.cls === "gfr" || cs.cls === "da") billGB += objects * 40 / 1024 / 1024;
+
+    let store;
+    if (cs.cls === "it") {
+      // IT: the share that is read stays frequent; the rest drops to IA after 30 days and archive-instant after 90
+      const hot = Math.min(1, readFrac / 12 * 1.5), warm = Math.max(0, Math.min(1 - hot, 0.3)), cold = 1 - hot - warm;
+      store = TB * 12 * (hot * 0.023 + warm * 0.0125 + cold * 0.004);
+      const monitored = objKB >= 128 ? objects : 0;
+      const mon = monitored / 1000 * 0.0025 * 12;
+      rows.push(["Storage, three tiers", money(store), `About ${Math.round(hot * 100)}% frequent, ${Math.round(warm * 100)}% infrequent, ${Math.round(cold * 100)}% archive instant by the end of the year.`]);
+      rows.push(["Monitoring fee", money(mon), monitored ? `${objects.toLocaleString()} objects × $0.0025 per 1,000 a month.` : "Objects under 128 KB are not monitored, not tiered, and stay at the frequent price."]);
+      if (!monitored) store = TB * 12 * 0.023;
+      store += mon;
+    } else {
+      store = billGB * 12 * c.store;
+      rows.push(["Storage", money(store), `${Math.round(billGB).toLocaleString()} billable GB × 12 × $${c.store}/GB-month.` + (billGB > TB + 1 ? ` Objects are billed as at least ${c.minObj} KB${(cs.cls === "gfr" || cs.cls === "da") ? " plus 40 KB of index overhead each" : ""}: the small files cost ${(billGB / TB).toFixed(1)}× their size.` : "")]);
+    }
+
+    // retrieval + requests
+    const readGB = TB * readFrac;
+    let retr = readGB * c.retr;
+    const getReq = objects * readFrac / 1000 * (cs.cls === "standard" || cs.cls === "it" ? 0.0004 : cs.cls === "ia" ? 0.001 : 0.01);
+    const restoreReq = (cs.cls === "gfr" || cs.cls === "da") ? objects * readFrac / 1000 * 0.05 : 0;
+    const putReq = objects / 1000 * (cs.cls === "standard" || cs.cls === "it" ? 0.005 : cs.cls === "ia" ? 0.01 : 0.03);
+    retr += getReq + restoreReq + putReq;
+    rows.push(["Retrieval", money(readGB * c.retr), c.retr ? `${Math.round(readGB).toLocaleString()} GB read a year × $${c.retr}/GB.` : "No retrieval fee in this class."]);
+    rows.push(["Requests", money(getReq + restoreReq + putReq), `${objects.toLocaleString()} PUTs once, ${Math.round(objects * readFrac).toLocaleString()} GETs${restoreReq ? " and the same number of restore requests" : ""}.` + (cs.size === "small" ? " Small objects turn request fees into a real line." : "")]);
+
+    // waste: versions and incomplete uploads
+    let waste = 0;
+    if (cs.ver === "norule") { const w = TB * 4 * 12 / 2 * (c.store || 0.023); waste += w; rows.push(["Old versions kept forever", money(w), "Each file is rewritten once a quarter and no rule expires the old versions: on average two extra copies over the year, growing without end."]); }
+    else if (cs.ver === "rule") { const w = TB * 4 * (30 / 365) * 12 * (c.store || 0.023) / 12; waste += w; rows.push(["Old versions, 30 days each", money(w), "Four rewrites a year, each old version kept 30 days: a small, bounded cost for the ability to undo."]); }
+    else rows.push(["Old versions", "$0", "Versioning is off. A bad PUT or a DELETE is final."]);
+    if (cs.mpu === "keep" && cs.size === "large") { const w = TB * 0.02 * 12 * 0.023; waste += w; rows.push(["Incomplete multipart uploads", money(w), "2% of uploads failed half-way and nobody aborted them. The parts are invisible to LIST and billed at the Standard price for ever."]); }
+    else if (cs.mpu === "keep") rows.push(["Incomplete multipart uploads", "$0", "50 KB objects are single PUTs; no multipart parts to leak. Add the rule anyway."]);
+    else rows.push(["Incomplete multipart uploads", "$0", "Aborted after 7 days."]);
+
+    // early deletion warning
+    const early = c.min && cs.access === "daily" ? "Data read daily does not belong in a class with a minimum duration and a retrieval fee." : "";
+
+    const total = store + retr + waste;
+    big("csStore", money(store), "text");
+    big("csRetr", money(retr), retr > store ? "bad" : "text");
+    big("csWaste", money(waste), waste > 0.2 * store ? "bad" : "text");
+    big("csTotal", money(total), "orange");
+    $("csTable").innerHTML = "<tr><th>Line</th><th>Per year</th><th>How it is made</th></tr>" + rows.map(r => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td>${r[2]}</td></tr>`).join("");
+
+    // best class for this pattern (large objects, with rule, abort)
+    const cands = Object.keys(CLASSES).filter(k => k !== "it").map(k => {
+      const cc = CLASSES[k]; let gb = TB; if (cc.minObj && objKB < cc.minObj) gb = objects * cc.minObj / 1024 / 1024; if (k === "gfr" || k === "da") gb += objects * 40 / 1024 / 1024;
+      return [k, gb * 12 * cc.store + TB * readFrac * cc.retr + objects * readFrac / 1000 * (k === "standard" ? 0.0004 : k === "ia" ? 0.001 : 0.01) + ((k === "gfr" || k === "da") ? objects * readFrac / 1000 * 0.05 : 0)];
+    }).sort((a, b) => a[1] - b[1]);
+    const best = cands[0];
+    let msg = `<b>${c.name}: ${money(total)} a year.</b> ${c.note} `;
+    if (early) msg += early + " ";
+    if (best[0] !== cs.cls) msg += `For this access pattern the cheapest class is <b>${CLASSES[best[0]].name}</b> at about ${money(best[1])} for storage and retrieval` + ((best[0] === "gfr" || best[0] === "da") ? ", if you can wait hours for a read." : ".");
+    else msg += "This is the cheapest class for this pattern.";
+    if (retr > store) msg += " Retrieval and requests cost more than storage: the data is too warm for this class.";
+    if (cs.size === "small" && (cs.cls === "ia" || cs.cls === "gir")) msg += " The 128 KB minimum makes each 50 KB file cost 2.6× its size; pack small files before you move them.";
+    if (cs.size === "small" && (cs.cls === "gfr" || cs.cls === "da")) msg += " 200 million objects × 40 KB overhead is 7.5 TB of index you pay for; archive tarballs, not files.";
+    if (cs.ver === "norule") msg += " The old versions are the largest avoidable line: one noncurrent-version rule removes it.";
+    $("csMsg").innerHTML = msg;
+  }
+  paintCs();
+</script>
 </body>
 </html>
