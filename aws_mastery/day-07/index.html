@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 7 — Review: Troubleshooting Lab</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .case { margin-bottom: 18px; border-top: 4px solid var(--orange); }
+  .case.done.right { border-top-color: var(--pub); }
+  .case.done.wrong { border-top-color: var(--bad); }
+  .case-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 8px 16px; margin-bottom: 8px; }
+  .case-head .tag { font-size: 12px; }
+  .case-head h3 { margin: 2px 0 0; font-size: 19px; }
+  .case .timer { margin: 0; gap: 8px 12px; }
+  .case .timer .clock { font-size: 26px; min-width: 72px; }
+  .case .timer .meta { font-size: 13px; }
+  .case pre.code { margin-top: 4px; }
+  .clues { margin: 12px 0 4px; }
+  .clues .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .clue { display: none; margin: 8px 0 0; padding: 8px 12px; border-left: 3px solid var(--az); background: var(--bg); border-radius: 0 8px 8px 0; font-size: 15px; }
+  .clue.shown { display: block; }
+  .opts { display: grid; gap: 8px; margin: 14px 0 4px; }
+  .opts button { text-align: left; padding: 9px 14px; line-height: 1.45; }
+  .opts button.pick { border-color: var(--orange); box-shadow: inset 0 0 0 1px var(--orange); }
+  .opts button.right { border-color: var(--pub); background: var(--pub-fill); color: var(--text); }
+  .opts button.wrong { border-color: var(--bad); color: var(--bad); }
+  .case.done .opts button { opacity: 1; cursor: default; }
+  .case.done .opts button:not(.right):not(.wrong) { color: var(--muted); }
+  .opts button span.k { display: inline-block; min-width: 22px; font-weight: 700; color: var(--muted); }
+  .verdict { font-weight: 600; }
+  .verdict.ok { color: var(--pub); } .verdict.no { color: var(--bad); }
+  .explain { display: none; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+  .explain.shown { display: block; }
+  .explain p { margin-bottom: 10px; }
+  .explain pre.code { margin-bottom: 10px; }
+  .board td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .board .r-clean { color: var(--pub); font-weight: 700; }
+  .board .r-found { color: var(--az); font-weight: 700; }
+  .board .r-miss { color: var(--bad); font-weight: 700; }
+  .board .r-todo { color: var(--muted); }
+  .method td:first-child { font-weight: 600; }
+  .score-line { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: 6px 0 12px; }
+  .score-line .big { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .score-line .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-06/index.html">← Day 6</a><a href="../README.md">30-day plan</a><a href="../day-08/index.html">Day 8 →</a></nav>
+  <header>
+    <div class="tag">Day 7 of 30 · Week 1 — Identity, Networking, Compute, Storage</div>
+    <h1>Review: Troubleshooting Lab</h1>
+    <p class="lead">No new services today. Ten setups from Days 1 to 6 are broken, one fault each. For every case you get what the on-call engineer gets: a symptom, the output of the commands they ran, and a clock. You name the fault. The point of the week was not to memorise the services; it was to know, from a symptom, which layer to look at first. Five minutes a case is the target. A senior engineer finds most of these in two.</p>
+  </header>
+
+  <h2>How this lab works</h2>
+  <div class="card">
+    <ol>
+      <li><b>Read the symptom and the evidence, then press Start.</b> The clock runs until you press Check. Do not reveal the explanation before you have committed to an answer.</li>
+      <li><b>Clues cost.</b> Each case has three. A case solved with no clues and under five minutes counts as <span class="pill yes">clean</span>. Solved with clues, or over time, counts as <span class="pill" style="background:var(--az)">found</span>. Wrong counts as <span class="pill no">missed</span>.</li>
+      <li><b>Say the check order out loud before you pick.</b> The fault is one line; the thing the interviewer listens for is the sequence you would have run to find it with no multiple choice in front of you.</li>
+      <li><b>After the ten,</b> the scoreboard tells you which day of the week to reread. Then write your three lines in <code>day-07/notes.md</code>.</li>
+    </ol>
+    <div class="score-line">
+      <div><div class="lbl">Solved</div><div class="big" id="sbFound">0 / 10</div></div>
+      <div><div class="lbl">Clean</div><div class="big" id="sbClean">0</div></div>
+      <div><div class="lbl">Missed</div><div class="big" id="sbMiss">0</div></div>
+      <div><div class="lbl">Total time</div><div class="big" id="sbTime">00:00</div></div>
+    </div>
+    <p class="note">Scores live in this page only. Reload to start again.</p>
+  </div>
+
+  <h2>The method: where did the request die?</h2>
+  <div class="card table-wrap method">
+    <p>Every case this week is one of four shapes. The error, or the absence of one, tells you how far the request got, and that decides where you look first.</p>
+    <table>
+      <tr><th>What you see</th><th>How far it got</th><th>Look here first</th><th>Do not start with</th></tr>
+      <tr><td>Timeout, hang, no response</td><td>Packets did not arrive, or did not come back. The service never saw a request.</td><td>Route table of the source subnet, security group, NACL (both directions), the endpoint or gateway in the path, then Reachability Analyzer and Flow Logs.</td><td>IAM. Nothing authorised anything, because nothing arrived.</td></tr>
+      <tr><td><code>AccessDenied</code>, 403, <code>UnauthorizedOperation</code></td><td>The request arrived and was authenticated. One layer of authorisation said no.</td><td>CloudTrail for the event; read <code>errorMessage</code>. Then walk the layers in order: SCP, boundary, identity policy, resource policy, endpoint policy, KMS key policy.</td><td>Routing. The packet clearly got there.</td></tr>
+      <tr><td>Connection refused or reset, 502, 503 from a load balancer</td><td>The network works. The thing behind it is not listening, not healthy or not answering in the way expected.</td><td>Target health and its <i>reason</i> code, the process on the target, health-check path and matcher, timeouts on both sides.</td><td>The security group, if the health check reason is anything other than Timeout.</td></tr>
+      <tr><td>It works, but slowly or at a flat ceiling</td><td>Everything is correct. Something is at a limit.</td><td>The CloudWatch metric that measures the limit: burst balance, queue length, throttles, credits. Compare the number against the quota of the smallest component in the path.</td><td>The application code, before you have ruled out a ceiling with a straight line in the graph.</td></tr>
+    </table>
+    <p class="note">The second rule: compare the working case with the broken one. “Same role works from my laptop” or “worked before Tuesday’s change” narrows the search to one difference before you have run a single command.</p>
+  </div>
+
+  <h2>The ten cases</h2>
+
+  <!-- ===================== CASE 1 ===================== -->
+  <section class="card case" id="c1" data-answer="1" data-day="1">
+    <div class="case-head">
+      <div><div class="tag">Case 1 · Day 1 · IAM</div><h3>The ABAC policy that denies its own team</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> The payments team's role is meant to manage only instances tagged <code>team=payments</code>. A developer assumes the role and stops one of their own instances:</p>
+<pre class="code">$ aws sts get-caller-identity --query Arn --output text
+arn:aws:sts::111122223333:assumed-role/payments-dev/alice
+
+$ aws ec2 stop-instances --instance-ids i-0f3a9c1d2e4b5a678
+An error occurred (UnauthorizedOperation) when calling the StopInstances operation:
+You are not authorized to perform this operation. User: arn:aws:sts::111122223333:assumed-role/payments-dev/alice
+is not authorized to perform: ec2:StopInstances on resource: arn:aws:ec2:ap-south-1:111122223333:instance/i-0f3a9c1d2e4b5a678
+because no identity-based policy allows the ec2:StopInstances action</pre>
+    <p><b>What you can see.</b></p>
+<pre class="code">$ aws ec2 describe-tags --filters Name=resource-id,Values=i-0f3a9c1d2e4b5a678 --query 'Tags[].[Key,Value]' --output text
+Name    payments-worker-3
+team    payments
+
+$ aws iam get-role-policy --role-name payments-dev --policy-name abac --query PolicyDocument.Statement
+[ { "Effect": "Allow",
+    "Action": [ "ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances" ],
+    "Resource": "*",
+    "Condition": { "StringEquals": { "aws:ResourceTag/team": "${aws:PrincipalTag/team}" } } } ]
+
+$ aws iam list-role-tags --role-name payments-dev
+{ "Tags": [] }
+
+$ aws iam get-role --role-name payments-dev --query 'Role.[PermissionsBoundary,AssumeRolePolicyDocument.Statement[0].Action]'
+[ null, "sts:AssumeRole" ]</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">The error says “no identity-based policy allows”. There is no explicit Deny anywhere. The Allow statement exists but did not match.</p>
+      <p class="clue">The only thing in that statement that can fail to match is the condition. Ask what <code>${aws:PrincipalTag/team}</code> evaluates to for this session.</p>
+      <p class="clue">A policy variable that does not exist does not become an empty string. The condition key is simply absent, and <code>StringEquals</code> on an absent key is false. Where would a principal tag have come from: the role, or the session?</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The instance tag is <code>team</code> but the condition should use <code>ec2:ResourceTag/team</code>; the global key does not work for EC2.</button>
+      <button><span class="k">B</span>The session has no <code>team</code> principal tag: the role is untagged and the session was not tagged, so the condition compares against nothing and fails.</button>
+      <button><span class="k">C</span><code>ec2:StopInstances</code> does not support resource-level permissions, so <code>Resource: "*"</code> with a tag condition can never match.</button>
+      <button><span class="k">D</span>The trust policy only allows <code>sts:AssumeRole</code>; without <code>sts:TagSession</code> the role cannot be assumed at all, so the developer is really using their IAM user.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> ABAC compares the resource's tag with the principal's tag. The principal's tag comes from one of two places: tags on the IAM role or user, or session tags passed at <code>AssumeRole</code> time. This role has neither. The variable <code>${aws:PrincipalTag/team}</code> therefore has no value; the condition key is missing from the request context and <code>StringEquals</code> evaluates to false. No Allow matched, so the implicit deny stands, which is exactly what the error message says.</p>
+      <p><b>How you would find it without multiple choice.</b> Read the error: “no identity-based policy allows” means look for the Allow that should have matched, not for a Deny. Find the statement, find its condition, and evaluate each key by hand for this session. <code>aws:ResourceTag/team</code> is <code>payments</code>; <code>aws:PrincipalTag/team</code> is unset. The policy simulator with the role shows the same thing in a minute if you remember to add the principal tags to the simulation; the trap is that it lets you type them in and then the simulation passes while reality fails.</p>
+      <p><b>Fix.</b> Tag the role, since this role belongs to one team. Session tags are the answer when one role is shared by many teams or when an identity provider supplies the attribute; then the trust policy must also allow <code>sts:TagSession</code>.</p>
+<pre class="code">aws iam tag-role --role-name payments-dev --tags Key=team,Value=payments
+# or, for session tags:
+aws sts assume-role --role-arn arn:aws:iam::111122223333:role/payments-dev --role-session-name alice \
+  --tags Key=team,Value=payments        # needs "sts:TagSession" in the trust policy</pre>
+      <p><b>Why D is a trap.</b> The caller ARN shows an assumed role, so assumption worked; <code>sts:TagSession</code> is only needed when tags are passed. <b>C</b> is wrong because EC2 supports resource-level permissions on instances, which is what makes ABAC on EC2 possible at all. <b>A</b> is wrong because <code>aws:ResourceTag</code> is the global key and works for EC2; <code>ec2:ResourceTag</code> is an older alias.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 2 ===================== -->
+  <section class="card case" id="c2" data-answer="1" data-day="2">
+    <div class="case-head">
+      <div><div class="tag">Case 2 · Day 2 · VPC</div><h3>The private subnet that cannot download updates</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> A new VPC was built from a hardened template. Application servers in the private subnet cannot run <code>dnf update</code> and cannot call any public API. Every connection hangs and then times out. There is no TLS error and no connection refused. The NAT Gateway shows as available.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code">$ aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-0priv1a --query 'RouteTables[].Routes[].[DestinationCidrBlock,GatewayId,NatGatewayId,State]' --output text
+10.0.0.0/16   local   None            active
+0.0.0.0/0     None    nat-0a7c3e9f1b2d4c6e8   active
+
+$ aws ec2 describe-nat-gateways --nat-gateway-ids nat-0a7c3e9f1b2d4c6e8 --query 'NatGateways[].[State,SubnetId,ConnectivityType]' --output text
+available   subnet-0pub1a   public
+
+$ aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-0pub1a --query 'RouteTables[].Routes[].[DestinationCidrBlock,GatewayId]' --output text
+10.0.0.0/16   local
+0.0.0.0/0     igw-0d2f8a1c3b5e7f9a0
+
+$ aws ec2 describe-security-groups --group-ids sg-0app --query 'SecurityGroups[].IpPermissionsEgress[].[IpProtocol,IpRanges[0].CidrIp]' --output text
+-1   0.0.0.0/0
+
+$ aws ec2 describe-network-acls --filters Name=association.subnet-id,Values=subnet-0priv1a \
+    --query 'NetworkAcls[].Entries[].[Egress,RuleNumber,Protocol,PortRange.From,PortRange.To,CidrBlock,RuleAction]' --output text
+False  100    6    22     22     10.0.0.0/16   allow
+False  110    6    8080   8080   10.0.0.0/16   allow
+False  32767  -1   None   None   0.0.0.0/0     deny
+True   100    -1   None   None   0.0.0.0/0     allow
+True   32767  -1   None   None   0.0.0.0/0     deny
+
+# Flow Logs, one attempt to reach 93.184.216.34:443 from the app server 10.0.11.14
+10.0.11.14      93.184.216.34   41712  443    6   ACCEPT
+93.184.216.34   10.0.11.14      443    41712  6   REJECT</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">Read the two flow-log lines as a pair. The outbound SYN was accepted. Something rejected the reply on the way back in.</p>
+      <p class="clue">Two things sit between the internet and the instance on the way back: the security group and the network ACL. One of them is stateful and one is not.</p>
+      <p class="clue">The reply arrives on destination port 41712, an ephemeral port. Which inbound rule in the NACL allows that?</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The NAT Gateway sits in a subnet whose route table has no Internet Gateway route, so it cannot forward traffic out.</button>
+      <button><span class="k">B</span>The private subnet's network ACL has no inbound rule for ephemeral ports (1024–65535), so the return half of every connection is dropped; NACLs are stateless.</button>
+      <button><span class="k">C</span>The security group has no inbound rule allowing the return traffic from the internet, so the reply is blocked at the instance.</button>
+      <button><span class="k">D</span>The route table sends 0.0.0.0/0 to a NAT Gateway in another AZ, which is not allowed; each subnet must use a NAT Gateway in its own AZ.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> The hardened template wrote an inbound NACL that only allows the ports the subnet <i>serves</i>, and forgot that a NACL also sees the replies to connections the subnet <i>opens</i>. The SYN to port 443 leaves under the outbound allow-all rule; the SYN-ACK comes back to port 41712, matches no inbound rule, and hits the default deny. Every outbound connection fails identically, as a timeout, because the instance never sees the reply.</p>
+      <p><b>How you would find it.</b> A timeout means the packet or its reply did not arrive, so start with the path, not with permissions. Route table: fine. NAT Gateway: available, in a public subnet with an IGW route, so A is ruled out in one command. Security group egress: open. Then the two stateless things: the NACL, and Flow Logs to prove it. The REJECT line with the ephemeral destination port is the whole diagnosis. Reachability Analyzer from the ENI to the internet would name the NACL entry explicitly.</p>
+      <p><b>Fix.</b> Add the ephemeral inbound rule, and remember that the public subnet's NACL needs the same for the NAT Gateway's replies if it was hardened the same way.</p>
+<pre class="code">aws ec2 create-network-acl-entry --network-acl-id acl-0priv --ingress --rule-number 120 \
+  --protocol 6 --port-range From=1024,To=65535 --cidr-block 0.0.0.0/0 --rule-action allow</pre>
+      <p><b>Why C is a trap.</b> Security groups are stateful: the reply to an allowed outbound connection is always allowed in, no inbound rule needed. If the security group were the problem, Flow Logs would show the REJECT at the ENI the same way, so the flow-log line alone does not separate B from C; the rule listing does. <b>D</b> is wrong: using a NAT Gateway in another AZ works, it just costs cross-AZ data transfer and fails with that AZ.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 3 ===================== -->
+  <section class="card case" id="c3" data-answer="1" data-day="3">
+    <div class="case-head">
+      <div><div class="tag">Case 3 · Day 3 · Transit Gateway</div><h3>Dev can still reach prod after “segmentation”</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> The network team split the Transit Gateway into separate route tables for dev, prod and shared services. A penetration test a week later shows a dev instance reaching prod's internal load balancer on 10.20.3.10:443 and getting a 200.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code">$ aws ec2 describe-transit-gateways --query 'TransitGateways[].Options.[DefaultRouteTableAssociation,DefaultRouteTablePropagation]' --output text
+disable   enable
+
+$ aws ec2 get-transit-gateway-route-table-associations --transit-gateway-route-table-id tgw-rtb-dev \
+    --query 'Associations[].[TransitGatewayAttachmentId,ResourceType,State]' --output text
+tgw-attach-dev      vpc   associated
+
+$ aws ec2 get-transit-gateway-route-table-associations --transit-gateway-route-table-id tgw-rtb-prod \
+    --query 'Associations[].[TransitGatewayAttachmentId,ResourceType,State]' --output text
+tgw-attach-prod     vpc   associated
+
+$ aws ec2 get-transit-gateway-route-table-propagations --transit-gateway-route-table-id tgw-rtb-dev \
+    --query 'TransitGatewayRouteTablePropagations[].[TransitGatewayAttachmentId,State]' --output text
+tgw-attach-dev      enabled
+tgw-attach-prod     enabled
+tgw-attach-shared   enabled
+
+$ aws ec2 search-transit-gateway-routes --transit-gateway-route-table-id tgw-rtb-dev --filters Name=state,Values=active \
+    --query 'Routes[].[DestinationCidrBlock,Type,TransitGatewayAttachments[0].TransitGatewayAttachmentId]' --output text
+10.10.0.0/16   propagated   tgw-attach-dev
+10.20.0.0/16   propagated   tgw-attach-prod
+10.0.0.0/16    propagated   tgw-attach-shared
+
+# dev VPC route table
+10.10.0.0/16  local
+10.0.0.0/8    tgw-0c4e...</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">Association decides which table an attachment's <i>incoming</i> packets are looked up in. Propagation decides which tables <i>learn</i> an attachment's CIDR. They are set independently.</p>
+      <p class="clue">The dev table knows a route to 10.20.0.0/16. Where did it learn it from, and should it have?</p>
+      <p class="clue">Look at the Transit Gateway options. One of the two defaults was left on.</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The dev attachment is associated with the wrong route table; it should be associated with the prod table so that the prod table's rules apply to it.</button>
+      <button><span class="k">B</span>Default route table propagation is still enabled, so the prod attachment propagates its CIDR into every route table including dev; the dev table therefore has a live route to 10.20.0.0/16.</button>
+      <button><span class="k">C</span>The dev VPC route table sends 10.0.0.0/8 to the Transit Gateway; it should list only the shared-services CIDR. The Transit Gateway cannot block what the VPC sends.</button>
+      <button><span class="k">D</span>The prod attachment is missing a blackhole route for 10.10.0.0/16, so prod replies to dev; without replies the connection would fail.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> Segmentation on a Transit Gateway is two separate decisions per attachment. The team made the first: each attachment is associated with its own table, so packets from dev are looked up in the dev table. They left the second at its default: every new attachment propagates into every table that has default propagation on, so the dev table learned 10.20.0.0/16 from the prod attachment. A packet from dev to prod is looked up in the dev table, finds the propagated route, and is forwarded. Prod's own table has the dev route for the same reason, so the reply comes back and the connection completes.</p>
+      <p><b>How you would find it.</b> Start from the table the packet is looked up in: the one associated with the <i>source</i> attachment. List its routes. If a route to the destination exists, the segmentation is not there, whatever the diagram says. The <code>search-transit-gateway-routes</code> output is the proof; the route's type, <code>propagated</code>, and its attachment tell you how it got there. Then <code>describe-transit-gateways</code> shows why.</p>
+      <p><b>Fix.</b> Turn off default propagation, remove prod's propagation from the dev table (and dev's from prod), propagate both only into the shared table, and add static routes from the shared table back. Add blackhole routes as a belt-and-braces measure so that a future propagation cannot reopen the path.</p>
+<pre class="code">aws ec2 modify-transit-gateway --transit-gateway-id tgw-0c4e... --options DefaultRouteTablePropagation=disable
+aws ec2 disable-transit-gateway-route-table-propagation --transit-gateway-route-table-id tgw-rtb-dev  --transit-gateway-attachment-id tgw-attach-prod
+aws ec2 disable-transit-gateway-route-table-propagation --transit-gateway-route-table-id tgw-rtb-prod --transit-gateway-attachment-id tgw-attach-dev
+aws ec2 create-transit-gateway-route --transit-gateway-route-table-id tgw-rtb-dev --destination-cidr-block 10.20.0.0/16 --blackhole</pre>
+      <p><b>Why C is a trap.</b> The VPC route is coarse but harmless: the Transit Gateway's own table decides what to do with a packet, and a blackhole or missing route there drops it. Making the VPC route precise is good practice, not the fault. <b>A</b> would make dev behave like prod, the opposite of segmentation. <b>D</b> gets cause and effect backwards: prod should not even receive the packet.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 4 ===================== -->
+  <section class="card case" id="c4" data-answer="2" data-day="3">
+    <div class="case-head">
+      <div><div class="tag">Case 4 · Day 3 · Route 53 Resolver</div><h3>On-premises can ping the database but cannot name it</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> Direct Connect is up. Servers in the data centre reach the database at 10.40.5.20 by IP. The application is configured with <code>db.internal.example</code>, which resolves inside the VPC but not on premises. The on-premises DNS team added a conditional forwarder for <code>internal.example</code> pointing at 10.40.0.2, “the VPC DNS server, as documented”.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code"># from an EC2 instance in the VPC (10.40.0.0/16)
+$ dig +short db.internal.example
+10.40.5.20
+
+$ aws route53 list-hosted-zones-by-vpc --vpc-id vpc-0a1b2c3d --vpc-region ap-south-1 --query 'HostedZoneSummaries[].Name' --output text
+internal.example.
+
+$ aws ec2 describe-vpc-attribute --vpc-id vpc-0a1b2c3d --attribute enableDnsSupport --query EnableDnsSupport.Value
+true
+
+# from an on-premises server (192.168.10.5)
+$ ping -c1 10.40.5.20
+64 bytes from 10.40.5.20: icmp_seq=1 ttl=62 time=4.1 ms
+
+$ dig @10.40.0.2 db.internal.example
+;; connection timed out; no servers could be reached
+
+$ aws route53resolver list-resolver-endpoints --query 'ResolverEndpoints[].[Name,Direction,Status]' --output text
+(empty)</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">The private hosted zone works: an instance in the VPC resolves the name. The problem is only with who is asking.</p>
+      <p class="clue">The .2 address is not a server in the VPC. It is a link-local service that answers only on ENIs inside the VPC. Packets to it from across Direct Connect are dropped before any DNS happens.</p>
+      <p class="clue">There is a Route 53 Resolver feature whose entire purpose is to give the .2 resolver real, routable IP addresses in your subnets. The last command shows it was never created.</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The private hosted zone is not associated with the VPC that the Direct Connect gateway attaches to, so queries arriving over DX cannot see it.</button>
+      <button><span class="k">B</span>The Direct Connect virtual interface does not advertise 10.40.0.0/24, so on-premises has no route to 10.40.0.2 although it has one to 10.40.5.0/24.</button>
+      <button><span class="k">C</span>The VPC resolver at .2 is only reachable from inside the VPC. On-premises needs a Resolver inbound endpoint, and the forwarder must point at the endpoint's IP addresses.</button>
+      <button><span class="k">D</span><code>enableDnsHostnames</code> is false on the VPC, so the resolver refuses queries for private zones from any source outside AWS.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> The Amazon-provided resolver at VPC CIDR + 2 is reachable only from network interfaces in that VPC; it is not on any route that Direct Connect or VPN can deliver to. A conditional forwarder pointed at it times out, which looks like a routing problem and is not. The Resolver inbound endpoint exists for exactly this: it creates ENIs with real addresses in two subnets of your choice, each a front door to the same resolver, and the on-premises forwarder targets those addresses. Outbound endpoints are the reverse, for VPC workloads that need to resolve on-premises names.</p>
+      <p><b>How you would find it.</b> Split the problem in two with the first two commands: does the zone resolve from inside the VPC? Yes, so the zone, its association and the VPC's DNS attributes are fine. Then: can on-premises reach the resolver it was given? The timeout against an address that pings in the same /16 elsewhere is the clue that the .2 address is special. <code>list-resolver-endpoints</code> returning nothing confirms what was never built.</p>
+      <p><b>Fix.</b></p>
+<pre class="code">aws route53resolver create-resolver-endpoint --name inbound-dc --direction INBOUND --creator-request-id $(uuidgen) \
+  --security-group-ids sg-0dns \
+  --ip-addresses SubnetId=subnet-0a,Ip=10.40.1.53 SubnetId=subnet-0b,Ip=10.40.2.53
+# sg-0dns: allow TCP and UDP 53 from 192.168.0.0/16
+# on-premises: conditional forwarder for internal.example -> 10.40.1.53, 10.40.2.53</pre>
+      <p><b>Why B is a trap.</b> Route advertisement is per prefix, and it is plausible that a /24 was missed; but the VIF advertises the VPC CIDR as one block, and in any case the fault would remain after fixing the route, because .2 does not answer off-VPC traffic. <b>A</b> is ruled out by the first command. <b>D</b>: <code>enableDnsHostnames</code> controls whether instances get public DNS names; it does not gate private zone resolution, and <code>enableDnsSupport</code> is already true.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 5 ===================== -->
+  <section class="card case" id="c5" data-answer="1" data-day="4">
+    <div class="case-head">
+      <div><div class="tag">Case 5 · Day 4 · EC2 and IMDS</div><h3>Containers lose their credentials after the security change</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> On Monday the security team changed the launch template so that every instance requires IMDSv2. Since the next rollout, an application that runs in Docker containers on those instances, using the instance profile for credentials, logs <code>Unable to locate credentials</code> and nothing works. A test process started directly on the host, with the same SDK version, works.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code">$ aws ec2 describe-instances --instance-ids i-0b1c2d3e4f5a6b7c8 --query 'Reservations[].Instances[].[IamInstanceProfile.Arn,MetadataOptions]' --output json
+[ [ "arn:aws:iam::111122223333:instance-profile/app-host",
+    { "State": "applied", "HttpTokens": "required", "HttpPutResponseHopLimit": 1,
+      "HttpEndpoint": "enabled", "InstanceMetadataTags": "disabled" } ] ]
+
+# on the host
+$ TOKEN=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+$ curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/security-credentials/
+app-host
+
+# inside a container (default bridge network)
+$ docker run --rm curlimages/curl -s -m 5 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60"
+(no output; exit 28, timed out)
+$ docker run --rm curlimages/curl -s -i http://169.254.169.254/latest/meta-data/
+HTTP/1.1 401 Unauthorized
+
+$ docker run --rm --network host curlimages/curl -s -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60"
+AQAAAN1q...   (a token)</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">The same request works from the host and from a container on the host network, and fails from a container on the bridge network. The difference is one network hop.</p>
+      <p class="clue">The 401 on the plain GET is correct behaviour for IMDSv2-required; it is not the fault. The fault is that the PUT for a token never gets an answer.</p>
+      <p class="clue">Read the metadata options again. One number is a hop count.</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The SDK inside the container image is too old to speak IMDSv2 and falls back to IMDSv1, which is now refused with 401.</button>
+      <button><span class="k">B</span><code>HttpPutResponseHopLimit</code> is 1. The token response has an IP TTL of 1, so it survives the hop to the host but is discarded when the Docker bridge forwards it to the container.</button>
+      <button><span class="k">C</span>The instance profile was detached by the new launch template; the host test works because it uses cached credentials from before the rollout.</button>
+      <button><span class="k">D</span>The container's security group blocks 169.254.169.254; the host test works because the host's security group is different.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> IMDSv2's protection against SSRF and misconfigured proxies is the token PUT, and part of that protection is the hop limit: the response packet carrying the token is sent with an IP TTL equal to <code>HttpPutResponseHopLimit</code>. At 1, the packet reaches the instance's network stack and no further. A container on the bridge network is one NAT hop away, so the TTL expires and the token never arrives. The subsequent GET without a token is refused with 401, which is the designed behaviour. Everything looks like “the container cannot do IMDSv2” when the real fault is a single integer in the launch template.</p>
+      <p><b>How you would find it.</b> The pattern “host works, container does not” points at the network path between them before anything else. Reproducing the token PUT from both places with a short timeout takes a minute. The 401 is a red herring that costs people hours because they then go and read about SDK versions. Once you see that the PUT times out, <code>describe-instances</code> shows the hop limit.</p>
+      <p><b>Fix.</b> Set the hop limit to 2 in the launch template and on running instances. That is what AWS recommends for containers on EC2. Better still, stop containers from using the host's role at all: ECS task roles or EKS Pod Identity give each workload its own credentials and leave the hop limit at 1.</p>
+<pre class="code">aws ec2 modify-instance-metadata-options --instance-id i-0b1c2d3e4f5a6b7c8 --http-tokens required --http-put-response-hop-limit 2</pre>
+      <p><b>Why A is a trap.</b> It is the most common wrong answer because it fits the 401. But the host test uses the same SDK and works. <b>C</b> is ruled out by the profile ARN in the output and by the fact that the host obtains the credential name live. <b>D</b>: security groups are on the ENI, not per container, and never apply to the link-local metadata address.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 6 ===================== -->
+  <section class="card case" id="c6" data-answer="1" data-day="4">
+    <div class="case-head">
+      <div><div class="tag">Case 6 · Day 4 · EBS</div><h3>The database paid for 16,000 IOPS and gets 3,600</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> PostgreSQL on an EC2 instance became slow after a nightly batch job was added. The team upgraded the data volume from gp3 to io2 with 16,000 provisioned IOPS. Nothing changed. Queries are fine for the first half hour of the batch, then latency climbs and stays high until it finishes.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code">$ aws ec2 describe-volumes --volume-ids vol-0db --query 'Volumes[].[VolumeType,Size,Iops,Throughput,Attachments[0].InstanceId]' --output text
+io2   500   16000   None   i-0db
+
+$ aws ec2 describe-instances --instance-ids i-0db --query 'Reservations[].Instances[].[InstanceType,EbsOptimized]' --output text
+m5.large   True
+
+# CloudWatch, 1-minute period, during the batch (values per second)
+VolumeReadOps + VolumeWriteOps   first 30 min: ~14,800/s   then: ~3,600/s flat for 2 h
+VolumeQueueLength                first 30 min: 4            then: 38
+VolumeThroughputPercentage       100 throughout (io2 reports this when the volume is not the limit)
+EBSIOBalance%   (instance metric) 100 -> 0 over the first 30 min, then 0
+EBSByteBalance% (instance metric) 100 -> 61</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">Two components can limit IOPS: the volume and the instance it is attached to. The volume metric says the volume is not the limit.</p>
+      <p class="clue">Something is being burst and then exhausted over exactly thirty minutes. io2 volumes do not burst. Instances do.</p>
+      <p class="clue">An m5.large has a baseline of about 3,600 EBS IOPS and can burst to 18,750 for 30 minutes a day. The number in the graph is the baseline.</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>io2 allows 500 IOPS per GiB; a 500 GiB volume is capped at a lower figure than 16,000 and the console accepted the value without applying it.</button>
+      <button><span class="k">B</span>The instance type is the ceiling: an m5.large has a 3,600 IOPS EBS baseline with a 30-minute burst. <code>EBSIOBalance%</code> at zero shows the burst credits are spent; the volume could deliver 16,000 but the instance cannot carry it.</button>
+      <button><span class="k">C</span>The volume still runs on the gp3 engine until it is detached and reattached; the io2 change is pending and <code>describe-volumes</code> shows the requested rather than the actual type.</button>
+      <button><span class="k">D</span>PostgreSQL's checkpoint settings flush dirty pages every 30 minutes, which saturates the volume with writes; the fix is in <code>postgresql.conf</code>, not in AWS.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> Each EBS volume has a performance figure, and so does each instance type: a baseline IOPS and bandwidth, plus a burst balance that lets smaller instances exceed their baseline for 30 minutes in a 24-hour window. A volume cannot deliver more than the instance's share. An m5.large tops out at about 3,600 IOPS sustained; the 16,000 IOPS volume is a Ferrari in a car park. The graph is the textbook shape: full speed while <code>EBSIOBalance%</code> drains, then a flat line at the baseline with the queue backing up.</p>
+      <p><b>How you would find it.</b> “Flat ceiling after a period of good performance” is a burst-credit signature; look for a balance metric. The volume says <code>VolumeThroughputPercentage</code> 100, which rules out the volume. The instance metrics <code>EBSIOBalance%</code> and <code>EBSByteBalance%</code> exist for exactly this question. Then check the instance type's EBS limits in the EC2 instance-types table. Day 4's rule: when sizing storage, size the instance for the volume as well as the volume for the workload.</p>
+      <p><b>Fix.</b> Move to an instance whose <i>baseline</i> covers the need: m5.4xlarge (18,750 IOPS baseline) or better a memory-optimised r6i.2xlarge (12,000 baseline; 40,000 burst) or r6i.4xlarge (20,000 baseline). Nitro instances with higher baselines are usually cheaper than the IOPS being wasted. Then ask whether 16,000 provisioned IOPS were needed at all, or whether gp3 at 16,000 IOPS is enough at a third of the price.</p>
+<pre class="code">aws ec2 stop-instances --instance-ids i-0db
+aws ec2 modify-instance-attribute --instance-id i-0db --instance-type '{"Value": "r6i.2xlarge"}'
+aws ec2 start-instances --instance-ids i-0db</pre>
+      <p><b>Why A is a trap.</b> The ratio is real but 500 GiB × 500 = 250,000, far above 16,000, and the API rejects an invalid ratio rather than silently accepting it. <b>C</b>: volume modifications report <code>optimizing</code> during the change and the new type applies live; there is no pending state visible as the old type. <b>D</b> would show as a periodic spike, not a sustained plateau after exactly the burst window.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 7 ===================== -->
+  <section class="card case" id="c7" data-answer="1" data-day="5">
+    <div class="case-head">
+      <div><div class="tag">Case 7 · Day 5 · ALB</div><h3>Every target is unhealthy, and the app is fine</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> A new service was put behind an Application Load Balancer with an HTTPS listener. Every request through the ALB returns <code>503 Service Unavailable</code>. The instances are running, the application answers on the instance, and the on-call engineer can log in and fetch pages with curl.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code">$ aws elbv2 describe-target-health --target-group-arn arn:...:targetgroup/web/abc --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State,TargetHealth.Reason,TargetHealth.Description]' --output text
+i-0web1   unhealthy   Target.ResponseCodeMismatch   Health checks failed with these codes: [301]
+i-0web2   unhealthy   Target.ResponseCodeMismatch   Health checks failed with these codes: [301]
+
+$ aws elbv2 describe-target-groups --target-group-arns arn:...:targetgroup/web/abc \
+    --query 'TargetGroups[].[Protocol,Port,HealthCheckProtocol,HealthCheckPort,HealthCheckPath,Matcher.HttpCode]' --output text
+HTTP   80   HTTP   traffic-port   /health   200
+
+# on i-0web1
+$ curl -s -i http://localhost/health | head -3
+HTTP/1.1 301 Moved Permanently
+Location: https://localhost/health
+
+$ curl -s -i -H "X-Forwarded-Proto: https" http://localhost/health | head -1
+HTTP/1.1 200 OK
+
+# nginx.conf
+if ($http_x_forwarded_proto != "https") { return 301 https://$host$request_uri; }</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">The reason code is the diagnosis. <code>ResponseCodeMismatch</code> means the health checker connected, got an HTTP answer, and the status was not in the matcher. The network is fine.</p>
+      <p class="clue">User requests carry <code>X-Forwarded-Proto: https</code> because the listener is HTTPS. The health checker is not a user request and sends no such header.</p>
+      <p class="clue">Which status does the app return to a request that has no <code>X-Forwarded-Proto</code>?</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The target security group does not allow port 80 from the ALB security group, so the health check cannot connect.</button>
+      <button><span class="k">B</span>The application redirects every plain-HTTP request to HTTPS; the health checker sends plain HTTP with no <code>X-Forwarded-Proto</code>, receives 301, and 301 is not in the matcher.</button>
+      <button><span class="k">C</span>The health check path <code>/health</code> does not exist in this version of the application and should be <code>/healthz</code>.</button>
+      <button><span class="k">D</span>The target group protocol should be HTTPS on 443 because the listener is HTTPS; an HTTPS listener cannot forward to HTTP targets.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> TLS terminates at the ALB, so the targets see plain HTTP and learn the original scheme from <code>X-Forwarded-Proto</code>. The application's “force HTTPS” rule redirects anything without that header, which is correct for users and wrong for the one client that never sets it: the health checker. It gets a 301 for <code>/health</code>, the matcher wants 200, the target is marked unhealthy, and with no healthy target the ALB returns 503 to everyone. The application is perfectly healthy; it is just saying so in the wrong status code.</p>
+      <p><b>How you would find it.</b> 503 from an ALB with no healthy targets is a target-health problem by definition, so the first command is <code>describe-target-health</code>, and the reason code sorts the possibilities: <code>Timeout</code> means security group or NACL; <code>ResponseCodeMismatch</code> means the app answered; <code>FailedHealthChecks</code> with a connection error means nothing listening. From there, reproduce the exact health-check request on the target: HTTP, the health-check port, the path, no extra headers.</p>
+      <p><b>Fix.</b> Exempt the health path from the redirect. Expanding the matcher to <code>200,301</code> also “works” and is a mistake, because then a target that redirects everything, or has lost its backend and only its redirect rule still runs, looks healthy.</p>
+<pre class="code"># nginx
+location = /health { return 200 "ok\n"; }
+# everything else keeps the redirect</pre>
+      <p><b>Why A is a trap.</b> A security-group block produces <code>Target.Timeout</code>, never a status code. <b>C</b> would be a 404. <b>D</b> is simply false: an HTTPS listener forwarding to HTTP targets is the normal pattern.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 8 ===================== -->
+  <section class="card case" id="c8" data-answer="1" data-day="5">
+    <div class="case-head">
+      <div><div class="tag">Case 8 · Day 5 · Auto Scaling</div><h3>The group that scales out and eats its own instances</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> Every morning at nine the CPU alarm fires and the Auto Scaling group adds instances, but the alarm never clears, the service stays slow, and the bill shows ten times the expected instance-hours. In the console, instances appear and vanish every few minutes.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code">$ aws autoscaling describe-scaling-activities --auto-scaling-group-name web --max-items 6 --query 'Activities[].[StartTime,Cause]' --output text
+2026-10-07T03:41:10Z  At 2026-10-07T03:41:08Z an instance was taken out of service in response to an ELB system health check failure.
+2026-10-07T03:37:02Z  At 2026-10-07T03:37:00Z a user request created an instance ... policy cpu-target ... capacity from 4 to 6.
+2026-10-07T03:36:55Z  At 2026-10-07T03:36:53Z an instance was taken out of service in response to an ELB system health check failure.
+2026-10-07T03:32:48Z  At 2026-10-07T03:32:46Z a user request created an instance ... policy cpu-target ... capacity from 4 to 6.
+...
+
+$ aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names web \
+    --query 'AutoScalingGroups[].[HealthCheckType,HealthCheckGracePeriod,DefaultInstanceWarmup,MinSize,DesiredCapacity,MaxSize]' --output text
+ELB   60   None   4   6   12
+
+$ aws elbv2 describe-target-groups --names web --query 'TargetGroups[].[HealthCheckIntervalSeconds,HealthyThresholdCount,UnhealthyThresholdCount]' --output text
+10   2   3
+
+# EC2 console output of a new instance (user data: install packages, pull a 1.2 GB image, start the service)
+[   12.4] cloud-init: running user data
+[  104.7] docker: pulling app:4.2 ...
+[  188.2] app: listening on :8080
+[  191.0] app: GET /health 200</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">Count the seconds. The instance is ready at about 190 s. The group starts believing ELB health checks after 60 s. The target group declares a target unhealthy after 3 × 10 s of failures.</p>
+      <p class="clue">So from roughly 90 s after launch the ELB says unhealthy, the group believes it, and replaces the instance, which then starts the same 190-second boot.</p>
+      <p class="clue">The grace period is the only setting here whose job is to describe how long a boot takes.</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The target group health check is too aggressive; an interval of 10 s with a threshold of 3 lets a single slow request mark a healthy instance unhealthy.</button>
+      <button><span class="k">B</span>The health check grace period (60 s) is shorter than the instance's boot time (about 190 s), so every new instance is judged unhealthy before it has started and is terminated and replaced in a loop.</button>
+      <button><span class="k">C</span>The group has no <code>DefaultInstanceWarmup</code>, so the target-tracking policy counts new instances' CPU immediately, sees them at 100% during boot, and scales in.</button>
+      <button><span class="k">D</span>The group's health check type should be EC2, not ELB; ELB health checks are only for load balancer routing decisions, not for instance replacement.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> With <code>HealthCheckType ELB</code>, the group trusts the target group's opinion of each instance once the grace period has passed. The grace period is 60 s; the application is not listening until about 190 s. Between 60 s and 190 s the target group reports unhealthy, the group terminates the instance, launches another, and the cycle repeats every four minutes. Desired capacity never actually rises, so CPU stays high, the alarm stays in ALARM, and the group keeps paying for instances that live for four minutes each.</p>
+      <p><b>How you would find it.</b> The scaling activity history is the first stop for any Auto Scaling mystery, and the cause text here says exactly what happened: “taken out of service in response to an ELB system health check failure”, over and over, a few minutes after each launch. Then compare three numbers: grace period, boot time from the console log, and the health check's time-to-unhealthy. Day 5's rule: the grace period must exceed the slowest boot you will ever see, with margin.</p>
+      <p><b>Fix.</b> Set the grace period above the boot time, then remove the boot time: bake the image into the AMI with Image Builder so the instance is ready in 30 s, and consider a warm pool for the morning peak. Also set <code>DefaultInstanceWarmup</code> so the policy stops counting instances that are still starting.</p>
+<pre class="code">aws autoscaling update-auto-scaling-group --auto-scaling-group-name web --health-check-grace-period 300 --default-instance-warmup 240</pre>
+      <p><b>Why A is a trap.</b> The health check settings are ordinary, and they are the ones that make deploys cut over quickly; they only matter here because the grace period does not cover the boot. <b>C</b> describes a real second problem (and the fix includes it), but scale-in by policy would appear as a policy activity, not as an ELB health check failure. <b>D</b> is backwards: ELB health checks are the better signal for instance replacement; the problem is when they are consulted, not whether.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 9 ===================== -->
+  <section class="card case" id="c9" data-answer="1" data-day="6">
+    <div class="case-head">
+      <div><div class="tag">Case 9 · Days 2 and 6 · S3 and VPC endpoints</div><h3>The same role works from a laptop and fails from the VPC</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> A Lambda function in a private subnet reads an object from <code>app-assets-prod</code> and gets <code>AccessDenied</code>. A developer assumes the function's role on their laptop, runs the same <code>get-object</code>, and it succeeds.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code"># CloudTrail, the failed call
+{ "eventName": "GetObject", "errorCode": "AccessDenied",
+  "userIdentity": { "arn": "arn:aws:sts::111122223333:assumed-role/asset-reader/asset-fn" },
+  "sourceIPAddress": "10.0.12.40", "vpcEndpointId": "vpce-0a1b2c3d4e5f6a7b8",
+  "requestParameters": { "bucketName": "app-assets-prod", "key": "banners/q4.png" } }
+
+# the role's policy
+{ "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::app-assets-prod/*" }
+
+# bucket policy
+{ "Effect": "Allow", "Principal": { "AWS": "arn:aws:iam::111122223333:role/asset-reader" },
+  "Action": "s3:GetObject", "Resource": "arn:aws:s3:::app-assets-prod/*" }
+
+$ aws s3api head-object --bucket app-assets-prod --key banners/q4.png --query ServerSideEncryption
+"AES256"
+
+$ aws ec2 describe-vpc-endpoints --vpc-endpoint-ids vpce-0a1b2c3d4e5f6a7b8 --query 'VpcEndpoints[].[ServiceName,VpcEndpointType,PolicyDocument]' --output text
+com.amazonaws.ap-south-1.s3   Gateway   {"Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:*",
+  "Resource":["arn:aws:s3:::central-logs","arn:aws:s3:::central-logs/*"]}]}</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">Same identity, same object, different result. The only difference between the two calls is the path the request took. CloudTrail records that path in one field.</p>
+      <p class="clue">A request that passes through a VPC endpoint is subject to one more policy than a request from the internet. Day 6 listed it among the seven layers.</p>
+      <p class="clue">Read the endpoint policy's <code>Resource</code> list and look for the bucket name.</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The bucket policy has a condition on <code>aws:SourceVpce</code> for a different endpoint, so requests through this one are denied.</button>
+      <button><span class="k">B</span>The S3 gateway endpoint's policy only allows the <code>central-logs</code> bucket; every request to any other bucket through that endpoint is denied, whatever IAM and the bucket policy say.</button>
+      <button><span class="k">C</span>The object is encrypted with a KMS key that the role cannot use; the laptop works because the developer's own session has <code>kms:Decrypt</code>.</button>
+      <button><span class="k">D</span>The Lambda function's subnet has no route to the endpoint, so the request goes nowhere; the <code>AccessDenied</code> comes from the Lambda service, not from S3.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> The gateway endpoint was created for a logging pipeline with a policy scoped to one bucket, and then the whole private subnet started using it, because a gateway endpoint is a route table entry and every S3 request from that subnet goes through it. The endpoint policy is evaluated alongside IAM and the bucket policy, and it does not allow <code>app-assets-prod</code>, so the request fails. From the laptop the request goes over the internet, the endpoint policy is not in the path, and everything that is in the path allows.</p>
+      <p><b>How you would find it.</b> An <code>AccessDenied</code> with the same identity succeeding elsewhere is a path difference, and CloudTrail's <code>vpcEndpointId</code> field names the path. Walk the Day 6 layers for that path: SCP, IAM (allows), bucket policy (allows), Block Public Access (irrelevant, not public), object encryption (SSE-S3, no key policy), endpoint policy: does not allow. The laptop test is not a waste of time; it is the control experiment that halves the search.</p>
+      <p><b>Fix.</b> Decide what the endpoint policy is for. If it is a guardrail against exfiltration, extend it to the account's buckets by condition rather than by name, and keep it. If it was never meant as a guardrail, open it. Then put a condition in the bucket policy requiring this endpoint, so the control is deliberate in both places.</p>
+<pre class="code">{ "Effect": "Allow", "Principal": "*", "Action": "s3:*", "Resource": "*",
+  "Condition": { "StringEquals": { "aws:ResourceAccount": "111122223333" } } }</pre>
+      <p><b>Why C is a trap.</b> <code>head-object</code> shows <code>AES256</code>, which is SSE-S3 and needs no KMS permission; and the developer assumed the function's role, so there is no “own session” with extra rights. <b>A</b> is wrong because the bucket policy shown has no condition. <b>D</b>: without a route the request would time out and there would be no CloudTrail event at all, since S3 never received it.</p>
+    </div>
+  </section>
+
+  <!-- ===================== CASE 10 ===================== -->
+  <section class="card case" id="c10" data-answer="1" data-day="6">
+    <div class="case-head">
+      <div><div class="tag">Case 10 · Days 1 and 6 · S3 and KMS</div><h3>PUT works, LIST works, GET says no</h3></div>
+      <div class="timer"><div class="clock">00:00</div><button class="primary start">Start</button><span class="meta">Target 5:00</span></div>
+    </div>
+    <p><b>Symptom.</b> A reporting service uses the role <code>report-reader</code>. It can list the bucket, it can upload its own files, and it can read objects under <code>public-reports/</code>. Reading anything under <code>exports/</code> returns <code>AccessDenied</code>. The objects under <code>exports/</code> are written by a different role, <code>export-writer</code>.</p>
+    <p><b>What you can see.</b></p>
+<pre class="code">$ aws s3api head-object --bucket reports-prod --key exports/2026-10-06.csv --query '[ServerSideEncryption,SSEKMSKeyId]'
+[ "aws:kms", "arn:aws:kms:ap-south-1:111122223333:key/9f1e2d3c-4b5a-6978-8f0e-1d2c3b4a5968" ]
+
+$ aws s3api head-object --bucket reports-prod --key public-reports/summary.csv --query '[ServerSideEncryption,SSEKMSKeyId]'
+[ "AES256", null ]
+
+# CloudTrail, in order
+GetObject    errorCode AccessDenied   userIdentity report-reader   key exports/2026-10-06.csv
+Decrypt      errorCode AccessDenied   userIdentity report-reader   errorMessage "User: arn:aws:sts::111122223333:assumed-role/report-reader/svc is not authorized to perform: kms:Decrypt on resource: arn:aws:kms:...:key/9f1e... because no resource-based policy allows the kms:Decrypt action"
+
+# report-reader identity policy
+{ "Effect": "Allow", "Action": ["s3:GetObject","s3:PutObject","s3:ListBucket"], "Resource": ["arn:aws:s3:::reports-prod","arn:aws:s3:::reports-prod/*"] },
+{ "Effect": "Allow", "Action": ["kms:Decrypt"], "Resource": "arn:aws:kms:ap-south-1:111122223333:key/9f1e2d3c-4b5a-6978-8f0e-1d2c3b4a5968" }
+
+$ aws kms get-key-policy --key-id 9f1e2d3c-4b5a-6978-8f0e-1d2c3b4a5968 --policy-name default --output text
+{ "Statement": [
+  { "Sid": "Admins",  "Effect": "Allow", "Principal": { "AWS": "arn:aws:iam::111122223333:role/kms-admin" },     "Action": ["kms:Create*","kms:Describe*","kms:Enable*","kms:Put*","kms:Update*","kms:Revoke*","kms:Disable*","kms:Get*","kms:Delete*","kms:ScheduleKeyDeletion"], "Resource": "*" },
+  { "Sid": "Writer",  "Effect": "Allow", "Principal": { "AWS": "arn:aws:iam::111122223333:role/export-writer" }, "Action": ["kms:GenerateDataKey*","kms:Encrypt","kms:Decrypt"], "Resource": "*" } ] }</pre>
+    <div class="clues">
+      <div class="bar"><b>Clues</b><button data-clue="0">Clue 1</button><button data-clue="1">Clue 2</button><button data-clue="2">Clue 3</button></div>
+      <p class="clue">The S3 permissions are fine: the same role reads <code>public-reports/</code>. The difference between the two prefixes is in the <code>head-object</code> output.</p>
+      <p class="clue">The second CloudTrail line is the real error. Read its message to the end: “no resource-based policy allows”. For KMS, the resource-based policy is the key policy.</p>
+      <p class="clue">An IAM policy can grant KMS permissions only if the key policy lets IAM do so, which is what the usual <code>"Principal": {"AWS": "arn:aws:iam::ACCOUNT:root"}</code> statement is for. Look for it.</p>
+    </div>
+    <div class="opts">
+      <b>The fault is</b>
+      <button><span class="k">A</span>The role lacks <code>s3:GetObjectVersion</code>; objects written by another role are versioned and need the version permission to read.</button>
+      <button><span class="k">B</span>The key policy neither lists <code>report-reader</code> nor delegates to IAM with a root-principal statement, so the role's own <code>kms:Decrypt</code> grant has no effect and S3 cannot decrypt the object for it.</button>
+      <button><span class="k">C</span>ACLs are enabled and <code>export-writer</code> owns the objects it wrote, so the bucket owner's roles cannot read them until ownership is set to bucket owner enforced.</button>
+      <button><span class="k">D</span>The bucket policy denies <code>s3:GetObject</code> unless the request includes <code>x-amz-server-side-encryption</code>, and GET requests cannot carry that header.</button>
+    </div>
+    <div class="row-actions"><button class="primary check">Check</button><span class="verdict"></span></div>
+    <div class="explain">
+      <p><b>The fault.</b> KMS is the one service where the resource policy is not optional and does not merge with IAM by default. A key policy that contains no statement for the account root principal does not “let IAM in”, so the role's identity-based <code>kms:Decrypt</code> is irrelevant; only the principals named in the key policy can use the key. <code>export-writer</code> is named and can write. <code>report-reader</code> is not, so when S3 asks KMS to decrypt the data key on the reader's behalf, KMS refuses, and S3 reports the refusal as its own <code>AccessDenied</code>. Reading <code>public-reports/</code> works because those objects use SSE-S3, which needs no key.</p>
+      <p><b>How you would find it.</b> “GET fails, PUT works, same bucket” is the Day 6 signature for encryption; <code>head-object</code> on a failing key and on a working key makes it concrete in two commands. CloudTrail then shows the KMS <code>Decrypt</code> failure next to the S3 call, and its message literally says which kind of policy is missing. Finally the key policy, read for two things: is the caller named, and is there a root statement that delegates to IAM? Neither, so the diagnosis is complete.</p>
+      <p><b>Fix.</b> Either add the reader to the key policy, or add the standard root statement and let IAM policies decide, which scales better across many roles. Grants are the third option for temporary or programmatic access.</p>
+<pre class="code">{ "Sid": "EnableIAM", "Effect": "Allow",
+  "Principal": { "AWS": "arn:aws:iam::111122223333:root" }, "Action": "kms:*", "Resource": "*" }
+# then the role's own kms:Decrypt statement starts to work</pre>
+      <p><b>Why C is a trap.</b> Object ownership would also produce “owner cannot read what another principal wrote”, and it is the first thing many people reach for. But <code>head-object</code> succeeded, which it would not against a foreign-owned object with no grant, and CloudTrail points at KMS, not at S3. <b>A</b>: <code>GetObjectVersion</code> is only needed when a version id is specified. <b>D</b> describes a common PUT-side condition and cannot affect GET.</p>
+    </div>
+  </section>
+
+  <h2>Scoreboard</h2>
+  <div class="card board">
+    <div class="score-line">
+      <div><div class="lbl">Solved</div><div class="big" id="sbFound2">0 / 10</div></div>
+      <div><div class="lbl">Clean</div><div class="big" id="sbClean2">0</div></div>
+      <div><div class="lbl">Missed</div><div class="big" id="sbMiss2">0</div></div>
+      <div><div class="lbl">Total time</div><div class="big" id="sbTime2">00:00</div></div>
+    </div>
+    <div class="table-wrap"><table id="boardTable">
+      <tr><th>Case</th><th>Day</th><th>Layer</th><th>Result</th><th>Time</th><th>Clues</th></tr>
+    </table></div>
+    <p class="result" id="boardMsg">Work through the ten cases. The verdict appears here.</p>
+  </div>
+
+  <h2>Week 1 in one table</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Day</th><th>When you see</th><th>First command</th><th>The stateless thing people forget</th><th>Number to remember</th></tr>
+      <tr><td>1 · IAM</td><td><code>AccessDenied</code> with “no identity-based policy allows” or “explicit deny”</td><td>CloudTrail <code>lookup-events</code> for the call; read <code>errorMessage</code></td><td>Session context: principal tags, source identity, the boundary on the session, the SCP of the caller's account</td><td>Evaluation order: explicit Deny, SCP, resource policy, boundary, session policy, identity policy</td></tr>
+      <tr><td>2 · VPC</td><td>Timeout, no error text</td><td><code>describe-route-tables</code> for the source subnet, then Reachability Analyzer</td><td>NACLs, both directions, with ephemeral ports</td><td>Most specific route wins; 5 reserved addresses per subnet; NAT Gateway 55,000 connections per destination</td></tr>
+      <tr><td>3 · Networking at scale</td><td>Reachable by IP but not by name; or reachable when it should not be</td><td><code>search-transit-gateway-routes</code> on the table associated with the <i>source</i></td><td>Propagation defaults; the .2 resolver's VPC-only reach</td><td>5,000 attachments per TGW; 50 Gbps per VPC attachment; DX 1/10/100 Gbps dedicated</td></tr>
+      <tr><td>4 · EC2</td><td>Credentials vanish; or a flat performance ceiling</td><td><code>describe-instances</code> MetadataOptions; <code>EBSIOBalance%</code> and <code>BurstBalance</code></td><td>The instance's EBS limit, separate from the volume's</td><td>IMDSv2 hop limit 1 (2 for containers); gp3 3,000 IOPS and 125 MB/s free; instance burst 30 min per 24 h</td></tr>
+      <tr><td>5 · ALB and ASG</td><td>502/503/504 from the load balancer; instances churning</td><td><code>describe-target-health</code> (read the reason); <code>describe-scaling-activities</code> (read the cause)</td><td>The health checker sends a bare request: no headers, no TLS unless asked</td><td>Idle timeout 60 s; deregistration delay 300 s; grace period must exceed boot time</td></tr>
+      <tr><td>6 · S3</td><td><code>AccessDenied</code> with every policy apparently allowing</td><td><code>head-object</code> for encryption; CloudTrail data events for <code>vpcEndpointId</code> and the KMS line</td><td>Endpoint policy; key policy; delete markers; Block Public Access</td><td>3,500 PUT and 5,500 GET per second per prefix; 5 TB object; 30/90/180-day minimums for IA/Glacier/Deep Archive</td></tr>
+    </table>
+  </div>
+
+  <h2>Explain it out loud</h2>
+  <details><summary>Can you find each fault in under five minutes? What makes that possible?</summary><p>Yes, if I let the error decide where I look instead of starting from the diagram. A timeout means the request never arrived, so I follow the packet: route table, security group, NACL in both directions, the gateway or endpoint in the path, Flow Logs to prove where it died. An <code>AccessDenied</code> means the request arrived and one layer refused it, so I go to CloudTrail, read the message to the end because it usually names the kind of policy that is missing, and walk the layers in order: SCP, boundary, identity policy, resource policy, endpoint policy, key policy. A 5xx from a load balancer means the network is fine and the target is unhealthy, so I read the target health reason code and reproduce the exact health-check request on the target. A flat ceiling means nothing is wrong and something is at a limit, so I find the balance or throttle metric and compare it with the quota of the smallest component in the path. The second half of being fast is the control experiment: find the version of the request that works, and the single difference between it and the one that fails is usually the answer.</p></details>
+  <details><summary>You have an AccessDenied and the policy simulator says the call is allowed. What now?</summary><p>The simulator evaluates the policies it is shown with the context it is given, and the real request has a different context. I ask what the simulator could not see. The request may have come through a VPC endpoint with its own policy, or the object may be SSE-KMS encrypted with a key whose policy does not include the caller, and the simulator does not evaluate either. The session may lack tags or a source identity that a condition needs; the simulator lets me type them in, reality does not. The caller may be a session with a session policy that narrowed the role, or the account may have an SCP that the simulator only includes if I run it from the right account. So I go to CloudTrail, find the actual event, and read <code>errorMessage</code>, <code>vpcEndpointId</code> and the neighbouring KMS event, because the real evaluation leaves its reason in the log.</p></details>
+  <details><summary>Timeout, connection refused, connection reset, 502, 503, 504: what does each one tell you?</summary><p>A timeout means no reply at all: the packet or its answer was dropped on the way, so it is routing, a security group, a NACL, or a destination that does not exist. Connection refused means the packet arrived at a host and nothing was listening on that port: the process is down or on another port, and the network is innocent. Connection reset means something accepted the connection and then tore it down: a process that crashed, a TLS mismatch, or an idle timeout on one side shorter than the other's. From a load balancer, 503 means it has no healthy target to send to, 504 means a target took longer than the idle timeout to answer, and 502 means the target answered with something the load balancer could not use: a closed connection, a malformed response, or a target that went away between the health check and the request, which is what a deploy without connection draining looks like. Each one tells me whether to open the network tools, the process tools, or the load balancer's target health page.</p></details>
+  <details><summary>You fixed the fault. What do you do before you close the ticket?</summary><p>Three things. I check whether the same fault exists anywhere else, because a hardened NACL template or a scoped endpoint policy was applied by something that applied it in more than one place; a Config rule or a quick script across accounts answers that. I make the fault impossible to repeat silently: an alarm on the signal that would have caught it earlier, such as unhealthy host count, <code>EBSIOBalance%</code>, or an Access Analyzer finding, and where possible a guardrail, such as an SCP that blocks disabling the setting or a launch-template default for the hop limit. And I write it down in a form the next on-call engineer can use at three in the morning: symptom, the one command that shows it, the fix. That last line is the whole value of this week.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-08/index.html">Day 8: RDS and Aurora in depth</a>.</b> Week 2 opens the data tier. What actually happens, second by second, during a Multi-AZ failover; how Aurora's storage layer differs from a replicated disk; where RDS Proxy earns its place; and why a parameter group change can take your database down at midnight.
+  </div>
+</main>
+
+<script>
+(function () {
+  const fmt = s => String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  const TARGET = 300;
+  const LAYERS = { 1: "IAM", 2: "VPC", 3: "Networking at scale", 4: "EC2", 5: "ALB and ASG", 6: "S3" };
+  const cases = [...document.querySelectorAll(".case")];
+  const state = cases.map(() => ({ secs: 0, tick: null, clues: 0, pick: -1, done: false, right: false }));
+
+  function paintClock(i) {
+    const c = cases[i].querySelector(".clock");
+    c.textContent = fmt(state[i].secs);
+    c.classList.toggle("over", state[i].secs > TARGET);
+  }
+  function start(i) {
+    const s = state[i];
+    if (s.tick || s.done) return;
+    s.tick = setInterval(() => { s.secs++; paintClock(i); }, 1000);
+    const b = cases[i].querySelector(".start");
+    b.disabled = true; b.textContent = "Running";
+    cases[i].querySelector(".timer .meta").textContent = "Target 5:00 · press Check to stop";
+  }
+  function stop(i) {
+    const s = state[i];
+    clearInterval(s.tick); s.tick = null;
+    const b = cases[i].querySelector(".start");
+    b.disabled = true; b.textContent = "Stopped";
+  }
+
+  cases.forEach((card, i) => {
+    const s = state[i];
+    const opts = [...card.querySelectorAll(".opts button")];
+    const clues = [...card.querySelectorAll(".clue")];
+    card.querySelector(".start").onclick = () => start(i);
+    card.querySelectorAll(".clues .bar button").forEach(b => {
+      b.onclick = () => {
+        if (s.done) return;
+        start(i);
+        const k = +b.dataset.clue;
+        if (!clues[k].classList.contains("shown")) { clues[k].classList.add("shown"); s.clues++; b.disabled = true; }
+      };
+    });
+    opts.forEach((b, k) => {
+      b.onclick = () => {
+        if (s.done) return;
+        start(i);
+        s.pick = k;
+        opts.forEach((o, j) => o.classList.toggle("pick", j === k));
+      };
+    });
+    card.querySelector(".check").onclick = () => {
+      const v = card.querySelector(".verdict");
+      if (s.done) return;
+      if (s.pick < 0) { v.textContent = "Pick an answer first."; v.className = "verdict"; return; }
+      s.done = true; stop(i);
+      const ans = +card.dataset.answer;
+      s.right = s.pick === ans;
+      opts.forEach((o, j) => {
+        o.classList.remove("pick");
+        if (j === ans) o.classList.add("right");
+        else if (j === s.pick) o.classList.add("wrong");
+        o.disabled = true;
+      });
+      card.querySelectorAll(".clues .bar button").forEach(b => b.disabled = true);
+      card.classList.add("done", s.right ? "right" : "wrong");
+      const over = s.secs > TARGET;
+      v.className = "verdict " + (s.right ? "ok" : "no");
+      v.textContent = s.right
+        ? (s.clues === 0 && !over ? `Correct, clean, ${fmt(s.secs)}.` : `Correct in ${fmt(s.secs)}` + (s.clues ? ` with ${s.clues} clue${s.clues > 1 ? "s" : ""}` : "") + (over ? ", over the target." : "."))
+        : `Not this one. The fault is ${"ABCD"[ans]}. Read the explanation, then say the check order out loud.`;
+      card.querySelector(".explain").classList.add("shown");
+      board();
+    };
+  });
+
+  function board() {
+    let found = 0, clean = 0, miss = 0, time = 0;
+    const byDay = {};
+    const rows = cases.map((card, i) => {
+      const s = state[i], day = card.dataset.day;
+      const name = card.querySelector("h3").textContent;
+      time += s.secs;
+      let cls = "r-todo", txt = "not yet";
+      if (s.done) {
+        if (s.right) { found++; if (s.clues === 0 && s.secs <= TARGET) { clean++; cls = "r-clean"; txt = "clean"; } else { cls = "r-found"; txt = "found"; } }
+        else { miss++; cls = "r-miss"; txt = "missed"; byDay[day] = (byDay[day] || 0) + 1; }
+      }
+      return `<tr><td>${i + 1}. ${name}</td><td>${card.querySelector(".tag").textContent.split("·")[1].trim()}</td><td>${LAYERS[day]}</td><td class="${cls}">${txt}</td><td class="num">${s.done ? fmt(s.secs) : "–"}</td><td class="num">${s.done ? s.clues : "–"}</td></tr>`;
+    }).join("");
+    document.getElementById("boardTable").innerHTML = "<tr><th>Case</th><th>Day</th><th>Layer</th><th>Result</th><th>Time</th><th>Clues</th></tr>" + rows;
+    ["", "2"].forEach(x => {
+      document.getElementById("sbFound" + x).textContent = `${found} / 10`;
+      document.getElementById("sbClean" + x).textContent = clean;
+      document.getElementById("sbMiss" + x).textContent = miss;
+      document.getElementById("sbTime" + x).textContent = fmt(time);
+    });
+    const doneCount = state.filter(s => s.done).length;
+    let msg;
+    if (doneCount < 10) msg = `${doneCount} of 10 checked. Keep going; the verdict needs all ten.`;
+    else {
+      const worst = Object.entries(byDay).sort((a, b) => b[1] - a[1])[0];
+      const avg = Math.round(time / 10);
+      if (clean >= 8) msg = `Clean on ${clean} of 10 with an average of ${fmt(avg)} a case. This is the Week 1 you want in an interview. Move to Week 2.`;
+      else if (found >= 8) msg = `Found ${found} of 10, ${clean} clean, average ${fmt(avg)} a case. The knowledge is there; the speed comes from reading the error before the diagram.` + (worst ? ` Reread Day ${worst[0]} (${LAYERS[worst[0]]}) before Day 8.` : "");
+      else if (found >= 5) msg = `Found ${found} of 10. Reread Day ${worst ? worst[0] : "1"}${worst ? " (" + LAYERS[worst[0]] + ")" : ""} and its “How it fails in production” table, then redo the cases you missed tomorrow before starting Day 8.`;
+      else msg = `Found ${found} of 10. Spend one more day on Week 1: redo the labs for Days ${Object.keys(byDay).join(", ") || "1 to 6"} with the “How it fails” tables open, then come back here.`;
+    }
+    document.getElementById("boardMsg").innerHTML = msg;
+  }
+  board();
+})();
+</script>
+</body>
+</html>
