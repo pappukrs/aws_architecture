@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 8 — RDS and Aurora in depth</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .sim .calc { margin: 14px 0 12px; }
+  .sim .calc .big { font-size: 21px; }
+  .sim h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .sim .seg b { min-width: 170px; }
+  .sim input[type=range] { width: 260px; accent-color: var(--orange); vertical-align: middle; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+  td.t { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .lab li { margin-bottom: 12px; }
+  svg .box { fill: var(--card); stroke: var(--border); stroke-width: 1.2; }
+  svg .lbl { font-size: 12.5px; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  svg .title { font-size: 13px; font-weight: 700; }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+  svg .arrow.both { marker-start: url(#arr); }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--pub); }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-07/index.html">← Day 7</a><a href="../README.md">30-day plan</a><a href="../day-09/index.html">Day 9 →</a></nav>
+  <header>
+    <div class="tag">Day 8 of 30 · Week 2 — Databases, Messaging, Serverless, Containers</div>
+    <h1>RDS and Aurora in depth</h1>
+    <p class="lead">Week 2 opens the data tier. Every stateless fleet from Week 1 ends in a database, and the database is where an outage stops being an inconvenience and starts being data loss. RDS gives you an engine on an instance with an EBS volume, a standby in another AZ, replicas, backups and a maintenance window. Aurora takes the same engines and replaces the disk with a distributed storage service that changes what replication, failover and recovery mean. The centre of the page is one event: the primary dies at 02:00. What happens, second by second, who notices, and how long until your application writes again? Around it: how the storage layers work, RDS Proxy, Serverless v2, Global Database, backups and point-in-time restore, parameter groups, Performance Insights, blue/green deployments and DMS.</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 650" role="img" aria-label="An application tier reaches RDS through DNS or RDS Proxy; an RDS Multi-AZ instance with a synchronous standby and an asynchronous read replica, a Multi-AZ cluster, and an Aurora cluster on a shared six-copy volume; backups, Global Database, blue/green, DMS and monitoring to the right; a failover timeline below">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke" style="fill: var(--muted)"/></marker>
+        </defs>
+
+        <!-- Step 1: Region, DB subnet group, application tier -->
+        <g data-step="1">
+          <rect x="12" y="12" width="976" height="450" rx="14" fill="var(--region-fill)" stroke="var(--region)" stroke-width="1.5"/>
+          <text x="28" y="34" class="title" style="fill: var(--region)">Region · one VPC · a DB subnet group with a private subnet in each AZ</text>
+          <rect x="30" y="58" width="140" height="82" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="100" y="78" text-anchor="middle" class="title">Application tier</text>
+          <text x="100" y="95" text-anchor="middle" class="small">EC2 · ECS · Lambda</text>
+          <text x="100" y="109" text-anchor="middle" class="small">private subnets, a pool</text>
+          <text x="100" y="123" text-anchor="middle" class="small">app SG → DB SG :3306</text>
+          <rect x="200" y="48" width="470" height="408" rx="12" fill="var(--az-fill)" stroke="var(--az)" stroke-width="1.3" stroke-dasharray="5 3"/>
+          <text x="212" y="66" class="title" style="fill: var(--az)">DB subnet group: three AZs · DB security group · no public address</text>
+          <text x="271" y="82" text-anchor="middle" class="small" style="fill: var(--az)">AZ a</text>
+          <text x="433" y="82" text-anchor="middle" class="small" style="fill: var(--az)">AZ b</text>
+          <text x="595" y="82" text-anchor="middle" class="small" style="fill: var(--az)">AZ c</text>
+        </g>
+
+        <!-- Step 2: RDS Multi-AZ instance deployment -->
+        <g data-step="2">
+          <text x="212" y="99" class="title" style="fill: var(--orange)">RDS Multi-AZ instance deployment</text>
+          <rect x="210" y="106" width="122" height="70" rx="8" class="box" style="stroke: var(--orange)"/>
+          <text x="271" y="124" text-anchor="middle" class="title">Primary</text>
+          <text x="271" y="140" text-anchor="middle" class="small">engine + EBS (gp3 / io2)</text>
+          <text x="271" y="154" text-anchor="middle" class="small">all reads and writes</text>
+          <text x="271" y="168" text-anchor="middle" class="small">parameter group</text>
+          <rect x="372" y="106" width="122" height="70" rx="8" class="box" style="stroke: var(--muted); stroke-dasharray: 4 3"/>
+          <text x="433" y="124" text-anchor="middle" class="title" style="fill: var(--muted)">Standby</text>
+          <text x="433" y="140" text-anchor="middle" class="small">same class, own EBS</text>
+          <text x="433" y="154" text-anchor="middle" class="small">not readable, billed</text>
+          <text x="433" y="168" text-anchor="middle" class="small">takes the backups</text>
+          <path d="M334 141 L370 141" class="arrow both"/>
+          <text x="352" y="132" text-anchor="middle" class="small" style="fill: var(--orange)">sync</text>
+          <path d="M170 92 L208 124" class="arrow"/>
+          <text x="212" y="212" class="small">Endpoint: a CNAME to the primary's IP (TTL 5 s); a failover rewrites it.</text>
+        </g>
+
+        <!-- Step 3: read replica and Multi-AZ DB cluster -->
+        <g data-step="3">
+          <rect x="534" y="106" width="122" height="70" rx="8" class="box" style="stroke: var(--priv)"/>
+          <text x="595" y="124" text-anchor="middle" class="title" style="fill: var(--priv)">Read replica</text>
+          <text x="595" y="140" text-anchor="middle" class="small">async binlog / WAL</text>
+          <text x="595" y="154" text-anchor="middle" class="small">readable · promotable</text>
+          <text x="595" y="168" text-anchor="middle" class="small">15 max · cross-Region</text>
+          <path d="M332 170 Q433 200 534 170" class="arrow" style="stroke: var(--priv)"/>
+          <text x="433" y="199" text-anchor="middle" class="small" style="fill: var(--priv)">async replication: ReplicaLag of seconds, sometimes hours</text>
+          <rect x="210" y="222" width="446" height="38" rx="8" class="box" style="stroke: var(--priv); stroke-dasharray: 4 3"/>
+          <text x="433" y="238" text-anchor="middle" class="title" style="fill: var(--priv)">Multi-AZ DB cluster: a writer + two readable standbys in 3 AZs</text>
+          <text x="433" y="253" text-anchor="middle" class="small">semi-synchronous (1 of 2 acks) · failover &lt; 35 s · reader endpoint · local NVMe</text>
+        </g>
+
+        <!-- Step 4: Aurora storage -->
+        <g data-step="4">
+          <text x="212" y="280" class="title" style="fill: var(--orange)">Aurora cluster (MySQL- or PostgreSQL-compatible)</text>
+          <rect x="210" y="362" width="446" height="92" rx="10" fill="var(--cloud-fill)" stroke="var(--orange)" stroke-width="1.5"/>
+          <text x="433" y="380" text-anchor="middle" class="title" style="fill: var(--orange)">Aurora cluster volume: one shared, distributed, self-healing volume</text>
+          <rect x="222" y="388" width="130" height="34" rx="6" class="box"/>
+          <text x="287" y="402" text-anchor="middle" class="small">AZ a · 2 copies each</text>
+          <text x="287" y="416" text-anchor="middle" class="small">10 GB segment, on SSD</text>
+          <rect x="368" y="388" width="130" height="34" rx="6" class="box"/>
+          <text x="433" y="402" text-anchor="middle" class="small">AZ b · 2 copies</text>
+          <text x="433" y="416" text-anchor="middle" class="small">repairs from peers</text>
+          <rect x="514" y="388" width="130" height="34" rx="6" class="box"/>
+          <text x="579" y="402" text-anchor="middle" class="small">AZ c · 2 copies</text>
+          <text x="579" y="416" text-anchor="middle" class="small">survives AZ + 1 disk</text>
+          <text x="433" y="436" text-anchor="middle" class="small">6 copies · write quorum 4/6, read 3/6 · instances send redo log only, never pages</text>
+          <text x="433" y="449" text-anchor="middle" class="small">no checkpoints · recovery inside storage · grows 10 GB at a time to 128 TiB</text>
+        </g>
+
+        <!-- Step 5: Aurora instances and endpoints -->
+        <g data-step="5">
+          <rect x="210" y="288" width="122" height="60" rx="8" class="box" style="stroke: var(--orange)"/>
+          <text x="271" y="305" text-anchor="middle" class="title">Writer</text>
+          <text x="271" y="320" text-anchor="middle" class="small">cluster endpoint</text>
+          <text x="271" y="334" text-anchor="middle" class="small">priority tier 0–15</text>
+          <rect x="372" y="288" width="122" height="60" rx="8" class="box" style="stroke: var(--priv)"/>
+          <text x="433" y="305" text-anchor="middle" class="title" style="fill: var(--priv)">Reader (replica)</text>
+          <text x="433" y="320" text-anchor="middle" class="small">lag ≈ 10–20 ms</text>
+          <text x="433" y="334" text-anchor="middle" class="small">reader endpoint · ≤ 15</text>
+          <rect x="534" y="288" width="122" height="60" rx="8" class="box" style="stroke: var(--edge)"/>
+          <text x="595" y="305" text-anchor="middle" class="title" style="fill: var(--edge)">Reader · Serverless v2</text>
+          <text x="595" y="320" text-anchor="middle" class="small">0–256 ACU, 0.5 steps</text>
+          <text x="595" y="334" text-anchor="middle" class="small">resizes in seconds</text>
+          <path d="M271 348 L271 360" class="arrow" style="stroke: var(--orange)"/>
+          <path d="M433 360 L433 350" class="arrow" style="stroke: var(--priv)"/>
+          <path d="M595 360 L595 350" class="arrow" style="stroke: var(--edge)"/>
+          <text x="300" y="358" class="small" style="fill: var(--orange)">redo log</text>
+          <text x="462" y="358" class="small" style="fill: var(--priv)">page reads</text>
+        </g>
+
+        <!-- Step 6: RDS Proxy -->
+        <g data-step="6">
+          <rect x="30" y="162" width="140" height="90" rx="10" class="box" style="stroke: var(--region)"/>
+          <text x="100" y="181" text-anchor="middle" class="title" style="fill: var(--region)">RDS Proxy</text>
+          <text x="100" y="197" text-anchor="middle" class="small">pools and multiplexes</text>
+          <text x="100" y="211" text-anchor="middle" class="small">Secrets Manager · IAM auth</text>
+          <text x="100" y="225" text-anchor="middle" class="small">failover without DNS</text>
+          <text x="100" y="239" text-anchor="middle" class="small" style="fill: var(--bad)">pinning turns it off</text>
+          <path d="M100 140 L100 160" class="arrow"/>
+          <path d="M170 196 L208 160" class="arrow" style="stroke: var(--region)"/>
+          <path d="M170 230 L208 306" class="arrow" style="stroke: var(--region)"/>
+        </g>
+
+        <!-- Step 7: backups, Global Database, blue/green, DMS -->
+        <g data-step="7">
+          <rect x="684" y="48" width="291" height="118" rx="10" class="box" style="stroke: var(--pub)"/>
+          <text x="829" y="67" text-anchor="middle" class="title" style="fill: var(--pub)">Backups and restore</text>
+          <text x="696" y="85" class="lbl">Automated: daily snapshot + 5-min logs</text>
+          <text x="696" y="101" class="lbl">→ point-in-time restore, 1–35 days back</text>
+          <text x="696" y="117" class="lbl">Manual snapshots: kept until deleted;</text>
+          <text x="696" y="133" class="lbl">copy / share across Regions and accounts</text>
+          <text x="696" y="149" class="lbl">Restore = a <tspan font-weight="700">new</tspan> instance, new endpoint</text>
+          <text x="696" y="162" class="small">lazy-loaded · Aurora: backtrack 72 h, clone</text>
+          <rect x="684" y="176" width="291" height="66" rx="10" class="box" style="stroke: var(--region)"/>
+          <text x="829" y="194" text-anchor="middle" class="title" style="fill: var(--region)">Aurora Global Database</text>
+          <text x="696" y="211" class="lbl">storage-level replication to other Regions</text>
+          <text x="696" y="226" class="lbl">lag &lt; 1 s · RPO ≈ 1 s · write forwarding</text>
+          <text x="696" y="239" class="small">RTO &lt; 1 min · switchover: RPO 0 · failover: ≈ 1 s lost</text>
+          <rect x="684" y="252" width="291" height="84" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="829" y="270" text-anchor="middle" class="title" style="fill: var(--edge)">Changing engines and versions</text>
+          <text x="696" y="288" class="lbl"><tspan font-weight="700">Blue/Green:</tspan> green copy fed by logical</text>
+          <text x="696" y="303" class="lbl">replication; change version, class, params;</text>
+          <text x="696" y="318" class="lbl">switchover &lt; 1 min with guardrails · <tspan font-weight="700">DMS:</tspan></text>
+          <text x="696" y="331" class="small">full load + CDC between engines · Schema Conversion</text>
+        </g>
+
+        <!-- Step 8: observability and parameter groups -->
+        <g data-step="8">
+          <rect x="684" y="346" width="291" height="108" rx="10" class="box" style="stroke: var(--az)"/>
+          <text x="829" y="364" text-anchor="middle" class="title" style="fill: var(--az)">Seeing inside</text>
+          <text x="696" y="381" class="lbl">CloudWatch: CPU, memory, connections, IOPS,</text>
+          <text x="696" y="396" class="lbl">queue depth, ReplicaLag, FreeStorageSpace</text>
+          <text x="696" y="411" class="lbl">Performance Insights: load by wait, top SQL</text>
+          <text x="696" y="426" class="lbl">Enhanced Monitoring: OS at 1 s · slow log</text>
+          <text x="696" y="440" class="small">Events → SNS / EventBridge: failover, low storage</text>
+          <text x="696" y="451" class="small">Parameters: dynamic now · static pending-reboot</text>
+        </g>
+
+        <!-- Step 9: the failover timeline -->
+        <g data-step="9">
+          <rect x="30" y="478" width="940" height="160" rx="12" class="box"/>
+          <text x="46" y="500" class="title">A Multi-AZ instance failover, second by second</text>
+          <text x="46" y="522" class="lbl"><tspan font-weight="700">t = 0 s</tspan>  The primary host, its AZ or its volume fails, or you asked for a reboot with failover. Writes stop. Open connections drop or hang.</text>
+          <text x="46" y="542" class="lbl"><tspan font-weight="700">t ≈ 10–20 s</tspan>  RDS health checks miss the primary. RDS decides to fail over and records the event "Multi-AZ instance failover started".</text>
+          <text x="46" y="562" class="lbl"><tspan font-weight="700">t ≈ 20–60 s</tspan>  The standby's engine runs crash recovery on its synchronous copy of the volume (no committed write is lost), then opens.</text>
+          <text x="46" y="582" class="lbl"><tspan font-weight="700">t ≈ 30–70 s</tspan>  The CNAME now points at the standby. Clients honouring the 5 s TTL reconnect; a JVM that cached the old address keeps failing.</text>
+          <text x="46" y="602" class="lbl"><tspan font-weight="700">t ≈ 60–120 s</tspan>  Normal service in the other AZ, with no standby: RDS builds a new one in the old AZ and synchronises it, minutes to hours.</text>
+          <text x="46" y="626" class="small">Multi-AZ cluster ≈ 35 s, readers keep serving · Aurora with a replica ≈ 30 s, no crash recovery · RDS Proxy removes the DNS step for clients</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption"><b>The whole picture.</b> The application tier connects over a security group to a database that lives in a DB subnet group spanning three AZs. On RDS the database is an engine on an instance with its own EBS volume; Multi-AZ adds a synchronous standby that is not readable, read replicas add asynchronous copies that are, and the newer Multi-AZ cluster gives one writer and two readable standbys with semi-synchronous commits. Aurora keeps the engine but replaces the volume with a shared storage service that holds six copies across three AZs and does its own recovery, so replicas lag by milliseconds and failover needs no crash recovery. RDS Proxy pools connections in front of either. To the right are the operations that happen around a database: backups and point-in-time restore, Global Database for another Region, blue/green deployments for version changes, DMS for migrations, and the metrics, Performance Insights and events that tell you what the database is doing. Below is the one sequence to know by heart: what happens, second by second, when the primary dies.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Primary / writer, Aurora volume</span>
+      <span style="--c:var(--muted)">Standby</span>
+      <span style="--c:var(--priv)">Replicas and readers</span>
+      <span style="--c:var(--region)">RDS Proxy, Global Database</span>
+      <span style="--c:var(--pub)">Backups</span>
+      <span style="--c:var(--edge)">Clients, Serverless v2, changes</span>
+      <span style="--c:var(--az)">Subnet group, monitoring</span>
+    </div>
+  </div>
+
+  <h2>The primary dies at 02:00: what do your users see?</h2>
+  <div class="card sim">
+    <p>Choose the deployment, what went wrong and how the application connects. Before you read the result, say out loud how long writes are unavailable, how long the application is broken, whether any committed data is lost and whether anything stays readable. Then read the timeline and compare.</p>
+    <div class="seg" id="foDep"></div>
+    <div class="seg" id="foTrig"></div>
+    <div class="seg" id="foClient"></div>
+    <div class="calc">
+      <div><div class="lbl">Writes unavailable</div><div class="big" id="foWrites"></div></div>
+      <div><div class="lbl">Application broken</div><div class="big" id="foApp"></div></div>
+      <div><div class="lbl">Committed data lost</div><div class="big" id="foRpo"></div></div>
+      <div><div class="lbl">Readable meanwhile</div><div class="big" id="foRead"></div></div>
+    </div>
+    <div class="table-wrap"><table id="foTable"></table></div>
+    <p class="result" id="foMsg"></p>
+    <p class="note">Durations are typical values from the AWS documentation and from production experience, not SLAs: "typically 60–120 seconds" for a Multi-AZ instance, "typically under 35 seconds" for a Multi-AZ cluster, "typically under 30 seconds" for Aurora with a replica. Crash recovery on the standby takes longer when there were many uncommitted transactions or a huge one; a client's reconnect time depends on its DNS cache and its retry logic, which is why the client is a choice here.</p>
+  </div>
+
+  <h2>What does the database cost per month: RDS or Aurora?</h2>
+  <div class="card sim">
+    <p>The same MySQL workload on RDS with gp3, on Aurora Standard and on Aurora I/O-Optimized. Choose the instance class, the availability you need, the data size and how busy the storage is. Before you read the result, guess which of the three is cheapest and say what the I/O rate does to the answer.</p>
+    <div class="seg" id="csClass"></div>
+    <div class="seg" id="csHa"></div>
+    <div class="seg" id="csSize"></div>
+    <div class="seg" id="csIo"></div>
+    <div class="calc">
+      <div><div class="lbl">RDS MySQL, gp3</div><div class="big" id="csRds"></div></div>
+      <div><div class="lbl">Aurora Standard</div><div class="big" id="csAurS"></div></div>
+      <div><div class="lbl">Aurora I/O-Optimized</div><div class="big" id="csAurO"></div></div>
+      <div><div class="lbl">Cheapest</div><div class="big" id="csBest"></div></div>
+    </div>
+    <div class="table-wrap"><table id="csTable"></table></div>
+    <p class="result" id="csMsg"></p>
+    <p class="note">Rounded on-demand list prices for US East (N. Virginia) when this page was written: RDS MySQL db.r6g.large $0.24/h (Multi-AZ instance doubles it), gp3 $0.115 per GB-month per copy with 3,000 IOPS included (12,000 from 400 GB), extra provisioned IOPS $0.02 per IOPS-month per copy; Aurora MySQL db.r6g.large $0.26/h Standard and $0.34/h I/O-Optimized, storage $0.10 per GB-month (Standard) or $0.225 (I/O-Optimized) for the whole six-copy volume, I/O $0.20 per million requests on Standard and free on I/O-Optimized. Backup storage up to the database size is free on both. An Aurora replica is both the standby and a reader, so "HA" on Aurora is one writer plus one replica. Larger classes scale linearly. Reserved instances cut the compute part by 30–60%; they are left out.</p>
+  </div>
+
+  <h2>Lambda meets max_connections</h2>
+  <div class="card sim">
+    <p>Every Lambda execution environment opens its own database connection and keeps it between invocations. Set the instance class, the engine, how many environments run at the peak and how much of each invocation the connection is actually busy, then add or remove RDS Proxy. Before you read the result, say whether the database survives the peak.</p>
+    <div class="seg" id="cnClass"></div>
+    <div class="seg" id="cnEngine"></div>
+    <div class="seg"><b>Lambda environments at peak</b><input type="range" id="cnConc" min="10" max="3000" step="10" value="400"> <span id="cnConcLbl"></span></div>
+    <div class="seg" id="cnBusy"></div>
+    <div class="seg" id="cnProxy"></div>
+    <div class="calc">
+      <div><div class="lbl">max_connections (default)</div><div class="big" id="cnMax"></div></div>
+      <div><div class="lbl">Connections the DB sees</div><div class="big" id="cnUsed"></div></div>
+      <div><div class="lbl">Memory those connections hold</div><div class="big" id="cnMem"></div></div>
+      <div><div class="lbl">Result</div><div class="big" id="cnResult"></div></div>
+    </div>
+    <p class="result" id="cnMsg"></p>
+    <p class="note">Default formulas: RDS MySQL <code>max_connections = DBInstanceClassMemory / 12582880</code>; RDS PostgreSQL <code>LEAST(DBInstanceClassMemory / 9531392, 5000)</code>. Memory per connection is rough: about 1–4 MB for an idle MySQL thread, about 5–10 MB for a PostgreSQL backend process, more once they have run queries. RDS Proxy multiplexes: it needs roughly one database connection per <i>busy</i> client, not per client, unless sessions get pinned. The raw numbers of <code>max_connections</code> are what the parameter group gives you; you can raise them, and the memory will tell you why you should not raise them far.</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>What RDS is</h3>
+      <ul>
+        <li>A <b>database engine</b> (MySQL, PostgreSQL, MariaDB, Oracle, SQL Server, Db2) on an <b>EC2 instance you cannot log in to</b>, with an <b>EBS volume</b>, managed by an agent that patches, backs up, monitors and fails over.</li>
+        <li>You get a DNS <b>endpoint</b>, a port, a master user, and the engine's own SQL. You do not get the OS, <code>SUPER</code> / superuser, or the file system. <b>RDS Custom</b> (Oracle, SQL Server) gives OS access for software that needs it.</li>
+        <li>The instance lives in a <b>DB subnet group</b> (subnets in at least two AZs) with a <b>security group</b>; a public address is possible and almost always wrong.</li>
+        <li>Configuration is a <b>parameter group</b> (engine settings) and, for Oracle and SQL Server, an <b>option group</b> (TDE, S3 integration, native backup).</li>
+        <li>Instance classes: <b>t</b> (burstable, credits), <b>m</b> (general), <b>r</b> and <b>x</b> (memory), with Graviton (<b>g</b>) variants cheaper by about 20%. Scaling up is a modify with a restart; Multi-AZ makes it a failover instead.</li>
+        <li>Versions: minor upgrades can be automatic in the maintenance window; major upgrades are yours to run. Versions past end of life move to <b>Extended Support</b> and cost extra per vCPU-hour.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Storage and IOPS on RDS</h3>
+      <ul>
+        <li><b>gp3</b>: $0.115 per GB-month with 3,000 IOPS and 125 MB/s included; from 400 GB (MySQL, PostgreSQL, MariaDB) the baseline is 12,000 IOPS and 500 MB/s; you can provision up to 64,000 IOPS and 4,000 MB/s on top. The default for almost everything.</li>
+        <li><b>io1 / io2</b>: provisioned IOPS up to 256,000 with io2 Block Express; for the few databases that need sustained tens of thousands of IOPS at sub-millisecond latency.</li>
+        <li><b>gp2</b> (legacy): 3 IOPS per GB with bursts to 3,000 from a credit bucket. A 20 GB gp2 volume has 100 baseline IOPS; when <code>BurstBalance</code> hits zero the database crawls. Migrate to gp3.</li>
+        <li><b>Storage autoscaling</b>: set a maximum; RDS grows the volume when free space is under 10% for five minutes. Storage only ever grows; to shrink, restore into a smaller instance via dump or DMS. After any storage change, six hours of <b>cooldown</b> before the next.</li>
+        <li>Max volume: 64 TiB (MySQL, PostgreSQL, MariaDB, Oracle), 16 TiB (SQL Server).</li>
+        <li>Watch <code>DiskQueueDepth</code>, <code>ReadLatency</code>/<code>WriteLatency</code> and the IOPS metrics together: high queue depth with IOPS flat at the limit means the volume, not the engine, is the bottleneck.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--muted)">
+      <h3>Multi-AZ instance deployment</h3>
+      <ul>
+        <li>A <b>standby</b> instance in another AZ with its own EBS volume. Every write is replicated <b>synchronously</b> at block level before the commit returns, so the standby is byte-identical and <b>no committed data is lost</b> on failover.</li>
+        <li>The standby is <b>not readable</b> and not a replica in the engine's sense; it is a cold copy that becomes the primary. You pay for two instances and two volumes.</li>
+        <li>Failover triggers: AZ outage, primary host failure, storage failure, <b>instance class change</b>, OS patching, and <b>reboot with failover</b>. Typical time 60–120 s; the engine on the standby must run crash recovery first.</li>
+        <li>Failover is a <b>DNS change</b>: the endpoint's CNAME moves to the standby's IP. Clients must re-resolve; a pool holding the old IP fails until it does.</li>
+        <li>Backups and snapshots are taken from the standby, so there is no I/O pause on the primary.</li>
+        <li>Synchronous replication adds write latency, usually 1–3 ms per commit; chatty transactions feel it.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Multi-AZ DB cluster and read replicas</h3>
+      <ul>
+        <li><b>Multi-AZ DB cluster</b> (MySQL 8.0.28+, PostgreSQL 13.4+): one writer and <b>two readable standbys</b> in three AZs on instances with local NVMe. Replication is <b>semi-synchronous</b>: a commit waits for one of the two to acknowledge, so a failover loses nothing. Failover typically under 35 s, a reader endpoint, and up to 2× the write throughput of a Multi-AZ instance.</li>
+        <li><b>Read replicas</b>: asynchronous copies fed by the engine's own replication (binlog, WAL). Up to 15 per source, in the same or another Region, each with its own endpoint and its own parameter group. A replica can be <b>promoted</b> to a standalone instance; that is the manual cross-Region DR for RDS.</li>
+        <li>A replica is as far behind as <code>ReplicaLag</code> says. Lag grows with large transactions, tables without primary keys (row-based replication scans), and a replica smaller than its source. MySQL: raise <code>replica_parallel_workers</code>.</li>
+        <li>Replicas serve <b>eventually consistent</b> reads. "Read your own writes" after a write must go to the primary.</li>
+        <li>Each replica is a full instance on the bill. A replica of a Multi-AZ instance can itself be Multi-AZ.</li>
+        <li>Cross-Region replica traffic is charged as inter-Region transfer; the replica's data is encrypted with a key in its own Region.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Aurora's storage layer</h3>
+      <ul>
+        <li>The volume is a <b>service</b>, not a disk: data is split into <b>10 GB segments</b>, each stored as a <b>protection group</b> of <b>six copies across three AZs</b> (two per AZ). A write needs <b>4 of 6</b> acknowledgements, a read <b>3 of 6</b>.</li>
+        <li>That quorum survives the loss of an entire AZ without losing write availability, and of an AZ plus one more copy without losing data. Lost segments are <b>repaired from peers</b> in the background.</li>
+        <li>The instance sends only <b>redo log records</b> to storage; storage applies them to pages itself. No data page writes, no double-write buffer, no checkpoints from the engine: about 1/8 of the I/O of MySQL on EBS for the same work.</li>
+        <li><b>Crash recovery</b> is not a replay at startup: storage already holds the log and materialises pages on demand, in parallel, so a new writer opens in seconds no matter how much was in flight.</li>
+        <li>The volume grows in 10 GB steps to <b>128 TiB</b> (256 TiB on recent versions) and you pay for what is used; it shrinks when data is dropped.</li>
+        <li>Because all instances share the volume, a <b>replica is never behind on disk</b>; the 10–20 ms "lag" is the time to invalidate its buffer cache.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Aurora instances, endpoints and failover</h3>
+      <ul>
+        <li>One <b>writer</b> and up to <b>15 Aurora replicas</b> on the same volume, placed in different AZs by you. Any replica can become the writer; the <b>promotion tier</b> (0–15, lowest wins, then the largest) chooses which.</li>
+        <li>Endpoints: <b>cluster</b> (always the writer), <b>reader</b> (DNS round-robin over the replicas), <b>custom</b> (a named subset, say the two big instances for reports), <b>instance</b> (one instance).</li>
+        <li>Failover with a replica: typically under 30 s. The cluster endpoint's CNAME flips (TTL 5 s); the new writer needs no crash recovery. Without a replica, Aurora creates a new instance, which takes up to about 10 minutes; a single-instance Aurora cluster is <b>not</b> highly available.</li>
+        <li>The new writer starts with a cold buffer cache unless <b>cluster cache management</b> (PostgreSQL) kept the chosen replica's cache warm.</li>
+        <li><b>Aurora Serverless v2</b>: an instance class, <code>db.serverless</code>, that resizes between a minimum and maximum in <b>ACUs</b> (2 GiB RAM each, 0.5 ACU steps, 0 to 256) in place, without disconnecting, in seconds. Minimum 0 ACU pauses the instance after idle time and resumes on the first connection, which takes about 15 s. Mix serverless readers with a provisioned writer in one cluster.</li>
+        <li>Other relatives: <b>Limitless Database</b> (sharded PostgreSQL writes beyond one instance), <b>Aurora DSQL</b> (distributed, serverless, active-active across Regions, a subset of PostgreSQL), <b>Data API</b> (HTTP, no connection management, for Lambda).</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Aurora Global Database</h3>
+      <ul>
+        <li>One primary Region and up to five <b>secondary Regions</b>, each with its own copy of the volume and up to 16 readers. Replication happens in the <b>storage layer</b>, not the engine: typically under a second of lag with no load on the writer.</li>
+        <li>Secondaries are read-only. <b>Write forwarding</b> lets an application in a secondary Region send writes to the primary through its local endpoint, with a chosen consistency level.</li>
+        <li><b>Switchover</b> (planned): the Regions swap roles with zero data loss, used for DR drills and Region moves. <b>Failover</b> (unplanned): promote a secondary, accepting the last second or so of writes may be lost; the old primary is rebuilt as a secondary when it returns.</li>
+        <li>Set <code>rds.global_db_rpo</code> (PostgreSQL) to make the primary refuse writes when lag exceeds your RPO.</li>
+        <li>Secondary Regions pay for their instances, their storage copy, and the replicated write I/O. On a Standard cluster that I/O is a separate line on the bill.</li>
+        <li>Without Global Database, cross-Region DR on Aurora is a cross-Region replica (MySQL, binlog-based, minutes of lag) or copied snapshots.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>RDS Proxy</h3>
+      <ul>
+        <li>A managed proxy in your VPC subnets (at least two AZs) that holds a <b>pool of database connections</b> and shares them among many client connections: <b>multiplexing</b>. Hundreds of Lambda environments can map to a few dozen database connections.</li>
+        <li>It authenticates clients itself (password or <b>IAM</b>) and fetches the database credentials from <b>Secrets Manager</b>, so the application never holds the password.</li>
+        <li>On failover the proxy keeps client connections open, watches the cluster directly and reconnects to the new writer without waiting for DNS: AWS quotes up to <b>66% faster</b> client-visible recovery on Aurora. In-flight transactions still fail.</li>
+        <li><b>Pinning</b>: anything that changes session state, such as <code>SET</code> variables, prepared statements in some drivers, temporary tables, locks or advisory locks, binds the client to one database connection for the rest of the session and the multiplexing benefit disappears. The <code>DatabaseConnectionsCurrentlySessionPinned</code> metric tells you.</li>
+        <li>Tuning: <code>MaxConnectionsPercent</code> (share of <code>max_connections</code> the proxy may use), <code>MaxIdleConnectionsPercent</code>, <code>ConnectionBorrowTimeout</code> (how long a client waits for a free connection, default 120 s), idle client timeout.</li>
+        <li>Costs per vCPU-hour of the instances behind it, minimum two vCPUs. Supports MySQL, PostgreSQL, MariaDB and SQL Server on RDS and Aurora, with a <b>read-only endpoint</b> for Aurora readers.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Backups and point-in-time restore</h3>
+      <ul>
+        <li><b>Automated backups</b>: a daily snapshot in the backup window plus <b>transaction logs uploaded every five minutes</b>. Together they allow <b>point-in-time restore</b> to any second between the oldest snapshot and <code>LatestRestorableTime</code>, which is up to five minutes ago. Retention 1–35 days (0 turns it off, and turns off PITR and replicas).</li>
+        <li>Snapshots are incremental, stored in S3 you cannot see, and free up to the size of the database. On a Single-AZ instance the daily snapshot briefly pauses I/O; Multi-AZ takes it from the standby.</li>
+        <li><b>Manual snapshots</b> live until you delete them, survive deleting the instance, and can be <b>copied</b> across Regions and accounts. A snapshot encrypted with the AWS-managed key cannot be shared; copy it with a customer-managed key first.</li>
+        <li>Any restore creates a <b>new instance with a new endpoint</b>: you cannot restore "in place". The new instance uses the <b>default parameter group</b> and no option group unless you pass them. Its volume is <b>lazy-loaded</b> from S3, so the first hours are slow; warm it with a full scan.</li>
+        <li><b>Aurora</b>: backup is continuous and incremental, PITR to the second within retention, no performance impact. <b>Backtrack</b> (MySQL) rewinds the cluster in place up to 72 hours without a restore. <b>Clone</b> creates a copy-on-write cluster in minutes for testing against production data.</li>
+        <li>Cross-Region <b>automated backup replication</b> copies snapshots and logs to another Region for PITR there. <b>AWS Backup</b> adds vault lock and one policy across services. Snapshots can be <b>exported to S3</b> as Parquet for Athena.</li>
+        <li>A backup you have never restored is a hope. Restore one a quarter and time it; that number is your RTO.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Parameter groups and maintenance</h3>
+      <ul>
+        <li>The <b>default</b> parameter group cannot be edited. Create one per engine family and attach it; the attach itself needs a reboot.</li>
+        <li><b>Dynamic</b> parameters take effect at once. <b>Static</b> parameters (<code>innodb_log_file_size</code>, <code>shared_buffers</code> on some engines, <code>performance_schema</code>, <code>lower_case_table_names</code>) wait: the instance shows <code>pending-reboot</code> until you reboot it, perhaps weeks later at the next unrelated failover. Check <code>ParameterApplyStatus</code> after every change.</li>
+        <li>Modifying an instance (class, storage, Multi-AZ) with <b>apply immediately</b> happens now, with whatever downtime it carries; without it, the change waits for the <b>maintenance window</b>, when RDS also applies OS and minor-version patches, each with a restart or failover.</li>
+        <li>Choose the window deliberately: a 30-minute slot in your quietest hour. "No preference" means AWS chooses.</li>
+        <li><code>max_connections</code>, <code>innodb_buffer_pool_size</code> and <code>shared_buffers</code> default to formulas on instance memory; that is why a smaller instance also means fewer connections.</li>
+        <li><b>Blue/Green deployments</b>: RDS creates a green copy fed by logical replication (binlog on MySQL, logical replication on PostgreSQL, which needs primary keys on every table), you upgrade and tune the green side, and a guarded <b>switchover</b> swaps the endpoints in under a minute once replication lag is zero. Supported for MySQL, PostgreSQL, MariaDB and Aurora.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Monitoring and Performance Insights</h3>
+      <ul>
+        <li>CloudWatch metrics every minute: <code>CPUUtilization</code>, <code>FreeableMemory</code>, <code>SwapUsage</code>, <code>DatabaseConnections</code>, <code>ReadIOPS</code>/<code>WriteIOPS</code>, <code>ReadLatency</code>, <code>DiskQueueDepth</code>, <code>FreeStorageSpace</code>, <code>ReplicaLag</code>, <code>BurstBalance</code> (gp2 and t classes), and on Aurora <code>AuroraReplicaLag</code>, <code>VolumeBytesUsed</code>, <code>ServerlessDatabaseCapacity</code>, <code>ACUUtilization</code>.</li>
+        <li><b>Performance Insights</b>: samples active sessions every second and shows <b>DB load</b> in average active sessions (AAS), split by <b>wait event</b> and by SQL, user, host. The rule: when DB load exceeds the vCPU count, the instance is saturated, and the wait events say whether on CPU, I/O or locks. Seven days of history free, longer paid.</li>
+        <li><b>Enhanced Monitoring</b>: an agent on the host reports OS metrics (per-process CPU, memory, file system, swap) every 1 to 60 seconds to CloudWatch Logs. <code>CPUUtilization</code> is from the hypervisor; Enhanced Monitoring shows which process uses it.</li>
+        <li>Engine logs (error, slow query, general, audit, PostgreSQL log) can stream to CloudWatch Logs. Turn on the slow query log with a threshold of one second from day one.</li>
+        <li><b>Events</b> (failover, low storage, backup finished, parameter change, reboot) go to SNS and EventBridge. Subscribe your on-call channel to failover and storage events at least.</li>
+        <li><b>DevOps Guru for RDS</b> reads Performance Insights and flags anomalies with a likely cause.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Security and access</h3>
+      <ul>
+        <li>Encryption at rest with KMS is chosen <b>at creation</b> and cannot be added later; to encrypt an unencrypted instance, snapshot, copy with a key, restore. Replicas and snapshots inherit the key. Aurora encrypts the volume, the backups and the replicas with the same key.</li>
+        <li>TLS in transit with the RDS certificate bundle; force it with <code>require_secure_transport</code> (MySQL) or <code>rds.force_ssl</code> (PostgreSQL). The CA certificate rotates on a schedule; a stale bundle in the client is a classic outage.</li>
+        <li><b>IAM database authentication</b>: a 15-minute token instead of a password, for MySQL and PostgreSQL, limited to about 200 new connections per second; combine with a pool or with RDS Proxy.</li>
+        <li><b>Secrets Manager</b> manages the master password (<code>--manage-master-user-password</code>) and rotates it with a Lambda; RDS Proxy reads it from there. Kerberos through AWS Managed Microsoft AD for enterprise engines.</li>
+        <li>Network: no public address, the DB security group allows only the application security group, and the subnet route table has no route to an internet gateway.</li>
+        <li>Auditing: engine audit logs (MariaDB audit plugin, <code>pgaudit</code>), Database Activity Streams on Aurora to Kinesis for a tamper-proof trail, CloudTrail for the control plane.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>DMS and moving data</h3>
+      <ul>
+        <li><b>Database Migration Service</b>: a replication instance (or serverless capacity) between a <b>source endpoint</b> and a <b>target endpoint</b>, running <b>tasks</b> of three kinds: full load, change data capture (CDC), or full load then CDC. Homogeneous (MySQL → Aurora MySQL) or heterogeneous (Oracle → PostgreSQL).</li>
+        <li>CDC reads the source's log: binlog on MySQL (set <code>binlog retention hours</code> on RDS), logical replication slots on PostgreSQL, LogMiner or Binary Reader on Oracle. A slot that is never consumed makes the source's WAL grow until the disk fills.</li>
+        <li><b>Schema Conversion</b> (SCT, or DMS Schema Conversion in the console) translates DDL, procedures and functions between engines and reports what it could not translate; that report is the real estimate of the migration.</li>
+        <li>Full load copies tables in parallel with secondary indexes and constraints ideally created afterwards; LOBs need a size limit or a slow "full LOB" mode. <b>Validation</b> compares rows at the end.</li>
+        <li>For the same engine, a <b>snapshot restore</b> or a <b>cross-Region replica</b> is simpler than DMS. For near-zero downtime between engines: full load + CDC, cut over when lag is zero, keep reverse CDC for a rollback window. Day 28 walks through it.</li>
+        <li><b>Zero-ETL integrations</b> stream Aurora and RDS MySQL tables into Redshift without DMS.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Numbers to remember</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>What</th><th>Number</th><th>Why it matters</th><th>Can it be raised?</th></tr>
+      <tr><td>Multi-AZ instance failover</td><td class="num">60 – 120 s typical</td><td>Detection, crash recovery on the standby, DNS flip. Clients add their own DNS cache on top.</td><td>Multi-AZ cluster (≈ 35 s) or Aurora (≈ 30 s)</td></tr>
+      <tr><td>Aurora failover with a replica · without</td><td class="num">≈ 30 s · up to 10 min</td><td>A single-instance Aurora cluster must create a new instance. Always run a replica in production.</td><td>RDS Proxy cuts the client-visible part</td></tr>
+      <tr><td>Endpoint DNS TTL</td><td class="num">5 s</td><td>A client that caches longer than this (a JVM, by default 30 s or forever with a security manager) keeps hitting the dead primary.</td><td>Set <code>networkaddress.cache.ttl</code> in the JVM</td></tr>
+      <tr><td>Transaction log upload</td><td class="num">every 5 min</td><td>The RPO of a Single-AZ instance after an AZ loss: up to five minutes. <code>LatestRestorableTime</code> shows it.</td><td>Multi-AZ: RPO 0</td></tr>
+      <tr><td>Backup retention</td><td class="num">1 – 35 days (0 = off)</td><td>Point-in-time restore only within retention. Keep manual snapshots or AWS Backup for longer.</td><td>No; use snapshots</td></tr>
+      <tr><td>Read replicas per source</td><td class="num">15 (MySQL, PostgreSQL, MariaDB) · 15 Aurora replicas</td><td>Cross-Region counts. Oracle and SQL Server have licence rules.</td><td>No</td></tr>
+      <tr><td>Aurora replica lag</td><td class="num">10 – 20 ms</td><td>Shared storage: no replay. An RDS read replica lags seconds to hours.</td><td>—</td></tr>
+      <tr><td>Aurora volume</td><td class="num">6 copies · 3 AZs · 4/6 write · 3/6 read · 10 GB segments · 128 TiB</td><td>Survives an AZ for writes and an AZ + 1 copy for data. Billed per GB used.</td><td>256 TiB on recent versions</td></tr>
+      <tr><td>Global Database</td><td class="num">lag &lt; 1 s · RPO ≈ 1 s · RTO &lt; 1 min · 5 secondary Regions</td><td>Storage-level replication; switchover is RPO 0, failover may lose about a second.</td><td>—</td></tr>
+      <tr><td>Aurora Serverless v2 capacity</td><td class="num">0 – 256 ACU · 0.5 ACU steps · 2 GiB per ACU</td><td>Min 0 pauses after idle; resume ≈ 15 s. The max caps your bill and your peak.</td><td>Per cluster setting</td></tr>
+      <tr><td>Backtrack window (Aurora MySQL)</td><td class="num">up to 72 h</td><td>Rewind in place after a bad migration, in minutes, no new instance.</td><td>No</td></tr>
+      <tr><td>RDS storage</td><td class="num">64 TiB (16 TiB SQL Server) · gp3 3,000 IOPS base, 12,000 from 400 GB · max 64,000 (gp3) / 256,000 (io2)</td><td>Storage never shrinks. Autoscaling triggers at under 10% free for 5 min, then a 6-hour cooldown.</td><td>io2 for more IOPS</td></tr>
+      <tr><td>max_connections default</td><td class="num">MySQL mem / 12.6 MB · PostgreSQL mem / 9.5 MB, max 5,000</td><td>db.t4g.micro ≈ 85 (MySQL); db.r6g.large ≈ 1,365 (MySQL), 1,802 (PostgreSQL).</td><td>Parameter group, at a memory cost</td></tr>
+      <tr><td>IAM authentication</td><td class="num">token 15 min · ≈ 200 new connections / s</td><td>Not for an app that reconnects per request. Pool, or use RDS Proxy.</td><td>No</td></tr>
+      <tr><td>RDS Proxy borrow timeout</td><td class="num">120 s default</td><td>How long a client waits for a free connection before an error; shorten it so overload fails fast.</td><td>1 – 300 s</td></tr>
+      <tr><td>Blue/Green switchover</td><td class="num">&lt; 1 min, guardrails wait for lag 0</td><td>Timeout default 300 s; if guardrails fail, nothing changes.</td><td>30 s – 1 h timeout</td></tr>
+      <tr><td>Maintenance window</td><td class="num">30 min, weekly</td><td>Minor upgrades, OS patches, and pending modifications happen here, with a restart or failover.</td><td>Choose it</td></tr>
+      <tr><td>Snapshot restore</td><td class="num">new endpoint · lazy-loaded · default parameter group</td><td>Three surprises in one. Pass the parameter group, update the application, warm the volume.</td><td>—</td></tr>
+      <tr><td>Performance Insights retention</td><td class="num">7 days free</td><td>Enough for an incident; pay for months of history if you do capacity planning from it.</td><td>Up to 24 months</td></tr>
+    </table>
+  </div>
+
+  <h2>How it fails in production</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Symptom</th><th>Likely cause</th><th>How you find out</th><th>Fix</th></tr>
+      <tr><td>Failover finished in 60 s but the application was down for 20 minutes</td><td>The connection pool cached the old IP (JVM DNS cache, or a pool that never validates connections) and kept retrying the dead primary.</td><td>RDS events show the failover time; application errors continue long after. <code>DatabaseConnections</code> on the new primary stays near zero.</td><td>Set the JVM DNS TTL to a few seconds, validate connections on borrow, retry with backoff, or put RDS Proxy in front.</td></tr>
+      <tr><td><code>Too many connections</code> after a Lambda or container deploy</td><td>Each execution environment or task holds a connection; the fleet scaled past <code>max_connections</code>.</td><td><code>DatabaseConnections</code> flat at the limit; the error in the application logs; <code>FreeableMemory</code> falling.</td><td>RDS Proxy, a bounded pool per task, reserved concurrency on the function, or the Data API for Aurora.</td></tr>
+      <tr><td>Database crawls every afternoon, CPU is low</td><td>gp2 burst credits exhausted (small volume), or a t-class instance out of CPU credits.</td><td><code>BurstBalance</code> or <code>CPUCreditBalance</code> at zero; <code>DiskQueueDepth</code> high.</td><td>Move to gp3; move from t to m or r classes; size the volume for IOPS not only for bytes.</td></tr>
+      <tr><td>A parameter change "did nothing", then weeks later a reboot changed behaviour</td><td>The parameter was static and sat in <code>pending-reboot</code> until an unrelated restart applied it.</td><td><code>describe-db-instances</code> shows <code>ParameterApplyStatus: pending-reboot</code>.</td><td>Reboot deliberately after static changes; alarm on pending-reboot status.</td></tr>
+      <tr><td>Storage full: the database is read-only or refuses writes</td><td>Autoscaling off or at its maximum; a runaway table, binlog retention, PostgreSQL WAL held by an unconsumed replication slot, or temp files from a bad query.</td><td><code>FreeStorageSpace</code> alarm; the RDS low-storage event; <code>pg_replication_slots</code> on PostgreSQL.</td><td>Raise the maximum, drop the slot, purge logs; then six hours before the next storage change.</td></tr>
+      <tr><td>Read replica lags by hours</td><td>Single-threaded apply with large or long transactions, a table without a primary key under row-based replication, or a replica smaller than the primary.</td><td><code>ReplicaLag</code> rising; <code>SHOW REPLICA STATUS</code>.</td><td>Add primary keys, break up transactions, enable parallel apply, size the replica like the primary, or use Aurora.</td></tr>
+      <tr><td>Restore from snapshot is painfully slow for hours</td><td>The volume is lazy-loaded from S3; each block is fetched on first read.</td><td>High <code>ReadLatency</code>, low IOPS, right after a restore.</td><td>Warm it with a full table scan or <code>pg_prewarm</code>; for a DR drill, measure including the warm-up.</td></tr>
+      <tr><td>Restored instance behaves differently from production</td><td>The restore used the default parameter group and no option group, and has a new endpoint and security group.</td><td>Compare <code>describe-db-instances</code> for both.</td><td>Pass the parameter group, option group, subnet group and security groups on restore; script it.</td></tr>
+      <tr><td>Connections fail after a maintenance window with a certificate error</td><td>The RDS CA certificate was rotated and the client trusts the old bundle.</td><td>TLS handshake error in client logs; the RDS event "CA certificate updated".</td><td>Ship the current RDS CA bundle with the application; rotate the certificate yourself, in your window, before the deadline.</td></tr>
+      <tr><td>Aurora writer failed and recovery took 10 minutes</td><td>No replica: Aurora had to create a new instance.</td><td>Cluster has one instance; the event log shows "creating instance".</td><td>Add a replica in another AZ. Serverless v2 readers at 0.5 ACU are a cheap standby.</td></tr>
+      <tr><td>After an Aurora failover, queries are slow for ten minutes</td><td>Cold buffer cache on the new writer.</td><td><code>BufferCacheHitRatio</code> low then recovering.</td><td>Cluster cache management (PostgreSQL) on the tier-0 replica; size the replica like the writer.</td></tr>
+      <tr><td>Aurora bill jumped with no new instances</td><td>I/O charges on a Standard cluster: a new query pattern or a bigger dataset than the buffer cache.</td><td>Cost Explorer shows "Aurora:StorageIOUsage"; <code>VolumeReadIOPs</code> climbing.</td><td>Index the query, raise instance memory, or switch the cluster to I/O-Optimized when I/O exceeds a quarter of the bill.</td></tr>
+      <tr><td>Serverless v2 never scales down</td><td>Open connections, a large buffer pool kept warm, or the minimum ACU set too high.</td><td><code>ServerlessDatabaseCapacity</code> flat; <code>DatabaseConnections</code> never zero.</td><td>Close idle connections, lower the minimum, accept that a warm database costs something.</td></tr>
+      <tr><td>RDS Proxy gives no benefit: connections equal clients</td><td>Sessions are pinned by <code>SET</code> statements, prepared statements or temporary tables.</td><td><code>DatabaseConnectionsCurrentlySessionPinned</code> ≈ <code>ClientConnections</code>.</td><td>Remove session-state changes from the connection path; use <code>SessionPinningFilters</code> for the harmless ones.</td></tr>
+      <tr><td>Blue/Green creation fails or the green side falls behind</td><td>MySQL: binlog off (backup retention 0); PostgreSQL: a table without a primary key cannot be logically replicated for updates and deletes; DDL during the window.</td><td>The deployment's status and events.</td><td>Turn on binlog, add primary keys (or a replica identity), freeze DDL until switchover.</td></tr>
+      <tr><td>Nightly job locks up the database</td><td>A long transaction holding locks, or a backup on a Single-AZ instance pausing I/O during the job.</td><td>Performance Insights shows a lock wait event with one blocking SQL; backup window overlaps the job.</td><td>Move the backup window; Multi-AZ backs up from the standby; break the job into batches.</td></tr>
+      <tr><td>Surprise charge: "Extended Support"</td><td>The engine version passed end of standard support; RDS keeps running it for a fee per vCPU-hour.</td><td>Cost Explorer; the RDS console banner; the end-of-life calendar.</td><td>Major-version upgrade through a blue/green deployment before the date.</td></tr>
+    </table>
+  </div>
+
+  <h2>What drives the bill</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Item</th><th>How it is charged</th><th>Figure</th><th>How to pay less</th></tr>
+      <tr><td><b>Instance hours</b></td><td>Per hour per instance, by class and engine; Multi-AZ instance deployment doubles it; each replica and each standby of a Multi-AZ cluster is an instance.</td><td class="num">RDS MySQL db.r6g.large $0.24 · Aurora $0.26 (Standard) / $0.34 (I/O-Optimized)</td><td>Reserved instances (1 or 3 years, 30–60% off), Graviton, stop dev instances (RDS stops for up to 7 days), Serverless v2 for spiky or idle databases.</td></tr>
+      <tr><td><b>RDS storage</b></td><td>Per GB-month provisioned, per copy; Multi-AZ doubles it; provisioned IOPS and throughput above the gp3 baseline extra.</td><td class="num">gp3 $0.115 / GB · +$0.02 per IOPS over baseline · io2 $0.125 / GB + $0.10 per IOPS</td><td>gp3 not gp2; provision IOPS only when <code>DiskQueueDepth</code> proves it; over 400 GB the baseline jumps to 12,000 IOPS.</td></tr>
+      <tr><td><b>Aurora storage</b></td><td>Per GB-month used, for the whole six-copy volume.</td><td class="num">$0.10 (Standard) · $0.225 (I/O-Optimized)</td><td>Drop what you do not need; the volume shrinks. I/O-Optimized when I/O is over 25% of the bill.</td></tr>
+      <tr><td><b>Aurora I/O</b></td><td>Per million read and write requests, Standard clusters only.</td><td class="num">$0.20 per million</td><td>Buffer cache (bigger instance), indexes, I/O-Optimized. A steady 3,000 IOPS is about 8 billion requests a month: $1,600.</td></tr>
+      <tr><td><b>Serverless v2</b></td><td>Per ACU-hour, per second, from min to max.</td><td class="num">$0.12 / ACU-hour (Standard) · $0.16 (I/O-Optimized)</td><td>Set min 0 or 0.5 for idle databases; a steady 8 ACU costs more than a db.r6g.large, so provisioned wins for flat load.</td></tr>
+      <tr><td><b>Backup storage</b></td><td>Per GB-month beyond 100% of the database's provisioned storage (RDS) or volume size (Aurora), across all snapshots.</td><td class="num">RDS $0.095 / GB · Aurora $0.021 / GB</td><td>Retention of 7–14 days; delete manual snapshots of dead instances; AWS Backup lifecycle to cold storage.</td></tr>
+      <tr><td><b>RDS Proxy</b></td><td>Per vCPU-hour of the target instances, minimum 2 vCPUs.</td><td class="num">$0.015 / vCPU-hour (≈ $22 a month for 2 vCPUs)</td><td>One proxy per cluster, not per application; skip it for a few long-lived app servers with a sane pool.</td></tr>
+      <tr><td><b>Global Database</b></td><td>Secondary Region instances and storage, plus replicated write I/O on Standard clusters, plus inter-Region transfer.</td><td class="num">$0.20 per million replicated writes · $0.02 / GB transfer</td><td>Serverless v2 readers at 0.5 ACU in the secondary; I/O-Optimized removes the replicated-write line.</td></tr>
+      <tr><td><b>Data transfer</b></td><td>Cross-AZ traffic to the database at $0.01/GB each way (not for Multi-AZ replication, which is free); cross-Region replicas at inter-Region rates.</td><td class="num">$0.01 / GB per direction</td><td>Keep readers and the application in the same AZ where it is cheap to do so; read from the nearest replica.</td></tr>
+      <tr><td><b>Performance Insights, Enhanced Monitoring</b></td><td>7 days free; longer retention per vCPU per month. Enhanced Monitoring is CloudWatch Logs ingestion at the chosen interval.</td><td class="num">CloudWatch Logs $0.50 / GB ingested</td><td>Enhanced Monitoring at 15 or 60 s, not 1 s, outside incidents.</td></tr>
+      <tr><td><b>Extended Support</b></td><td>Per vCPU-hour for engine versions past end of life.</td><td class="num">$0.10 / vCPU-hour (years 1–2) · $0.20 (year 3)</td><td>Upgrade. On a 16-vCPU instance that is over $1,100 a month for doing nothing.</td></tr>
+      <tr><td><b>Snapshot export, DMS</b></td><td>Export to S3 per GB; DMS replication instance per hour or serverless per DCU-hour.</td><td class="num">Export $0.01 / GB · dms.t3.medium ≈ $0.08 / h</td><td>Size the replication instance for the full load, then shrink it for CDC.</td></tr>
+      <tr><td><b>Free</b></td><td colspan="3">Multi-AZ replication traffic, automated backups up to the database size, CloudWatch standard metrics, Performance Insights for 7 days, parameter groups, subnet groups, snapshots' first copy, stopped instances' compute (storage still bills), the first 100 GB of transfer out per month.</td></tr>
+    </table>
+    <p class="note">Figures are rounded on-demand list prices for US East (N. Virginia) when this page was written. Prices differ by Region and engine (Oracle and SQL Server add licence costs), and change over time. Check the pricing page for your Region.</p>
+  </div>
+
+  <h2>RDS or Aurora?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>The situation</th><th>Choose</th><th>Why</th></tr>
+      <tr><td>A small or medium application, steady load, a team that knows MySQL or PostgreSQL</td><td><b>RDS Multi-AZ instance</b>, gp3</td><td>Cheapest HA relational database; the failover is 60–120 s and the application tolerates it with a sane pool.</td></tr>
+      <tr><td>Write latency matters, and readers must stay available during failover</td><td><b>RDS Multi-AZ DB cluster</b></td><td>Local NVMe, semi-synchronous commits, two readable standbys, failover under 35 s. Costs three instances.</td></tr>
+      <tr><td>Fast failover, many readers, big data sets, growth you cannot predict, or a reader lagging seconds is unacceptable</td><td><b>Aurora</b> with at least one replica</td><td>Shared storage: replicas lag milliseconds, failover ≈ 30 s with no recovery, the volume grows on its own, 15 readers.</td></tr>
+      <tr><td>Load is spiky, bursty or mostly idle: dev, test, internal tools, a new product</td><td><b>Aurora Serverless v2</b></td><td>Scales in 0.5 ACU steps in seconds, pauses at 0 ACU. Flat heavy load is cheaper provisioned.</td></tr>
+      <tr><td>An RPO of about a second across Regions, or users on two continents</td><td><b>Aurora Global Database</b></td><td>Storage-level replication, switchover with RPO 0, local reads with write forwarding.</td></tr>
+      <tr><td>Oracle, SQL Server, Db2, or an application that needs OS access or specific engine features</td><td><b>RDS</b> (perhaps <b>RDS Custom</b>)</td><td>Aurora is MySQL and PostgreSQL only.</td></tr>
+      <tr><td>Hundreds of Lambda functions or thousands of short-lived connections</td><td>Either, with <b>RDS Proxy</b> (or Aurora Data API)</td><td>The engine's connection limit is the constraint, not the deployment choice.</td></tr>
+      <tr><td>Key-value access, millions of requests a second, single-digit millisecond latency, no joins</td><td><b>Neither: DynamoDB</b> (Day 9)</td><td>A relational engine scales writes vertically; DynamoDB partitions them.</td></tr>
+      <tr><td>Writes beyond what one instance can take, still SQL</td><td><b>Aurora Limitless</b> or <b>Aurora DSQL</b>, or shard yourself</td><td>Horizontal writes with trade-offs on joins and transactions; read Day 25 before choosing.</td></tr>
+    </table>
+  </div>
+
+  <h2>Which availability option gives what?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Option</th><th>Replication</th><th>Data loss on failover</th><th>Failover time</th><th>Readable?</th><th>Instances billed</th></tr>
+      <tr><td>Single-AZ instance</td><td>none; logs to S3 every 5 min</td><td class="num">up to 5 min</td><td class="num">minutes to an hour (restore)</td><td>no</td><td class="num">1</td></tr>
+      <tr><td>Multi-AZ instance</td><td>synchronous, block level</td><td class="num">0</td><td class="num">60 – 120 s</td><td>no</td><td class="num">2</td></tr>
+      <tr><td>Multi-AZ DB cluster</td><td>semi-synchronous, engine level</td><td class="num">0</td><td class="num">&lt; 35 s</td><td>yes, 2 readers</td><td class="num">3</td></tr>
+      <tr><td>Read replica (same or other Region)</td><td>asynchronous, engine level</td><td class="num">seconds to hours of lag</td><td class="num">manual promotion, minutes</td><td>yes</td><td class="num">1 each</td></tr>
+      <tr><td>Aurora with replica</td><td>shared storage, 6 copies</td><td class="num">0</td><td class="num">≈ 30 s</td><td>yes, up to 15</td><td class="num">2+</td></tr>
+      <tr><td>Aurora Global Database</td><td>storage level, cross-Region</td><td class="num">0 (switchover) · ≈ 1 s (failover)</td><td class="num">&lt; 1 min</td><td>yes, in every Region</td><td class="num">per Region</td></tr>
+    </table>
+  </div>
+
+  <h2>Hands-on lab</h2>
+  <div class="card lab">
+    <p><b>Goal:</b> build a Multi-AZ MySQL instance with your own parameter group, watch a static parameter sit in <code>pending-reboot</code>, measure a failover with a one-row-per-second heartbeat and a DNS watch, restore to a point in time and find the three surprises, put RDS Proxy in front and measure the failover again, run an Aurora Serverless v2 cluster that pauses at zero, and read DB load from Performance Insights. About 60 minutes of work plus waiting for instances.</p>
+    <p><b>Cost:</b> about a dollar: a <code>db.t4g.medium</code> Multi-AZ instance (≈ $0.13 an hour; the micro and small classes do not support Performance Insights), a short-lived restored copy, RDS Proxy (≈ $0.03 an hour), an Aurora Serverless v2 instance that mostly sits at 0 ACU, and one <code>t4g.nano</code> client. Delete everything at the end; a forgotten Multi-AZ instance is $95 a month.</p>
+    <ol>
+      <li>Network and parameter group. Two security groups (application and database), a subnet group across the default subnets, and a parameter group with one dynamic and one static change.
+<pre class="code">export AWS_DEFAULT_REGION=ap-south-1
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+VPC=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true --query 'Vpcs[0].VpcId' --output text)
+SUBS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text)
+
+aws rds create-db-subnet-group --db-subnet-group-name day08 --db-subnet-group-description day08 --subnet-ids $SUBS
+APPSG=$(aws ec2 create-security-group --group-name day08-app --description app --vpc-id $VPC --query GroupId --output text)
+DBSG=$(aws ec2 create-security-group --group-name day08-db --description db --vpc-id $VPC --query GroupId --output text)
+aws ec2 authorize-security-group-ingress --group-id $DBSG --protocol tcp --port 3306 --source-group $APPSG
+aws ec2 authorize-security-group-ingress --group-id $DBSG --protocol tcp --port 3306 --source-group $DBSG   # proxy → database, later
+
+aws rds create-db-parameter-group --db-parameter-group-name day08-mysql80 --db-parameter-group-family mysql8.0 --description day08
+aws rds modify-db-parameter-group --db-parameter-group-name day08-mysql80 --parameters \
+  "ParameterName=max_connections,ParameterValue=200,ApplyMethod=immediate" \
+  "ParameterName=performance_schema,ParameterValue=1,ApplyMethod=pending-reboot"
+aws rds describe-db-parameters --db-parameter-group-name day08-mysql80 --source user \
+  --query 'Parameters[].[ParameterName,ParameterValue,ApplyType,ApplyMethod]' --output text</pre>
+        <code>max_connections</code> is dynamic, <code>performance_schema</code> is static. Try <code>ApplyMethod=immediate</code> on the static one and read the error.</li>
+
+      <li>Create the Multi-AZ instance with a managed master password, Performance Insights and log exports. Then wait; Multi-AZ builds two instances and synchronises them.
+<pre class="code">aws rds create-db-instance --db-instance-identifier day08 --engine mysql --engine-version 8.0 \
+  --db-instance-class db.t4g.medium --allocated-storage 20 --storage-type gp3 \
+  --master-username admin --manage-master-user-password \
+  --multi-az --db-subnet-group-name day08 --vpc-security-group-ids $DBSG --no-publicly-accessible \
+  --db-parameter-group-name day08-mysql80 --backup-retention-period 7 \
+  --enable-performance-insights --enable-cloudwatch-logs-exports '["error","slowquery"]' \
+  --tags Key=Name,Value=day08
+aws rds wait db-instance-available --db-instance-identifier day08          # 10–15 minutes
+aws rds describe-db-instances --db-instance-identifier day08 --query 'DBInstances[0].{primaryAZ:AvailabilityZone,standbyAZ:SecondaryAvailabilityZone,endpoint:Endpoint.Address,params:DBParameterGroups[0].ParameterApplyStatus,latestRestore:LatestRestorableTime}'
+
+EP=$(aws rds describe-db-instances --db-instance-identifier day08 --query 'DBInstances[0].Endpoint.Address' --output text)
+SECRET=$(aws rds describe-db-instances --db-instance-identifier day08 --query 'DBInstances[0].MasterUserSecret.SecretArn' --output text)
+PW=$(aws secretsmanager get-secret-value --secret-id $SECRET --query SecretString --output text | jq -r .password)
+dig +short $EP      # a CNAME to an address in the primary's AZ</pre>
+        <code>ParameterApplyStatus</code> is <code>in-sync</code>: the static parameter was applied because the instance was created with the group. Change <code>performance_schema</code> back to 0 and read the status again: <code>pending-reboot</code>. It will stay that way until something restarts the instance.</li>
+
+      <li>A client. Launch a <code>t4g.nano</code> in the application security group with Day 4's <code>day04-ssm</code> profile, open a Session Manager session, set <code>EP</code> and <code>PW</code> from your terminal, create a table and start a heartbeat that inserts one row a second and prints each failure with the time. In a second session, watch the DNS answer.
+<pre class="code">AMI=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 --query Parameter.Value --output text)
+aws ec2 run-instances --image-id $AMI --instance-type t4g.nano --security-group-ids $APPSG --iam-instance-profile Name=day04-ssm \
+  --user-data $'#!/bin/bash\ndnf install -y mariadb105 bind-utils' \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=day08-app}]' --query 'Instances[0].InstanceId' --output text
+
+# ---- inside the Session Manager session (session 1) ----
+EP=...; PW=...
+mysql -h $EP -u admin -p"$PW" -e "CREATE DATABASE lab; CREATE TABLE lab.beat (id INT AUTO_INCREMENT PRIMARY KEY, at DATETIME(3), host VARCHAR(64));"
+mysql -h $EP -u admin -p"$PW" -e "SELECT @@hostname, @@performance_schema, @@max_connections"
+while true; do
+  if mysql -h $EP -u admin -p"$PW" -e "INSERT INTO lab.beat(at,host) VALUES (NOW(3), @@hostname)" 2>/dev/null
+  then echo "$(date +%T) ok"; else echo "$(date +%T) FAIL"; fi
+  sleep 1
+done | tee /tmp/beat.log
+
+# ---- session 2 ----
+while true; do echo "$(date +%T) $(dig +short $EP | tail -1)"; sleep 2; done</pre></li>
+
+      <li>Reboot with failover and measure. From your terminal:
+<pre class="code">aws rds reboot-db-instance --db-instance-identifier day08 --force-failover
+sleep 150
+aws rds describe-events --source-identifier day08 --source-type db-instance --duration 10 --query 'Events[].[Date,Message]' --output text
+aws rds describe-db-instances --db-instance-identifier day08 --query 'DBInstances[0].[AvailabilityZone,SecondaryAvailabilityZone,DBParameterGroups[0].ParameterApplyStatus]'</pre>
+        In session 1: <code>grep -c FAIL /tmp/beat.log</code> is the number of seconds without writes; the row's <code>host</code> column changed, because a different instance is now the primary. In session 2 the DNS answer changed to the other AZ's address. The parameter status is <code>in-sync</code> again: the reboot applied your pending change, which is exactly the surprise that bites people at midnight. Write down the three numbers: the event timestamps for "failover started" and "failover completed", and your FAIL count.</li>
+
+      <li>Point-in-time restore. Restore to the latest restorable time into a new instance and look for the three surprises: the endpoint, the parameter group, and the rows that are missing.
+<pre class="code">aws rds describe-db-instances --db-instance-identifier day08 --query 'DBInstances[0].LatestRestorableTime'      # up to 5 min ago
+aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier day08 --target-db-instance-identifier day08-pitr \
+  --use-latest-restorable-time --db-instance-class db.t4g.medium --db-subnet-group-name day08 --vpc-security-group-ids $DBSG --no-multi-az
+aws rds wait db-instance-available --db-instance-identifier day08-pitr
+aws rds describe-db-instances --db-instance-identifier day08-pitr \
+  --query 'DBInstances[0].[Endpoint.Address,DBParameterGroups[0].DBParameterGroupName,MultiAZ]'
+PEP2=$(aws rds describe-db-instances --db-instance-identifier day08-pitr --query 'DBInstances[0].Endpoint.Address' --output text)
+# in session 1 (the heartbeat is still running against $EP):
+mysql -h $PEP2 -u admin -p"$PW" -e "SELECT COUNT(*), MAX(at) FROM lab.beat"
+mysql -h $EP   -u admin -p"$PW" -e "SELECT COUNT(*), MAX(at) FROM lab.beat"
+# then:
+aws rds delete-db-instance --db-instance-identifier day08-pitr --skip-final-snapshot</pre>
+        The parameter group is <code>default.mysql8.0</code>, not yours. The endpoint is new. The copy stops a few minutes before "now". If your restore procedure does not pass the parameter group, security groups and option group, and does not include a step that repoints the application, it is not a restore procedure.</li>
+
+      <li>RDS Proxy. A role that can read the secret, a proxy in the subnets, the instance as its target. Then run the heartbeat through the proxy and fail over again.
+<pre class="code">cat > proxy-trust.json <<JSON
+{ "Version": "2012-10-17", "Statement": [ { "Effect": "Allow", "Principal": { "Service": "rds.amazonaws.com" }, "Action": "sts:AssumeRole" } ] }
+JSON
+aws iam create-role --role-name day08-proxy --assume-role-policy-document file://proxy-trust.json
+aws iam put-role-policy --role-name day08-proxy --policy-name secret --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[
+  {\"Effect\":\"Allow\",\"Action\":\"secretsmanager:GetSecretValue\",\"Resource\":\"$SECRET\"},
+  {\"Effect\":\"Allow\",\"Action\":\"kms:Decrypt\",\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"kms:ViaService\":\"secretsmanager.$AWS_DEFAULT_REGION.amazonaws.com\"}}}]}"
+sleep 10
+aws rds create-db-proxy --db-proxy-name day08 --engine-family MYSQL --auth "AuthScheme=SECRETS,SecretArn=$SECRET,IAMAuth=DISABLED" \
+  --role-arn arn:aws:iam::$ACCT:role/day08-proxy --vpc-subnet-ids $SUBS --vpc-security-group-ids $DBSG --no-require-tls
+aws rds register-db-proxy-targets --db-proxy-name day08 --db-instance-identifiers day08
+until [ "$(aws rds describe-db-proxy-targets --db-proxy-name day08 --query 'Targets[0].TargetHealth.State' --output text)" = AVAILABLE ]; do sleep 15; done
+PEP=$(aws rds describe-db-proxies --db-proxy-name day08 --query 'DBProxies[0].Endpoint' --output text); echo $PEP
+
+# session 1: stop the old loop (Ctrl-C), set EP=$PEP, start it again, then from your terminal:
+aws rds reboot-db-instance --db-instance-identifier day08 --force-failover
+sleep 150
+aws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name DatabaseConnectionsCurrentlySessionPinned \
+  --dimensions Name=ProxyName,Value=day08 --start-time $(date -u -d '-10 min' +%FT%TZ) --end-time $(date -u +%FT%TZ) --period 60 --statistics Maximum \
+  --query 'Datapoints[].Maximum' --output text</pre>
+        Compare the FAIL count with step 4. The proxy watched the instance directly and reconnected without waiting for DNS; the mysql client in the loop reconnects every second, so this is the floor of what any client could see. Pinned sessions should be zero: the loop sets no session state.</li>
+
+      <li>Aurora Serverless v2 from 0 ACU. Create a cluster whose only instance can pause, push it with a few CPU-bound queries, then leave it alone and watch the capacity.
+<pre class="code">aws rds create-db-cluster --db-cluster-identifier day08-aurora --engine aurora-mysql \
+  --master-username admin --manage-master-user-password \
+  --db-subnet-group-name day08 --vpc-security-group-ids $DBSG \
+  --serverless-v2-scaling-configuration MinCapacity=0,MaxCapacity=4,SecondsUntilAutoPause=300 \
+  --backup-retention-period 1 --tags Key=Name,Value=day08
+aws rds create-db-instance --db-instance-identifier day08-aurora-1 --db-cluster-identifier day08-aurora \
+  --engine aurora-mysql --db-instance-class db.serverless
+aws rds wait db-instance-available --db-instance-identifier day08-aurora-1
+AEP=$(aws rds describe-db-clusters --db-cluster-identifier day08-aurora --query 'DBClusters[0].Endpoint' --output text)
+ASECRET=$(aws rds describe-db-clusters --db-cluster-identifier day08-aurora --query 'DBClusters[0].MasterUserSecret.SecretArn' --output text)
+APW=$(aws secretsmanager get-secret-value --secret-id $ASECRET --query SecretString --output text | jq -r .password)
+
+# session 1: load for two minutes, then nothing
+for i in 1 2 3 4; do mysql -h $AEP -u admin -p"$APW" -e "SELECT BENCHMARK(300000000, MD5('x'))" & done; wait
+# after 6+ idle minutes, from your terminal:
+aws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name ServerlessDatabaseCapacity \
+  --dimensions Name=DBInstanceIdentifier,Value=day08-aurora-1 --start-time $(date -u -d '-30 min' +%FT%TZ) --end-time $(date -u +%FT%TZ) \
+  --period 60 --statistics Average --query 'Datapoints[].[Timestamp,Average]' --output text | sort
+# session 1: the first connection after a pause
+time mysql -h $AEP -u admin -p"$APW" -e "SELECT 1"</pre>
+        Capacity climbed to a few ACU under load, sank to 0.5 as the connections closed, and to 0 five minutes later. The first query after the pause waited about 15 seconds for the instance to resume. That pause is the trade-off: nothing to pay, something to wait.</li>
+
+      <li>Performance Insights. Put the Multi-AZ instance under CPU load and read DB load by wait event from the API.
+<pre class="code"># session 1
+for i in 1 2 3 4 5 6; do mysql -h $EP -u admin -p"$PW" -e "SELECT BENCHMARK(400000000, MD5('x'))" & done; wait
+# terminal, a minute later
+RID=$(aws rds describe-db-instances --db-instance-identifier day08 --query 'DBInstances[0].DbiResourceId' --output text)
+aws pi get-resource-metrics --service-type RDS --identifier $RID --period-in-seconds 60 \
+  --start-time $(date -u -d '-10 min' +%FT%TZ) --end-time $(date -u +%FT%TZ) \
+  --metric-queries '[{"Metric":"db.load.avg","GroupBy":{"Group":"db.wait_event","Limit":5}}]' \
+  --query 'MetricList[].{what:Key.Dimensions,points:DataPoints[-3:].Value}'</pre>
+        Six sessions on two vCPUs: DB load about 6, nearly all of it on CPU. The rule to keep: DB load above the vCPU count is saturation, and the wait events say what kind.</li>
+
+      <li>Clean up. Order matters: proxy targets, proxy, instances, then the cluster, then the groups.
+<pre class="code">aws rds deregister-db-proxy-targets --db-proxy-name day08 --db-instance-identifiers day08
+aws rds delete-db-proxy --db-proxy-name day08
+aws rds delete-db-instance --db-instance-identifier day08 --skip-final-snapshot --delete-automated-backups
+aws rds delete-db-instance --db-instance-identifier day08-aurora-1
+aws ec2 terminate-instances --instance-ids $(aws ec2 describe-instances --filters Name=tag:Name,Values=day08-app Name=instance-state-name,Values=running --query 'Reservations[].Instances[].InstanceId' --output text)
+aws rds wait db-instance-deleted --db-instance-identifier day08-aurora-1
+aws rds delete-db-cluster --db-cluster-identifier day08-aurora --skip-final-snapshot
+aws rds wait db-instance-deleted --db-instance-identifier day08
+aws rds wait db-instance-deleted --db-instance-identifier day08-pitr
+aws rds delete-db-parameter-group --db-parameter-group-name day08-mysql80
+aws rds delete-db-subnet-group --db-subnet-group-name day08
+aws ec2 delete-security-group --group-id $DBSG; aws ec2 delete-security-group --group-id $APPSG
+aws iam delete-role-policy --role-name day08-proxy --policy-name secret; aws iam delete-role --role-name day08-proxy
+aws rds describe-db-instances --query 'DBInstances[].DBInstanceIdentifier'     # must be empty</pre>
+        The managed secrets are deleted with their instances. Check the console once more for snapshots named <code>day08-*</code>; none should exist, because you skipped the final snapshot.</li>
+    </ol>
+    <p class="note">Write your three lines in <code>notes.md</code>: one thing that surprised you, one limit to remember, one mistake to avoid. For most people the surprise is step 5: the restored copy that has the wrong parameter group and no idea what the application's endpoint was.</p>
+  </div>
+
+  <h2>Interview questions</h2>
+  <details><summary>What actually happens, second by second, during a Multi-AZ failover?</summary><p>I describe the instance deployment first, because that is what most people run. At zero the primary host, its AZ or its volume fails, or someone requested a reboot with failover. Writes stop immediately; open connections hang or get reset. Within about ten to twenty seconds the RDS health checks miss the primary and RDS writes the "failover started" event. The standby has an exact copy of the volume because replication was synchronous at block level, but its engine has never been running on it, so it must do crash recovery: replay the redo log and roll back uncommitted transactions. That takes twenty seconds to a minute, longer if there was a huge transaction in flight. When the engine opens, RDS rewrites the CNAME behind the endpoint to the standby's address; the TTL is five seconds. From that moment a client that re-resolves DNS and reconnects is fine. Total is typically sixty to a hundred and twenty seconds, with zero committed data lost. Then two things people forget. The application's own behaviour decides the real outage: a JVM caching DNS for thirty seconds or forever, a pool that never validates its connections, or no retry logic can turn a one-minute failover into a twenty-minute incident. And afterwards you have no standby: RDS builds a new one in the old AZ and synchronises it, which takes minutes to hours, so you are Single-AZ until then. For a Multi-AZ cluster the sequence is the same but faster, around thirty-five seconds, because the readers already run the engine and semi-synchronous replication means at least one has every commit. For Aurora it is around thirty seconds, with no crash recovery on the instance because the storage layer already holds every committed write; the cluster endpoint flips to the promoted replica, and RDS Proxy can hide even the DNS step.</p></details>
+  <details><summary>Multi-AZ instance, Multi-AZ DB cluster, read replica: what does each give you and what does each cost?</summary><p>The Multi-AZ instance deployment gives availability only: a synchronous standby that is never readable, failover of one to two minutes, no data loss, and it doubles the instance and storage bill. A read replica gives read scaling and a manual disaster-recovery path: an asynchronous copy using the engine's own replication, readable, promotable, in the same or another Region, each one a full instance, and it is as stale as its lag, which can be hours when a large transaction or a table without a primary key is being replayed. It gives no automatic failover. The Multi-AZ DB cluster is the newer option that gives both: a writer and two readable standbys in three AZs on instances with local NVMe, semi-synchronous commits so a failover loses nothing, failover under thirty-five seconds, a reader endpoint, and roughly twice the write throughput of the instance deployment. It costs three instances and exists only for MySQL and PostgreSQL. If I need readers and fast failover and the engine is MySQL or PostgreSQL, I would compare the cluster against Aurora, which gives fifteen readers with millisecond lag for a similar price.</p></details>
+  <details><summary>Explain Aurora's storage layer and why it changes failover, replication and recovery.</summary><p>Aurora keeps the MySQL or PostgreSQL engine but takes the storage out of the instance. The volume is a distributed service that stores every 10 GB segment as six copies across three AZs and accepts a write once four of the six acknowledge it, a read once three do. That quorum means losing a whole AZ does not stop writes, and losing an AZ plus one more copy does not lose data; damaged segments are repaired from their peers in the background. The instance sends only redo log records to storage; storage applies them and materialises pages when they are read, so the engine never writes data pages, never does a checkpoint, and generates a fraction of the I/O of MySQL on EBS. Three consequences follow. Replicas are not copies: they read the same volume, so their only lag is cache invalidation, ten to twenty milliseconds, and they never fall hours behind. Failover does not need crash recovery, because there is nothing to replay on the instance; a replica is promoted and the cluster endpoint moves, typically within thirty seconds. And backups are continuous and non-disruptive, with point-in-time restore to the second, backtrack to rewind in place, and clones that share pages copy-on-write. The costs are that Aurora exists only for those two engines, charges per I/O request on a Standard cluster, and a cluster with a single instance still has to create a new instance on failure, which takes minutes, so a replica is part of the design, not an option.</p></details>
+  <details><summary>When do you put RDS Proxy in front of a database, and what is session pinning?</summary><p>I use the proxy when the number of client connections is large, short-lived or unpredictable, which usually means Lambda, Fargate tasks that scale fast, or a fleet of small services each with its own pool; and when I want failover to be invisible to clients. The proxy keeps a pool of real database connections and multiplexes client connections onto them, so a thousand Lambda environments might need fifty database connections. It also reads the credentials from Secrets Manager and can accept IAM authentication, which keeps the password out of the application. On failover it keeps the client side open and reconnects to the new writer itself, without the DNS wait. Session pinning is what breaks the multiplexing: if a client does something that changes the state of its connection, such as a SET statement, a prepared statement in some drivers, a temporary table, a lock or an advisory lock, the proxy must keep that client on that one database connection for the rest of the session, because another client cannot safely reuse it. If every client pins, the proxy is a slower pass-through. I watch the pinned-sessions metric, remove session-state changes from the connection path, and use the pinning filters for the ones that are harmless. I skip the proxy for a handful of long-lived application servers with a well-configured pool; it costs per vCPU-hour and adds a hop.</p></details>
+  <details><summary>After a Lambda deploy, the database fails with "too many connections". What happened, and what are three fixes?</summary><p>Each Lambda execution environment opened its own connection and kept it between invocations, which is correct for a container but ruinous at scale: a burst to a thousand concurrent invocations means a thousand connections, and the instance's default max_connections, derived from its memory, is a few hundred on a small class. New connections are refused, including the ones from the rest of the application, and FreeableMemory falls because every connection holds a few megabytes. The first fix is RDS Proxy, which multiplexes those thousand clients onto as many database connections as are actually busy. The second is to cap the blast radius: reserved concurrency on the function so it cannot scale past what the database can take, and a queue in front so bursts are smoothed instead of refused. The third is to stop holding connections: close the connection at the end of each invocation if the invocation rate is low, use the Aurora Data API over HTTP, or move the work to a pool-owning service. Raising max_connections is the fix people reach for first; it works until the memory runs out, which it will. In the longer run I ask whether the access pattern is relational at all, because a key-value workload from Lambda is what DynamoDB is for.</p></details>
+  <details><summary>How would you upgrade a production PostgreSQL from version 13 to 16 with minimal downtime?</summary><p>With a blue/green deployment. RDS creates a green environment, a copy of the instance fed by logical replication from the blue one, and on the green side I run the major-version upgrade, change the parameter group to the new family, and maybe resize the instance, while production continues on blue. I test against green with the application in read-only mode or with a shadow copy of the traffic, including the extensions, because an extension that has no version 16 build will stop the upgrade. When replication lag is zero I switch over: RDS pauses writes, waits for the green side to catch up, checks the guardrails, renames the endpoints so the application connects to the new instance without a config change, and keeps the old blue instance with a suffix for a rollback. The pause is under a minute, typically tens of seconds. Prerequisites that bite: every table needs a primary key or a replica identity, or logical replication cannot carry updates and deletes; DDL during the deployment is not replicated; sequences and large objects need checking afterwards. Without blue/green, the in-place major upgrade takes the database down for the duration of pg_upgrade, usually ten to thirty minutes, and I would at least take a snapshot first and test the upgrade on a restored copy to time it.</p></details>
+  <details><summary>A parameter group change at midnight took the database down. What probably happened?</summary><p>Two scenarios, and I would check the events to tell them apart. The first: someone changed a static parameter, such as a log file size or performance schema setting, weeks ago, and it sat in pending-reboot, invisible, until an unrelated maintenance restart or failover at midnight applied it, and the new value was wrong, say a buffer pool larger than memory, so the engine failed to start. The fix is to change static parameters with a planned reboot the same day and alarm on the pending-reboot status. The second: someone modified the instance with apply-immediately, perhaps a class change or a new parameter group, which needs a restart, and did it during business hours, or without it, and the change landed in the maintenance window along with a minor-version patch. The lesson is the same both times: every change that needs a restart happens in a window I chose, on an instance that is Multi-AZ so that the restart becomes a one-minute failover, with the application's reconnection behaviour already proven in a drill. I would also look at whether the dynamic change was wrong in itself: lowering max_connections below the current count disconnects nobody but refuses newcomers, which looks like an outage to the pool that is restarting.</p></details>
+  <details><summary>Design backup and recovery for a 2 TB PostgreSQL with RPO 5 minutes, RTO 1 hour, plus a regional DR with an RPO of seconds.</summary><p>Inside the Region, automated backups with a retention of fourteen days give me point-in-time restore to any second, with the transaction logs uploaded every five minutes, so the RPO of a restore is at most five minutes; Multi-AZ makes the RPO zero for the ordinary failure of a host or AZ, and the failover takes a minute. For the hour of RTO I have to be honest about restores: restoring 2 TB creates a new instance in ten to twenty minutes, but it is lazy-loaded from S3, so the first hour of queries is slow, and the application must be repointed. I script the restore with the right parameter group, option group, subnet group and security groups, I warm the volume with a scan, and I run that script every quarter and record the time; that recorded time is the RTO I can promise. Manual snapshots before every risky change, and AWS Backup with a locked vault in a separate account for the ransomware case. For the regional requirement, RDS cannot give seconds: a cross-Region read replica is minutes behind and its promotion is manual. So I would move to Aurora PostgreSQL with a Global Database: storage-level replication under a second, a secondary cluster that is readable, switchover with no data loss for drills, failover with about a second lost for the real thing, and an RPO parameter that makes the primary refuse writes when lag exceeds the target. The application in the secondary Region needs its own copy of the stateless tier and a Route 53 health check or ARC routing control to move traffic; Day 24 covers that side.</p></details>
+  <details><summary>Aurora Serverless v2 or provisioned, and how do you set the minimum and maximum?</summary><p>Serverless v2 is right when the load is spiky or mostly idle: dev and test, internal tools, a new product with unknown traffic, a reporting cluster used in bursts, or many small tenant databases. It resizes in half-ACU steps in seconds without disconnecting anybody, and with a minimum of zero it pauses when idle and resumes on the first connection in about fifteen seconds. Provisioned is right when the load is flat and known, because a steady eight ACU costs more than the equivalent reserved instance, and because a large working set wants a fixed buffer pool. For the minimum I look at the buffer cache: a database that must answer in milliseconds the moment traffic arrives needs enough ACU to keep its hot pages resident, so I set the minimum to that and accept the cost; zero is for things that may wait fifteen seconds. For the maximum I set the budget ceiling and the point past which the application, not the database, is the bottleneck; a maximum that is too low shows up as ACUUtilization pinned at a hundred and rising latency. A useful hybrid is a provisioned writer with serverless readers, or a serverless reader at half an ACU as the failover target on a provisioned cluster, which is cheaper than a second provisioned instance and still gives a thirty-second failover.</p></details>
+  <details><summary>Your read replica is thirty minutes behind. What are the causes and what do you do?</summary><p>Replica lag is the apply side falling behind the primary's write rate. The classic causes: a long transaction or a bulk statement that the replica must replay as a whole; row-based replication of updates on a table without a primary key, which makes the replica scan the table for every row; a replica with less CPU, memory or IOPS than the primary; a burst-balance or credit exhaustion on the replica; and heavy read traffic on the replica competing with the apply thread. First I confirm it with the ReplicaLag metric and the engine's replica status, which tells me whether the I/O thread is behind, meaning the network, or the SQL thread, meaning apply. Then I fix the cause: add primary keys, split big transactions into batches, raise the parallel apply workers on MySQL, size the replica like the primary, move the heavy reads to another replica. While it is catching up I take it out of the read rotation if the application cannot tolerate stale data. If the lag keeps happening, I say the honest thing: a replica that replays a log will always be able to fall behind, and a workload that cannot tolerate that belongs on Aurora, where the replicas read the same volume and the lag is milliseconds by construction.</p></details>
+  <details><summary>Performance Insights shows DB load of 12 on a 4 vCPU instance. How do you diagnose it?</summary><p>DB load is the average number of sessions active at once, so twelve on four vCPUs means three times more work than the instance can execute: it is saturated and the question is on what. Performance Insights splits the load by wait event, and that split is the diagnosis. If most of it is CPU, the engine is executing: I look at the top SQL by load, almost always a few queries missing an index or a query plan that changed, and fix the queries or scale the instance. If it is I/O waits, such as reading data pages, the working set does not fit in the buffer cache: more memory, better indexes, or on RDS a volume that has run out of IOPS, which DiskQueueDepth will confirm. If it is lock waits, one session holds something the others want: the top SQL shows the blocker and the fix is a shorter transaction or a different access order. If it is client waits, the sessions are idle in transaction and the application is holding them open, which is a pool or code problem, not a database one. I correlate with the hour: did load jump at a deploy, a batch job, or a traffic peak, and I check Enhanced Monitoring to see whether the OS agrees. The thing not to do is scale up before reading the wait events, because a lock wait does not get better with more CPU.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-09/index.html">Day 9: DynamoDB in depth</a>.</b> The database that scales writes by partitioning instead of by a bigger instance: partition and sort keys, single-table design, GSIs and LSIs, on-demand against provisioned capacity, hot partitions, transactions, Streams, TTL, DAX and global tables. You will design the keys for "orders by customer" and "orders by status" in one table.
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Where a database lives.</b> A DB subnet group names private subnets in at least two AZs, and RDS picks where the instances go. A DB security group allows the database port from the application's security group and nothing else. No public address. The application connects through a pool, which is the component that will decide how long a failover hurts.",
+    "<b>Step 2 — RDS Multi-AZ instance deployment.</b> A primary instance with its own EBS volume, and a standby in another AZ with its own volume, kept identical by synchronous block-level replication. The standby is never readable and is billed in full. The endpoint is a CNAME to the primary's IP with a 5-second TTL; a failover is a rewrite of that CNAME after the standby's engine has run crash recovery. Typical time 60 to 120 seconds, no committed data lost.",
+    "<b>Step 3 — Read replicas and the Multi-AZ cluster.</b> A read replica is an asynchronous copy fed by the engine's own replication (binlog, WAL): readable, promotable, up to 15, same or another Region, and as stale as its lag, which can be hours. The Multi-AZ DB cluster is the newer option for MySQL and PostgreSQL: one writer and two readable standbys on local NVMe, semi-synchronous commits, failover under 35 seconds, a reader endpoint, three instances on the bill.",
+    "<b>Step 4 — Aurora's volume.</b> The engine stays; the disk becomes a distributed service. Every 10 GB segment is stored six times across three AZs; writes need 4 of 6, reads 3 of 6, so an AZ can disappear without losing write availability. The instance sends only redo log records; storage applies them, repairs itself from peers, grows in 10 GB steps to 128 TiB and runs crash recovery inside itself, so a new writer opens in seconds whatever was in flight.",
+    "<b>Step 5 — Aurora instances and endpoints.</b> One writer and up to 15 replicas share the volume, so a replica's lag is 10 to 20 milliseconds of cache invalidation. The cluster endpoint follows the writer, the reader endpoint round-robins the replicas, custom endpoints name subsets. Failover promotes the lowest-tier replica in about 30 seconds; without a replica Aurora must create an instance, which takes minutes. Serverless v2 instances resize between 0 and 256 ACU in half-ACU steps without disconnecting anyone.",
+    "<b>Step 6 — RDS Proxy.</b> A managed pool in your subnets that multiplexes many client connections onto few database connections, authenticates clients with a password or IAM, reads the database credentials from Secrets Manager, and on failover reconnects to the new writer itself instead of waiting for DNS. Session state (SET, temporary tables, some prepared statements) pins a client to one connection and switches the benefit off.",
+    "<b>Step 7 — Backups, other Regions, and changing engines.</b> Automated backups are a daily snapshot plus transaction logs every 5 minutes: point-in-time restore to any second within 1 to 35 days, always into a new instance with a new endpoint, the default parameter group and a lazy-loaded volume. Manual snapshots live until deleted and can be copied across Regions and accounts. Aurora adds continuous backup, 72-hour backtrack and copy-on-write clones. Global Database replicates the volume to other Regions with under a second of lag. Blue/Green deployments and DMS change versions and engines with a switchover measured in seconds.",
+    "<b>Step 8 — Seeing inside.</b> CloudWatch gives the instance metrics every minute: CPU, freeable memory, connections, IOPS, latency, queue depth, free storage, replica lag. Performance Insights samples active sessions and shows DB load by wait event and by SQL; load above the vCPU count is saturation. Enhanced Monitoring shows the OS at one-second resolution. Events announce failovers, low storage and reboots. Parameter groups hold the engine settings; dynamic ones apply now, static ones wait in pending-reboot.",
+    "<b>Step 9 — The failover, second by second.</b> Failure at zero. Detection in ten to twenty seconds. Crash recovery on the standby for twenty to sixty seconds. The CNAME rewritten. Clients that honour the 5-second TTL and retry are back within about a minute; a JVM that cached the address is not. Then no standby until RDS rebuilds one. A Multi-AZ cluster does it in 35 seconds with readers still serving; Aurora in 30 with no recovery; RDS Proxy removes the DNS step for the client."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const money = x => "$" + Math.round(x).toLocaleString("en-US");
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+  const secs = s => s >= 3600 ? (s / 3600).toFixed(1) + " h" : s >= 150 ? Math.round(s / 60) + " min" : s + " s";
+  function buttons(id, title, items, onPick) {
+    $(id).innerHTML = `<b>${title}</b>`;
+    items.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.dataset.key = key;
+      b.onclick = () => onPick(key);
+      $(id).appendChild(b);
+    });
+  }
+  const mark = (id, key) => [...$(id).querySelectorAll("button")].forEach(b => b.classList.toggle("on", b.dataset.key === key));
+
+  // ---------- Simulator 1: the primary dies at 02:00 ----------
+  const fo = { dep: "mazi", trig: "crash", client: "jvm30" };
+  buttons("foDep", "Deployment", [["single", "Single-AZ instance"], ["mazi", "Multi-AZ instance"], ["mazc", "Multi-AZ DB cluster"], ["aur", "Aurora, writer + replica"], ["aur0", "Aurora, writer only"]], k => { fo.dep = k; paintFo(); });
+  buttons("foTrig", "What happens", [["crash", "the primary host crashes"], ["az", "the whole AZ goes down"], ["reboot", "you reboot with failover"], ["scale", "you change the instance class"]], k => { fo.trig = k; paintFo(); });
+  buttons("foClient", "The application", [["jvm30", "JVM pool, DNS cached 30 s"], ["jvmInf", "JVM with a security manager: DNS cached forever"], ["ttl", "pool that honours the 5 s TTL and retries"], ["proxy", "connects through RDS Proxy"]], k => { fo.client = k; paintFo(); });
+
+  const TRIG = {
+    crash: "The primary host dies. Writes stop; open connections hang, then reset.",
+    az: "The AZ with the primary goes dark: host, network and its EBS volume. Writes stop.",
+    reboot: "You run reboot-db-instance --force-failover (or failover-db-cluster). Writes stop.",
+    scale: "You modify the instance class with apply-immediately."
+  };
+
+  function phases() {
+    const d = fo.dep, t = fo.trig, P = [[0, TRIG[t]]];
+    let writes = 0, dns = 0, rpo = "0", read = "no", after = "", manual = false;
+    const add = (dt, text, isDns) => { writes += dt; if (isDns) dns = dt; P.push([writes, text]); };
+    if (d === "single") {
+      if (t === "crash") { add(30, "RDS health checks miss the instance."); add(150, "RDS restarts the engine on the same host, or on a new host in the same AZ, and reattaches the volume."); add(60, "Crash recovery replays the redo log and rolls back open transactions; a huge transaction makes this far longer.", true); rpo = "0 (the volume survived)"; }
+      else if (t === "az") { add(60, "The volume is in the dark AZ too. There is no standby and no copy anywhere else."); add(1500, "You restore to the latest restorable time into another AZ: a new instance, a new endpoint, a lazy-loaded volume."); manual = true; rpo = "up to 5 min (last log upload)"; after = "Repoint the application, pass the parameter group, warm the volume. At 02:00, by hand."; }
+      else if (t === "reboot") { add(75, "The engine stops and starts on the same host. There is nothing to fail over to, so --force-failover is ignored."); }
+      else { add(420, "The instance is stopped, resized and started: one restart plus the engine's recovery."); }
+    } else if (d === "mazi") {
+      read = "no (the standby is not readable)";
+      if (t === "crash" || t === "az") { add(t === "az" ? 20 : 15, "RDS health checks miss the primary; event \"Multi-AZ instance failover started\"."); add(40, "The standby's engine runs crash recovery on its own synchronous copy of the volume, then opens."); add(10, "The endpoint's CNAME is rewritten to the standby's IP (TTL 5 s). Event \"failover completed\".", true); after = t === "az" ? "No standby can be built until the AZ returns: you are Single-AZ for the duration." : "RDS builds a new standby in the old AZ and synchronises it: minutes to hours. Until then you are Single-AZ."; }
+      else if (t === "reboot") { add(5, "No detection needed: RDS promotes the standby at once."); add(35, "Crash recovery on the standby, then it opens."); add(10, "CNAME rewritten.", true); after = "The old primary restarts as the new standby and resynchronises."; }
+      else { add(5, "RDS resizes the standby first while the primary keeps serving."); add(45, "One failover to the resized standby: recovery, then the CNAME rewrite.", true); add(0, "The old primary is resized in turn and becomes the standby."); }
+    } else if (d === "mazc") {
+      read = "yes: two readers via the reader endpoint";
+      if (t === "crash" || t === "az") { add(10, "The cluster notices the writer is gone."); add(15, "The reader with the least lag is promoted. Every commit was acknowledged by at least one reader, so nothing is lost."); add(8, "The cluster endpoint's CNAME moves; the reader endpoint drops the promoted node.", true); after = "A replacement reader is created to bring the cluster back to three."; }
+      else if (t === "reboot") { add(3, "Promotion begins at once."); add(15, "Reader promoted; it was already running the engine."); add(8, "CNAME moves.", true); }
+      else { add(5, "The readers are resized one at a time."); add(25, "One failover to a resized reader."); add(8, "CNAME moves; the old writer is resized and rejoins as a reader.", true); }
+    } else if (d === "aur") {
+      read = "yes: the other replicas via the reader endpoint";
+      if (t === "crash" || t === "az") { add(10, "Aurora's monitoring misses the writer."); add(15, "The lowest-tier replica is promoted. No crash recovery: the volume already holds every committed write."); add(5, "The cluster endpoint's CNAME flips to the new writer (TTL 5 s).", true); after = "The new writer's buffer cache is cold unless cluster cache management kept it warm. Aurora replaces the lost instance."; }
+      else if (t === "reboot") { add(2, "failover-db-cluster: promotion starts at once."); add(15, "Replica promoted, no recovery."); add(5, "CNAME flips.", true); }
+      else { add(5, "Resize the replica first."); add(20, "One failover to the resized replica."); add(5, "CNAME flips; the old writer is resized and becomes a replica.", true); }
+    } else {
+      read = "no (there is no replica)";
+      if (t === "crash" || t === "az") { add(10, "Aurora's monitoring misses the writer."); add(540, "No replica to promote. Aurora creates a new instance" + (t === "az" ? " in another AZ" : ", in the same AZ if it can") + " and attaches it to the volume. Nothing is lost; it is slow."); add(5, "CNAME flips.", true); after = "A single-instance Aurora cluster is not highly available. Add a replica, even a 0.5 ACU serverless one."; }
+      else if (t === "reboot") { add(60, "The only instance reboots. There is nothing to fail over to."); }
+      else { add(480, "The instance is replaced by one of the new class: minutes of downtime."); }
+    }
+    return { P, writes, dns, rpo, read, after, manual };
+  }
+
+  function paintFo() {
+    Object.entries({ foDep: fo.dep, foTrig: fo.trig, foClient: fo.client }).forEach(([id, k]) => mark(id, k));
+    const r = phases();
+    let app, appText, clientRow;
+    if (r.manual) {
+      app = r.writes; appText = secs(r.writes) + " + a config change";
+      clientRow = fo.client === "proxy" ? "The proxy's target is gone; someone registers the restored instance as the new target and the clients come back." : "Someone repoints the application at the new endpoint: a config change and a deploy, by a human, in the middle of the night.";
+    } else if (fo.client === "jvmInf") {
+      app = Infinity; appText = "until you restart the app";
+      clientRow = "The JVM resolved the endpoint once and will never ask again. Every new connection goes to the old address. The outage ends when someone restarts the application.";
+    } else if (fo.client === "jvm30") {
+      app = r.writes + 30; appText = "≤ " + secs(r.writes + 30);
+      clientRow = "The pool keeps trying the cached address for up to 30 s after the CNAME changed, then resolves the new one. Broken connections are discarded as they fail; requests in that window error out.";
+    } else if (fo.client === "ttl") {
+      app = r.writes + 5; appText = "≈ " + secs(r.writes + 5);
+      clientRow = "Within 5 s of the CNAME change the pool resolves the new address and reconnects. Retries with backoff absorb the gap; users see slow requests, not errors.";
+    } else {
+      app = Math.max(3, r.writes - r.dns + 2); appText = "≈ " + secs(app);
+      clientRow = "Client connections to the proxy stay open. The proxy sees the promotion directly and opens connections to the new writer; queued queries run when it does. In-flight transactions got an error and must be retried.";
+    }
+    const rows = r.P.map(([t, text]) => [t === 0 ? "t = 0" : "t ≈ " + secs(t), text]);
+    if (!r.manual) rows.push([app === Infinity ? "t = ?" : "t ≈ " + secs(app), clientRow]); else rows.push(["later", clientRow]);
+    if (r.after) rows.push(["after", r.after]);
+    $("foTable").innerHTML = "<tr><th>When</th><th>What happens</th></tr>" + rows.map(x => `<tr><td class="t">${x[0]}</td><td>${x[1]}</td></tr>`).join("");
+
+    const col = s => s <= 60 ? "pub" : s <= 180 ? "orange" : "bad";
+    big("foWrites", secs(r.writes), col(r.writes));
+    big("foApp", appText, app === Infinity ? "bad" : col(app));
+    big("foRpo", r.rpo, r.rpo.startsWith("0") ? "pub" : "bad");
+    big("foRead", r.read, r.read.startsWith("yes") ? "pub" : "muted");
+
+    let lesson;
+    if (r.manual) lesson = "A Single-AZ instance is a backup with an endpoint. The AZ event turns a one-minute failover into a half-hour restore run by a person, with up to five minutes of data gone.";
+    else if (fo.client === "jvmInf") lesson = `The database was back in ${secs(r.writes)}; the application never noticed. The most common failover outage is not the failover. Set the JVM's DNS TTL, validate connections on borrow, retry with backoff.`;
+    else if (fo.dep === "aur0") lesson = "Aurora without a replica recovers more slowly than RDS Multi-AZ: the volume is safe, but an instance has to be built. The replica is part of the design.";
+    else if (fo.dep === "single") lesson = "No standby means every event is a restart on one box, and an AZ loss is a restore. Multi-AZ costs double and turns all of these into about a minute.";
+    else if (fo.client === "proxy") lesson = "The proxy took the DNS step and the stale-pool problem out of the picture. What remains is the promotion itself, and the retries your code must do for the transactions that were in flight.";
+    else if (fo.dep === "mazi") lesson = "Sixty to a hundred and twenty seconds is the documented range, and the crash recovery on the standby is the part you cannot control; keep transactions short. Afterwards, remember that you have no standby for a while.";
+    else lesson = "Readers kept serving and the failover was over in about half a minute, with nothing lost. The client's reconnect behaviour still decides whether users saw an error or a slow page.";
+    $("foMsg").innerHTML = `<b>Writes back in ${secs(r.writes)}; application back ${app === Infinity ? "when someone restarts it" : "in " + appText}.</b> ${lesson}`;
+  }
+  paintFo();
+
+  // ---------- Simulator 2: RDS or Aurora, per month ----------
+  const cs = { cls: "large", ha: "ha", size: "500", io: "med" };
+  buttons("csClass", "Instance class", [["large", "db.r6g.large (2 vCPU, 16 GiB)"], ["xlarge", "db.r6g.xlarge (4 vCPU, 32 GiB)"], ["2xlarge", "db.r6g.2xlarge (8 vCPU, 64 GiB)"]], k => { cs.cls = k; paintCs(); });
+  buttons("csHa", "Availability", [["none", "single instance"], ["ha", "HA: standby (RDS) or 1 replica (Aurora)"], ["ha2", "HA + 2 readers"]], k => { cs.ha = k; paintCs(); });
+  buttons("csSize", "Data", [["100", "100 GB"], ["500", "500 GB"], ["2000", "2 TB"]], k => { cs.size = k; paintCs(); });
+  buttons("csIo", "Storage I/O, average", [["low", "300 IOPS"], ["med", "3,000 IOPS"], ["high", "10,000 IOPS"]], k => { cs.io = k; paintCs(); });
+  const MULT = { large: 1, xlarge: 2, "2xlarge": 4 }, IOPS = { low: 300, med: 3000, high: 10000 }, H = 730;
+
+  function paintCs() {
+    Object.entries({ csClass: cs.cls, csHa: cs.ha, csSize: cs.size, csIo: cs.io }).forEach(([id, k]) => mark(id, k));
+    const m = MULT[cs.cls], gb = +cs.size, iops = IOPS[cs.io];
+    // RDS MySQL on gp3
+    const copies = cs.ha === "none" ? 1 : 2, readers = cs.ha === "ha2" ? 2 : 0, rdsN = copies + readers;
+    const base = gb >= 400 ? 12000 : 3000, extra = Math.max(0, iops - base);
+    const rdsInst = 0.24 * m * H * rdsN;
+    const rdsStor = (gb * 0.115 + extra * 0.02) * rdsN;
+    const rds = rdsInst + rdsStor;
+    // Aurora
+    const aurN = cs.ha === "none" ? 1 : cs.ha === "ha" ? 2 : 3;
+    const reqs = iops * 2.628e6;                       // requests per month
+    const aurSInst = 0.26 * m * H * aurN, aurSStor = gb * 0.10, aurSIo = reqs / 1e6 * 0.20, aurS = aurSInst + aurSStor + aurSIo;
+    const aurOInst = 0.34 * m * H * aurN, aurOStor = gb * 0.225, aurO = aurOInst + aurOStor;
+    const best = Math.min(rds, aurS, aurO);
+    const name = best === rds ? "RDS MySQL" : best === aurS ? "Aurora Standard" : "Aurora I/O-Optimized";
+
+    big("csRds", money(rds) + " / mo", best === rds ? "pub" : "text");
+    big("csAurS", money(aurS) + " / mo", best === aurS ? "pub" : "text");
+    big("csAurO", money(aurO) + " / mo", best === aurO ? "pub" : "text");
+    big("csBest", name, "pub");
+
+    $("csTable").innerHTML = "<tr><th>Line</th><th>RDS MySQL, gp3</th><th>Aurora Standard</th><th>Aurora I/O-Optimized</th></tr>" +
+      `<tr><td>Instances</td><td class="num">${rdsN} × db.r6g.${cs.cls} = ${money(rdsInst)}</td><td class="num">${aurN} × = ${money(aurSInst)}</td><td class="num">${aurN} × = ${money(aurOInst)}</td></tr>` +
+      `<tr><td>Storage</td><td class="num">${rdsN} × ${gb} GB${extra ? ` + ${extra.toLocaleString()} IOPS` : ""} = ${money(rdsStor)}</td><td class="num">${gb} GB (6 copies) = ${money(aurSStor)}</td><td class="num">${gb} GB = ${money(aurOStor)}</td></tr>` +
+      `<tr><td>I/O</td><td class="num">included${extra ? " (provisioned above)" : ""}</td><td class="num">${(reqs / 1e9).toFixed(1)} billion requests = ${money(aurSIo)}</td><td class="num">included</td></tr>` +
+      `<tr class="hit"><td>Total</td><td class="num">${money(rds)}</td><td class="num">${money(aurS)}</td><td class="num">${money(aurO)}</td></tr>`;
+
+    const ioShare = aurSIo / aurS;
+    let msg = `<b>${name} is cheapest here.</b> `;
+    if (ioShare > 0.25) msg += `I/O is ${Math.round(ioShare * 100)}% of the Aurora Standard bill. AWS's own rule: above 25%, switch the cluster to I/O-Optimized; it costs ${Math.round((aurO / aurS - 1) * -100)}% less at this rate and the I/O line disappears. `;
+    else msg += `I/O is only ${Math.round(ioShare * 100)}% of the Aurora Standard bill, so I/O-Optimized's 30% dearer instances and 2.25× dearer storage do not pay off. `;
+    if (cs.ha === "ha2") msg += `Notice the instance count: RDS needs four (a Multi-AZ pair plus two replicas) where Aurora needs three, because an Aurora replica is both the standby and a reader. `;
+    else if (cs.ha === "ha") msg += `At this size RDS Multi-AZ and Aurora with one replica are close on compute; the difference is what you get for it: a cold standby against a readable replica with millisecond lag and a 30-second failover. `;
+    if (cs.io === "low" && best === rds) msg += `With little I/O and a modest data set the plain RDS instance wins on price; Aurora is bought for its failover and replicas, not for its bill.`;
+    if (cs.io === "high") msg += `Ten thousand sustained IOPS is a busy database: on RDS it needs provisioned IOPS above the gp3 baseline, on Aurora Standard it is 26 billion requests a month. The I/O rate, not the data size, is what decides between the three.`;
+    $("csMsg").innerHTML = msg;
+  }
+  paintCs();
+
+  // ---------- Simulator 3: Lambda meets max_connections ----------
+  const cn = { cls: "large", eng: "mysql", busy: "0.2", proxy: "no" };
+  buttons("cnClass", "Instance class", [["micro", "db.t4g.micro (1 GiB)"], ["medium", "db.t4g.medium (4 GiB)"], ["large", "db.r6g.large (16 GiB)"], ["xlarge", "db.r6g.xlarge (32 GiB)"]], k => { cn.cls = k; paintCn(); });
+  buttons("cnEngine", "Engine", [["mysql", "RDS MySQL"], ["pg", "RDS PostgreSQL"]], k => { cn.eng = k; paintCn(); });
+  buttons("cnBusy", "Connection busy per invocation", [["0.05", "5%: a fast query in a slow function"], ["0.2", "20%"], ["0.6", "60%: the function is mostly SQL"]], k => { cn.busy = k; paintCn(); });
+  buttons("cnProxy", "RDS Proxy", [["no", "no: each environment connects directly"], ["yes", "yes: through the proxy"]], k => { cn.proxy = k; paintCn(); });
+  $("cnConc").oninput = paintCn;
+  const MEM = { micro: 1, medium: 4, large: 16, xlarge: 32 };
+
+  function paintCn() {
+    Object.entries({ cnClass: cn.cls, cnEngine: cn.eng, cnBusy: cn.busy, cnProxy: cn.proxy }).forEach(([id, k]) => mark(id, k));
+    const conc = +$("cnConc").value, memGiB = MEM[cn.cls], busy = +cn.busy;
+    $("cnConcLbl").textContent = conc.toLocaleString() + " environments, one connection each";
+    const bytes = memGiB * 1073741824;
+    const maxC = cn.eng === "mysql" ? Math.floor(bytes / 12582880) : Math.min(5000, Math.floor(bytes / 9531392));
+    const perConnMB = cn.eng === "mysql" ? 3 : 8;
+    const needed = Math.ceil(conc * busy * 1.2);        // busy connections plus 20% headroom
+    const used = cn.proxy === "yes" ? Math.min(needed, maxC) : Math.min(conc, maxC);
+    const memMB = used * perConnMB, memShare = memMB / (memGiB * 1024);
+    big("cnMax", maxC.toLocaleString(), "text");
+    big("cnUsed", used.toLocaleString() + (cn.proxy === "yes" ? ` for ${conc.toLocaleString()} clients` : ""), used >= maxC ? "bad" : "text");
+    big("cnMem", memMB >= 1024 ? (memMB / 1024).toFixed(1) + " GB" : memMB + " MB", memShare > 0.5 ? "bad" : memShare > 0.25 ? "orange" : "text");
+
+    let verdict, colour, msg;
+    if (cn.proxy === "no") {
+      if (conc > maxC) { verdict = "Too many connections"; colour = "bad"; msg = `<b>${(conc - maxC).toLocaleString()} environments are refused</b> with <code>${cn.eng === "mysql" ? "ER_CON_COUNT_ERROR: Too many connections" : "FATAL: too many connections for role"}</code>, and so is everything else that tries to connect, including your admin session. Only ${Math.round(conc * busy).toLocaleString()} connections were ever busy at once: the other ${(conc - Math.round(conc * busy)).toLocaleString()} are idle environments holding a slot.`; }
+      else if (memShare > 0.5) { verdict = "Connects, then starves"; colour = "bad"; msg = `<b>Under the limit, but ${Math.round(memShare * 100)}% of memory is now connection overhead.</b> The buffer pool shrinks, FreeableMemory falls, swap starts, and every query slows down. Raising max_connections would make this worse, not better.`; }
+      else if (conc > maxC * 0.8) { verdict = "At the edge"; colour = "orange"; msg = `<b>${Math.round(conc / maxC * 100)}% of max_connections used.</b> The next deploy, a retry storm or a slow query that makes functions pile up will cross the line. Add the proxy before it does.`; }
+      else { verdict = "Fine"; colour = "pub"; msg = `<b>${conc.toLocaleString()} connections fit in ${maxC.toLocaleString()}.</b> It stays fine until the function scales; set reserved concurrency so that it cannot scale past what the database accepts, and watch DatabaseConnections.`; }
+    } else {
+      if (needed > maxC) { verdict = "Even the proxy cannot help"; colour = "bad"; msg = `<b>The work itself needs ${needed.toLocaleString()} busy connections and the instance allows ${maxC.toLocaleString()}.</b> Clients queue in the proxy for up to ConnectionBorrowTimeout (120 s by default), then fail. Multiplexing hides idle connections, not actual load: this needs a bigger instance, faster queries, or less concurrency.`; }
+      else { verdict = "Fine"; colour = "pub"; msg = `<b>The proxy holds about ${used.toLocaleString()} database connections for ${conc.toLocaleString()} clients.</b> Idle environments cost the database nothing. Two things can undo it: session pinning (a SET statement, a temporary table) makes a client keep its connection, and MaxConnectionsPercent limits how much of max_connections the proxy may take. Watch DatabaseConnectionsCurrentlySessionPinned.`; }
+    }
+    big("cnResult", verdict, colour);
+    $("cnMsg").innerHTML = msg;
+  }
+  paintCn();
+</script>
+</body>
+</html>
