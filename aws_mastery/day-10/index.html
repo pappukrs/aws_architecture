@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 10 — Caching and purpose-built databases</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .sim .calc { margin: 14px 0 12px; }
+  .sim .calc .big { font-size: 21px; }
+  .sim h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .sim .seg b { min-width: 170px; }
+  .sim input[type=range] { width: 260px; accent-color: var(--orange); vertical-align: middle; }
+  td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .sim td.num { white-space: nowrap; }
+  .table-wrap code, .card code { overflow-wrap: anywhere; }
+  td.t { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .lab li { margin-bottom: 12px; }
+  svg .box { fill: var(--card); stroke: var(--border); stroke-width: 1.2; }
+  svg .lbl { font-size: 12.5px; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  svg .title { font-size: 13px; font-weight: 700; }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+  svg .arrow.both { marker-start: url(#arr); }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--pub); }
+  svg .rep { fill: var(--az-fill); stroke: var(--az); stroke-width: 1; }
+  svg .rep.leader { fill: var(--orange); stroke: var(--orange); }
+  svg text.mono { font-size: 10.5px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-09/index.html">← Day 9</a><a href="../README.md">30-day plan</a><a href="../day-11/index.html">Day 11 →</a></nav>
+  <header>
+    <div class="tag">Day 10 of 30 · Week 2 — Databases, Messaging, Serverless, Containers</div>
+    <h1>Caching and purpose-built databases</h1>
+    <p class="lead">A cache is the cheapest way to make a database look fast, and the most common way to make one fall over. At a 99% hit ratio the database behind the cache is sized for one request in a hundred; the day the cache node restarts, it gets all hundred. This page is about that day. First the cache itself: ElastiCache with Redis OSS or Valkey against Memcached, cluster mode and hash slots, replicas and failover, memory, eviction policies, lazy loading against write-through, TTLs and the stampede. Then the stores built for one shape of data, where a cache is still the same problem: MemoryDB when the cache <i>is</i> the database, OpenSearch for search and logs, DocumentDB for JSON, Neptune for graphs, Keyspaces for wide rows, Timestream for time series, and Redshift for the warehouse. The centre of the page is the interview question: the cache node restarts and the database falls over. Why, and how do you prevent it?</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 684" role="img" aria-label="An application in a VPC reads through an ElastiCache replication group, shown both as cluster mode disabled with a primary and two replicas and as cluster mode enabled with hash slots split across shards; a Memcached cluster; caching patterns and memory settings; the database behind the cache that sees only misses; MemoryDB as a durable primary store; a strip of purpose-built databases; the metrics to watch; and the answer to why a cache restart takes the database down and how to prevent it">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke" style="fill: var(--muted)"/></marker>
+        </defs>
+
+        <!-- Step 1: Region, VPC, application -->
+        <g data-step="1">
+          <rect x="12" y="12" width="976" height="430" rx="14" fill="var(--region-fill)" stroke="var(--region)" stroke-width="1.5"/>
+          <text x="28" y="34" class="title" style="fill: var(--region)">Region · VPC · ElastiCache lives in your subnets: a subnet group, a security group, an endpoint; the app connects over TCP 6379 or 11211</text>
+          <rect x="30" y="58" width="150" height="80" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="105" y="78" text-anchor="middle" class="title">Application</text>
+          <text x="105" y="94" text-anchor="middle" class="small">client lib · pool · reconnect</text>
+          <text x="105" y="108" text-anchor="middle" class="small">timeouts · retries with jitter</text>
+          <text x="105" y="122" text-anchor="middle" class="small">GET · miss → DB → SET</text>
+          <path d="M180 98 L205 98" class="arrow"/>
+        </g>
+
+        <!-- Step 2: ElastiCache Redis / Valkey -->
+        <g data-step="2">
+          <rect x="205" y="58" width="470" height="190" rx="12" fill="var(--card)" stroke="var(--orange)" stroke-width="1.5"/>
+          <text x="217" y="78" class="title" style="fill: var(--orange)">ElastiCache · Redis OSS / Valkey · replication group</text>
+          <text x="217" y="94" class="small" style="font-weight:700; fill: var(--text)">Cluster mode disabled: one shard holds all 16,384 slots</text>
+          <rect x="217" y="102" width="92" height="30" rx="5" class="rep leader"/>
+          <text x="263" y="114" text-anchor="middle" class="small" style="fill:#fff;font-weight:700">primary · AZ-a ★</text>
+          <text x="263" y="126" text-anchor="middle" class="small" style="fill:#fff">writes + reads</text>
+          <rect x="317" y="102" width="92" height="30" rx="5" class="rep"/>
+          <text x="363" y="114" text-anchor="middle" class="small">replica · AZ-b</text>
+          <text x="363" y="126" text-anchor="middle" class="small">async · reads</text>
+          <rect x="417" y="102" width="92" height="30" rx="5" class="rep"/>
+          <text x="463" y="114" text-anchor="middle" class="small">replica · AZ-c</text>
+          <text x="463" y="126" text-anchor="middle" class="small">async · reads</text>
+          <text x="520" y="112" class="small">primary endpoint → ★</text>
+          <text x="520" y="126" class="small">reader endpoint → replicas</text>
+          <text x="520" y="140" class="small">DNS flips on failover</text>
+          <text x="217" y="156" class="small" style="font-weight:700; fill: var(--text)">Cluster mode enabled: the 16,384 slots split across shards, each with replicas</text>
+          <rect x="217" y="164" width="140" height="48" rx="6" class="box" style="stroke: var(--orange)"/>
+          <text x="287" y="178" text-anchor="middle" class="small" style="fill: var(--text)">Shard 1 · slots 0–5460</text>
+          <rect x="224" y="186" width="60" height="18" rx="3" class="rep leader"/><text x="254" y="198" text-anchor="middle" class="small" style="fill:#fff;font-weight:700">AZ-a ★</text>
+          <rect x="291" y="186" width="60" height="18" rx="3" class="rep"/><text x="321" y="198" text-anchor="middle" class="small">AZ-b</text>
+          <rect x="367" y="164" width="140" height="48" rx="6" class="box" style="stroke: var(--orange)"/>
+          <text x="437" y="178" text-anchor="middle" class="small" style="fill: var(--text)">Shard 2 · 5461–10922</text>
+          <rect x="374" y="186" width="60" height="18" rx="3" class="rep"/><text x="404" y="198" text-anchor="middle" class="small">AZ-a</text>
+          <rect x="441" y="186" width="60" height="18" rx="3" class="rep leader"/><text x="471" y="198" text-anchor="middle" class="small" style="fill:#fff;font-weight:700">AZ-b ★</text>
+          <rect x="517" y="164" width="140" height="48" rx="6" class="box" style="stroke: var(--orange)"/>
+          <text x="587" y="178" text-anchor="middle" class="small" style="fill: var(--text)">Shard 3 · 10923–16383</text>
+          <rect x="524" y="186" width="60" height="18" rx="3" class="rep leader"/><text x="554" y="198" text-anchor="middle" class="small" style="fill:#fff;font-weight:700">AZ-c ★</text>
+          <rect x="591" y="186" width="60" height="18" rx="3" class="rep"/><text x="621" y="198" text-anchor="middle" class="small">AZ-a</text>
+          <text x="217" y="228" class="small">configuration endpoint · {hash tag} keeps keys on one shard · CROSSSLOT otherwise</text>
+          <text x="217" y="241" class="small">Multi-AZ auto failover promotes a replica in under a minute · reshard online</text>
+        </g>
+
+        <!-- Step 3: Memcached -->
+        <g data-step="3">
+          <rect x="690" y="58" width="290" height="80" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="702" y="78" class="title">Memcached</text>
+          <text x="702" y="94" class="small">nodes, no replication, no persistence, no failover</text>
+          <text x="702" y="108" class="small">the client hashes keys to nodes · auto discovery</text>
+          <text x="702" y="122" class="small">multi-threaded · lose a node, lose 1/N of the keys</text>
+        </g>
+
+        <!-- Step 4: patterns and memory -->
+        <g data-step="4">
+          <rect x="205" y="262" width="470" height="84" rx="10" class="box" style="stroke: var(--priv)"/>
+          <text x="217" y="280" class="title" style="fill: var(--priv)">Patterns and memory</text>
+          <text x="217" y="296" class="small">Lazy loading: GET miss → read DB → SET with TTL · stale up to TTL · hot keys only</text>
+          <text x="217" y="310" class="small">Write-through: each write also SETs · fresh · 2× writes · caches cold keys too</text>
+          <text x="217" y="324" class="small">TTL with jitter · negative caching · reserve 25% memory for BGSAVE / replication</text>
+          <text x="217" y="338" class="small">when full: allkeys-lru · volatile-lru · volatile-ttl · noeviction (OOM errors)</text>
+          <path d="M440 248 L440 262" class="arrow"/>
+        </g>
+
+        <!-- Step 5: the database behind -->
+        <g data-step="5">
+          <rect x="30" y="262" width="150" height="84" rx="10" class="box" style="stroke: var(--bad)"/>
+          <text x="105" y="282" text-anchor="middle" class="title">The database</text>
+          <text x="105" y="298" text-anchor="middle" class="small">RDS · Aurora · DynamoDB</text>
+          <text x="105" y="312" text-anchor="middle" class="small">sees only the misses</text>
+          <text x="105" y="326" text-anchor="middle" class="small">sized for the miss rate</text>
+          <text x="105" y="340" text-anchor="middle" class="small">at 99% hits: 1% of reads</text>
+          <path d="M205 304 L180 304" class="arrow bad"/>
+          <path d="M105 138 L105 262" class="arrow" stroke-dasharray="4 3"/>
+        </g>
+
+        <!-- Step 6: MemoryDB -->
+        <g data-step="6">
+          <rect x="690" y="150" width="290" height="98" rx="10" class="box" style="stroke: var(--region)"/>
+          <text x="702" y="170" class="title" style="fill: var(--region)">MemoryDB</text>
+          <text x="702" y="186" class="small">Redis / Valkey API as a primary database</text>
+          <text x="702" y="200" class="small">every write goes to a Multi-AZ transaction log</text>
+          <text x="702" y="214" class="small">failover with no lost writes · snapshots to S3</text>
+          <text x="702" y="228" class="small">sub-ms reads · single-digit ms writes</text>
+          <text x="702" y="242" class="small">≈ 2–3× the price of ElastiCache; no cache in front</text>
+          <path d="M675 199 L690 199" class="arrow" stroke-dasharray="4 3"/>
+        </g>
+
+        <!-- Step 7: purpose-built -->
+        <g data-step="7">
+          <text x="30" y="362" class="small" style="font-weight:700; fill: var(--text)">Purpose-built: one shape of data and one query style each · a cache in front of any of them is the same problem as above</text>
+          <rect x="30" y="370" width="148" height="62" rx="8" class="box" style="stroke: var(--pub)"/>
+          <text x="104" y="388" text-anchor="middle" class="title" style="font-size:12px">OpenSearch</text>
+          <text x="104" y="403" text-anchor="middle" class="small">search · logs · vectors</text>
+          <text x="104" y="417" text-anchor="middle" class="small">indices, shards, replicas</text>
+          <rect x="190" y="370" width="148" height="62" rx="8" class="box" style="stroke: var(--pub)"/>
+          <text x="264" y="388" text-anchor="middle" class="title" style="font-size:12px">DocumentDB</text>
+          <text x="264" y="403" text-anchor="middle" class="small">MongoDB API · JSON</text>
+          <text x="264" y="417" text-anchor="middle" class="small">Aurora-style storage</text>
+          <rect x="350" y="370" width="148" height="62" rx="8" class="box" style="stroke: var(--pub)"/>
+          <text x="424" y="388" text-anchor="middle" class="title" style="font-size:12px">Neptune</text>
+          <text x="424" y="403" text-anchor="middle" class="small">graph · Gremlin · SPARQL</text>
+          <text x="424" y="417" text-anchor="middle" class="small">hops, not joins</text>
+          <rect x="510" y="370" width="148" height="62" rx="8" class="box" style="stroke: var(--pub)"/>
+          <text x="584" y="388" text-anchor="middle" class="title" style="font-size:12px">Keyspaces</text>
+          <text x="584" y="403" text-anchor="middle" class="small">Cassandra API · CQL</text>
+          <text x="584" y="417" text-anchor="middle" class="small">wide rows, per request</text>
+          <rect x="670" y="370" width="148" height="62" rx="8" class="box" style="stroke: var(--pub)"/>
+          <text x="744" y="388" text-anchor="middle" class="title" style="font-size:12px">Timestream</text>
+          <text x="744" y="403" text-anchor="middle" class="small">time series · SQL</text>
+          <text x="744" y="417" text-anchor="middle" class="small">memory → magnetic tiers</text>
+          <rect x="830" y="370" width="148" height="62" rx="8" class="box" style="stroke: var(--pub)"/>
+          <text x="904" y="388" text-anchor="middle" class="title" style="font-size:12px">Redshift</text>
+          <text x="904" y="403" text-anchor="middle" class="small">columnar warehouse, MPP</text>
+          <text x="904" y="417" text-anchor="middle" class="small">RA3 · Serverless · Spectrum</text>
+        </g>
+
+        <!-- Step 8: seeing inside -->
+        <g data-step="8">
+          <rect x="12" y="460" width="230" height="210" rx="12" class="box" style="stroke: var(--az)"/>
+          <text x="26" y="480" class="title" style="fill: var(--az)">Seeing inside</text>
+          <text x="26" y="498" class="small">CacheHitRate = hits / (hits + misses)</text>
+          <text x="26" y="512" class="small">Evictions &gt; 0: memory is full</text>
+          <text x="26" y="526" class="small">DatabaseMemoryUsagePercentage</text>
+          <text x="26" y="540" class="small">EngineCPUUtilization: the one core</text>
+          <text x="26" y="554" class="small">CurrConnections · NewConnections</text>
+          <text x="26" y="568" class="small">ReplicationLag · SwapUsage &gt; 0</text>
+          <text x="26" y="582" class="small">CurrItems · BytesUsedForCache</text>
+          <text x="26" y="596" class="small">INFO · SLOWLOG · --bigkeys · MONITOR</text>
+          <text x="26" y="610" class="small">on the DB: connections, CPU, p99</text>
+          <text x="26" y="624" class="small">on the app: cache timeouts, miss %</text>
+          <text x="26" y="638" class="small">events: failover, node replaced,</text>
+          <text x="26" y="652" class="small">maintenance window, snapshot</text>
+        </g>
+
+        <!-- Step 9: the answer -->
+        <g data-step="9">
+          <rect x="258" y="460" width="730" height="210" rx="12" class="box" style="stroke: var(--bad)"/>
+          <text x="272" y="480" class="title" style="fill: var(--bad)">The cache node restarts and the database falls over: why, and how to prevent it</text>
+          <text x="272" y="500" class="small"><tspan font-weight="700" style="fill: var(--text)">Why.</tspan> At 99% hits the database is sized for 1% of the reads. The node comes back empty: for minutes every read misses, 100× the load.</text>
+          <text x="272" y="516" class="small">Clients retry, pools fill, the DB's CPU and connections saturate, queries queue, and the cache refills slowly because the DB is now slow.</text>
+          <text x="272" y="536" class="small"><tspan font-weight="700" style="fill: var(--text)">1.</tspan> A replica in another AZ with Multi-AZ auto failover: a warm replica is promoted in under a minute, so a restart is never a cold start.</text>
+          <text x="272" y="552" class="small"><tspan font-weight="700" style="fill: var(--text)">2.</tspan> Size the database for the miss storm you accept, or put a rate limit or circuit breaker in the app so excess reads fail fast, not pile up.</text>
+          <text x="272" y="568" class="small"><tspan font-weight="700" style="fill: var(--text)">3.</tspan> Request coalescing: one DB read per key per miss, not one per request. Jittered TTLs, so keys never expire together.</text>
+          <text x="272" y="584" class="small"><tspan font-weight="700" style="fill: var(--text)">4.</tspan> Serve stale: keep values past their TTL and refresh in the background. Warm a new node from a snapshot or a list of hot keys.</text>
+          <text x="272" y="600" class="small"><tspan font-weight="700" style="fill: var(--text)">5.</tspan> Cluster mode: a shard restart empties 1/N of the keys, not all. A reserved-memory of 25% so a BGSAVE does not restart the node.</text>
+          <text x="272" y="616" class="small"><tspan font-weight="700" style="fill: var(--text)">6.</tspan> Alarm on CacheHitRate, Evictions and SwapUsage, and rehearse with a test failover. The cache is capacity, and capacity is monitored.</text>
+          <text x="272" y="640" class="small">If losing the cache must not lose data: MemoryDB, or DynamoDB with DAX; both fail over warm. The real question: your miss-rate capacity.</text>
+          <text x="272" y="656" class="small">A cache that cannot be lost is a database, and should be bought and run as one.</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption"><b>The whole picture.</b> The application connects over TCP to a cache that lives in its own subnets. With Redis OSS or Valkey and cluster mode disabled, one shard holds every key: a primary that takes writes and replicas in other AZs that take reads, with a primary endpoint whose DNS flips at failover and a reader endpoint over the replicas. With cluster mode enabled, the 16,384 hash slots are split across shards, each a primary with replicas, behind a configuration endpoint; keys with the same hash tag stay together and a command across slots fails. Memcached is simpler and more fragile: nodes without replication, the client decides which node holds which key. The patterns box is what the application does: lazy loading fills the cache on misses with a TTL, write-through fills it on writes, and the memory settings decide what happens when it is full. The database on the left sees only the misses, which is the whole point and the whole danger. MemoryDB on the right is the same API with a durable transaction log, a database rather than a cache. The strip below is the purpose-built family, one shape of data each. Bottom left are the metrics; bottom right is the answer to the question of the day.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">ElastiCache shards, primaries</span>
+      <span style="--c:var(--az)">Replicas, metrics</span>
+      <span style="--c:var(--priv)">Patterns, memory</span>
+      <span style="--c:var(--edge)">Application, Memcached</span>
+      <span style="--c:var(--region)">MemoryDB</span>
+      <span style="--c:var(--pub)">Purpose-built databases</span>
+      <span style="--c:var(--bad)">The database behind, the failure</span>
+    </div>
+  </div>
+
+  <h2>The cache restarts: does the database survive?</h2>
+  <div class="card sim">
+    <p>Tuesday, 14:00. The cache node is replaced during a maintenance window, or runs out of memory during a snapshot, or the AZ has a bad hour. It comes back empty, or does not come back at all for a minute. Pick the hit ratio you enjoy on a normal day, how the cache is deployed, what the database can take, and what the application does on a miss. The simulator finds the load the database sees in the first minute, and whether it lives.</p>
+    <div class="seg" id="crHit"></div>
+    <div class="seg"><b>Reads per second at the cache</b><input type="range" id="crRate" min="100" max="50000" step="100" value="5000"> <span id="crRateLbl"></span></div>
+    <div class="seg" id="crKeys"></div>
+    <div class="seg" id="crDb"></div>
+    <div class="seg" id="crTopo"></div>
+    <div class="seg" id="crGuard"></div>
+    <div class="calc">
+      <div><div class="lbl">Database on a normal day</div><div class="big" id="crSteady"></div></div>
+      <div><div class="lbl">Database in the first minute</div><div class="big" id="crStorm"></div></div>
+      <div><div class="lbl">Against its capacity</div><div class="big" id="crHead"></div></div>
+      <div><div class="lbl">Result</div><div class="big" id="crResult"></div></div>
+    </div>
+    <div class="table-wrap"><table id="crTable"></table></div>
+    <p class="result" id="crMsg"></p>
+    <p class="note">Model: on a normal day the database sees reads × (1 − hit ratio). When a node restarts, the keys it held are gone: all of them for a single node or a cluster-mode-disabled primary without a replica, a third for one shard of three, a quarter for one Memcached node of four; with a Multi-AZ replica the keys survive on the replica and the cost is a window of about 30 seconds while DNS and the clients move. During the storm, requests concentrate on the hottest third of the working set, so request coalescing caps the database load at that many distinct keys a second. A database pushed past its capacity without a breaker thrashes: its effective throughput is taken as half of its capacity, which is why the refill takes so long. The refill time is the cold keys divided by what the database actually delivers, times 1.5 for duplicate fetches when there is no coalescing.</p>
+  </div>
+
+  <h2>Lazy loading or write-through: what the cache saves and costs</h2>
+  <div class="card sim">
+    <p>Lazy loading fills the cache on a miss; write-through fills it on every write. The first caches what is read and goes stale for up to a TTL; the second is always fresh and doubles every write, and it caches what is written whether or not anyone reads it. Pick the pattern, the traffic and the TTL. The simulator gives the hit ratio you can expect, what the database still sees, the memory you need and the monthly price of a Multi-AZ pair or the serverless option.</p>
+    <div class="seg" id="lwPattern"></div>
+    <div class="seg"><b>Reads per second</b><input type="range" id="lwReads" min="100" max="50000" step="100" value="5000"> <span id="lwReadsLbl"></span></div>
+    <div class="seg"><b>Writes per second</b><input type="range" id="lwWrites" min="10" max="5000" step="10" value="300"> <span id="lwWritesLbl"></span></div>
+    <div class="seg" id="lwKeys"></div>
+    <div class="seg" id="lwTtl"></div>
+    <div class="seg" id="lwSize"></div>
+    <div class="calc">
+      <div><div class="lbl">Hit ratio</div><div class="big" id="lwHit"></div></div>
+      <div><div class="lbl">Database reads per second</div><div class="big" id="lwDb"></div></div>
+      <div><div class="lbl">Memory needed</div><div class="big" id="lwMem"></div></div>
+      <div><div class="lbl">Cache per month</div><div class="big" id="lwCost"></div></div>
+    </div>
+    <div class="table-wrap"><table id="lwTable"></table></div>
+    <p class="result" id="lwMsg"></p>
+    <p class="note">Model: 80% of the reads go to 20% of the keys. With lazy loading every active key is re-read from the database once per TTL, so the misses are the active keys divided by the TTL, capped at the read rate for each group; the keys in memory are the ones read within one TTL. With write-through alone the cache holds only keys written within the TTL, and reads of anything else miss. With both, the keys are as for lazy loading, the values are fresh, and the cache takes the writes as well. Each key costs its value plus about 100 bytes of overhead; a node's usable memory is 75% of its RAM, the rest reserved for replication and snapshots. Node prices are us-east-1 Redis OSS on-demand (Valkey is about 20% less); serverless is $0.125 per GB-hour of data plus $0.0034 per million ECPUs, one ECPU per KB of each command. The database reads avoided are priced as DynamoDB eventually consistent reads at $0.125 per million request units, as a floor; against RDS the saving is an instance size.</p>
+  </div>
+
+  <h2>Which purpose-built store?</h2>
+  <div class="card sim">
+    <p>Each of these databases is excellent at one shape of data and poor at the others, and every one of them has been chosen for the wrong reason. Describe the data and the question you ask of it; the simulator names the store, the runner-up, and what would change the answer.</p>
+    <div class="seg" id="wsShape"></div>
+    <div class="seg" id="wsSize"></div>
+    <div class="seg" id="wsWrite"></div>
+    <div class="seg" id="wsLat"></div>
+    <div class="seg" id="wsCons"></div>
+    <div class="calc">
+      <div><div class="lbl">Pick</div><div class="big" id="wsPick"></div></div>
+      <div><div class="lbl">Runner-up</div><div class="big" id="wsAlt"></div></div>
+      <div><div class="lbl">Cache in front?</div><div class="big" id="wsCache"></div></div>
+      <div><div class="lbl">Rough monthly floor</div><div class="big" id="wsFloor"></div></div>
+    </div>
+    <div class="table-wrap"><table id="wsTable"></table></div>
+    <p class="result" id="wsMsg"></p>
+    <p class="note">The monthly floor is the smallest sensible production footprint in us-east-1 at list price, two AZs where the service has nodes: it tells you whether the store costs tens, hundreds or thousands of dollars before any data, not what your bill will be. Every answer here assumes the access patterns are known; when they are not, Day 9's rule applies and a relational database goes first.</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>What ElastiCache is</h3>
+      <ul>
+        <li>A managed <b>in-memory key-value store</b> in your VPC: you choose an engine (<b>Redis OSS</b>, its fork <b>Valkey</b>, or <b>Memcached</b>), a node type, a subnet group and a security group, and get an endpoint. The data lives in RAM, so reads and writes are <b>sub-millisecond</b> and the price is per GB of memory, not per GB of disk.</li>
+        <li>Two deployment forms. <b>Node-based</b>: you pick node sizes and counts and pay per node-hour. <b>Serverless</b>: you pick an engine, AWS runs the shards, and you pay per GB-hour stored and per ECPU consumed; it scales within about a minute and starts around $90 a month for a 1 GB cache that is barely used.</li>
+        <li>Valkey is the engine to pick for anything new: the same commands and wire protocol as Redis OSS 7.2, lower prices, and it is where AWS and the Linux Foundation put their development.</li>
+        <li>What it is not: durable. A node restart loses its memory, snapshots are periodic, replication is asynchronous. Anything that must survive a restart goes to <b>MemoryDB</b> or a database.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Redis / Valkey against Memcached</h3>
+      <ul>
+        <li><b>Memcached</b> is a multi-threaded cache of strings, up to 1 MB each by default: no replication, no persistence, no failover, no data structures. The <b>client</b> hashes each key to a node, so a cluster of four nodes is four independent caches, and losing one loses a quarter of the keys until the client remaps them. Auto discovery tells the client the node list.</li>
+        <li><b>Redis OSS / Valkey</b> is single-threaded for commands (I/O threads since 6.0 help with the network), with <b>data structures</b>: hashes, lists, sets, sorted sets, streams, HyperLogLog, geo, bitmaps, plus Lua scripts, pub/sub and transactions. It replicates to replicas, snapshots to S3, and fails over.</li>
+        <li>Choose Memcached only for a pure cache of large flat values where you want to use every core of a big node and can tolerate losing a node's keys. Choose Redis or Valkey for everything else: sessions, leaderboards, rate limits, queues, locks, and any cache you would rather not lose at once.</li>
+        <li>Neither is a database. Memcached cannot be, and Redis in ElastiCache is tuned as a cache: <code>appendonly</code> is not available, and a cluster restart from a snapshot is minutes old.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Cluster mode disabled or enabled</h3>
+      <ul>
+        <li><b>Disabled</b>: one shard, one primary, up to five read replicas, all 16,384 hash slots on the one primary. Writes scale to one node's memory and one core; reads scale by replicas through the <b>reader endpoint</b>. Simple clients, every command works, the dataset must fit one node.</li>
+        <li><b>Enabled</b>: the slots are split across up to 500 shards, each a primary with up to five replicas. The client talks to the <b>configuration endpoint</b>, learns the slot map, and sends each command to the shard that owns <code>CRC16(key) mod 16384</code>; a wrong guess gets a <code>MOVED</code> redirect. Writes and memory scale with shards; <b>online resharding</b> moves slots without downtime.</li>
+        <li>Multi-key commands, transactions and Lua scripts need every key on one shard: put the part you want hashed in braces, <code>{user:42}:cart</code> and <code>{user:42}:profile</code>, and the slot is computed from <code>user:42</code> only. Otherwise: <code>CROSSSLOT Keys in request don't hash to the same slot</code>.</li>
+        <li>Turn cluster mode on from the start if the dataset might ever exceed one node or the write rate one core; the switch later is a migration, and the client library must be cluster-aware.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Replication and failover</h3>
+      <ul>
+        <li>Replicas receive the primary's write stream <b>asynchronously</b>. <code>ReplicationLag</code> is normally milliseconds, and a read from a replica can return a value a moment old; a failover promotes the replica with the most data, and the writes still in flight to the old primary are lost.</li>
+        <li><b>Multi-AZ with automatic failover</b> needs at least one replica in another AZ. When the primary fails its health checks, a replica is promoted and the <b>primary endpoint's DNS</b> is repointed; clients that cache DNS or hold dead connections keep failing until they reconnect, which is why a client with a short DNS TTL and a reconnect-on-error policy matters as much as the setting.</li>
+        <li>Failover typically completes in under a minute for cluster mode disabled; cluster mode enabled is faster because the slot map changes and cluster-aware clients follow it without DNS. <code>aws elasticache test-failover</code> rehearses it; every production cluster should have had one.</li>
+        <li>Without a replica, a node failure or a maintenance replacement is a <b>cold cache</b>: a new node, empty, with the same endpoint. That is the day of the question at the top of the page.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Memory, eviction, reserved memory</h3>
+      <ul>
+        <li><code>maxmemory</code> is set by the node type. When the data reaches it, <code>maxmemory-policy</code> decides: <code>allkeys-lru</code> evicts the least recently used key of any kind, the right choice for a pure cache; <code>volatile-lru</code>, <code>volatile-ttl</code> and <code>volatile-lfu</code> evict only keys that have a TTL, so a cache with keys without TTLs fills up and then errors; <code>noeviction</code> (the default in some parameter groups) returns <code>OOM command not allowed</code> on writes.</li>
+        <li><b>Evictions</b> above zero means the cache is smaller than the working set; the hit ratio falls and the database warms up. Either grow the node, add shards, shorten TTLs, or shrink the values.</li>
+        <li><code>reserved-memory-percent</code>, 25% by default, keeps RAM free for the <b>fork</b> that a snapshot (<code>BGSAVE</code>) and a full replica sync need: the forked child shares pages copy-on-write, and under heavy writes the copies can double memory. Set it to zero and the node swaps, then gets replaced. <code>SwapUsage</code> above a few MB is the symptom.</li>
+        <li>Big keys and big values hurt twice: a 10 MB hash blocks the single thread while it is serialised, and a <code>DEL</code> of it blocks too (use <code>UNLINK</code>). Values over a few hundred KB belong elsewhere.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Caching patterns</h3>
+      <ul>
+        <li><b>Lazy loading</b> (cache-aside): read the cache; on a miss read the database and write the cache with a TTL. Only requested data is cached, a node failure is a performance problem not a correctness one, and the price is a stale window of up to a TTL after every write, plus a miss penalty of two round trips.</li>
+        <li><b>Write-through</b>: every write to the database also writes the cache. Reads of written data are always fresh and never miss; the price is a write penalty, memory spent on data nobody reads, and a cache that is empty after a restart until something is written again. In practice it is combined with lazy loading and a TTL, so the cache self-heals.</li>
+        <li><b>Write-behind</b>: write the cache and let a worker write the database later. Fast and dangerous: a lost node loses the writes. ElastiCache does not do this for you; MemoryDB's log is the honest version.</li>
+        <li>The details that decide the production experience: a <b>TTL with jitter</b> so a batch of keys does not expire in the same second; <b>negative caching</b> of "not found" for a short TTL, because the database lookup that returns nothing is the one scripts hammer; <b>versioned keys</b> (<code>user:42:v7</code>) instead of invalidation when the schema changes; and <b>the fallback decision</b>: on a cache error, does the application read the database, or fail?</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>The stampede</h3>
+      <ul>
+        <li>One hot key expires. Every request in the next few milliseconds misses, and each one reads the database and writes the cache: a thousand identical queries for one value. Multiply by a cold node and it is every key at once. The names: <b>cache stampede</b>, <b>thundering herd</b>, <b>dog-piling</b>.</li>
+        <li><b>Request coalescing</b> (single flight): the first miss for a key takes a short lock (<code>SET key:lock 1 NX PX 2000</code>) and reads the database; the others wait for the value or serve the stale one. One database read per key per expiry.</li>
+        <li><b>Stale-while-revalidate</b>: store the value with a logical expiry inside it and a physical TTL well beyond; past the logical expiry, serve the stale value and refresh it in the background. The database sees a trickle, and a database outage degrades to stale data instead of errors.</li>
+        <li><b>Probabilistic early expiration</b>: each read refreshes the value early with a probability that rises as the TTL nears, so hot keys never expire at all. And the blunt protection that always works: a <b>rate limit or circuit breaker</b> on the database client, so excess misses fail fast instead of queueing on the one resource that cannot shed load.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>Snapshots, backups, maintenance</h3>
+      <ul>
+        <li>A <b>snapshot</b> is an RDB file written to S3: a point-in-time copy made by a forked child, daily on a schedule or on demand, kept up to 35 days, and the only way to seed a new cluster with data. It is minutes to hours old; it is not a durability story.</li>
+        <li>Take snapshots from a <b>replica</b>, not the primary: the fork costs memory and CPU on the node that does it. On small nodes without enough reserved memory, a snapshot is itself a cause of the restart.</li>
+        <li>Every cluster has a weekly <b>maintenance window</b>; engine patches and node replacements happen inside it, and a cluster without a replica goes cold then. Choose the window, subscribe to the ElastiCache events (<code>ElastiCache:NodeReplacementScheduled</code>, <code>FailoverComplete</code>) through SNS, and plan for it as you would for a deploy.</li>
+        <li>Scaling: vertical (node type) is online for replication groups with a replica, with a failover; horizontal is replicas for reads, shards for writes and memory, both online. Serverless does all of this without you, within a minute, with a configurable maximum.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>MemoryDB</h3>
+      <ul>
+        <li>The Redis / Valkey API as a <b>durable database</b>: every write is appended to a <b>Multi-AZ transaction log</b> before it is acknowledged, replicas read from the log, and a failover loses nothing. Snapshots to S3 come from the log. Reads are microseconds, writes single-digit milliseconds because of the log round trip.</li>
+        <li>Shards and replicas like cluster mode enabled: up to 500 shards, five replicas each, online scaling. Vector search is built in, which makes it a candidate for a durable vector store with sub-millisecond lookups.</li>
+        <li>The price is roughly two to three times ElastiCache for the same memory, plus $0.20 per GB written. That is the price of not needing a database behind it; a session store, a game state, a feature store, a leaderboard that must be right, or a queue of jobs that must not vanish can run on MemoryDB alone.</li>
+        <li>Decision: ElastiCache when the data has another home and losing the cache is a performance incident; MemoryDB when the data has no other home. DAX when the home is DynamoDB and you want no application change.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>OpenSearch</h3>
+      <ul>
+        <li>A distributed <b>inverted index</b>: documents go into an <b>index</b>, which is split into <b>primary shards</b>, each copied to <b>replica shards</b> on other nodes; a query fans out to one copy of every shard and merges the results. Full-text relevance, aggregations, geo, and <b>k-NN vector search</b> in one engine; it is the backbone of log analytics and site search.</li>
+        <li>Sizing is about shards: aim for 10–50 GB per shard, few shards per index, and keep the shard count per node in the hundreds, because every shard costs heap. <code>JVMMemoryPressure</code> above 75% sustained means garbage collection is eating the node; above 95% it stops indexing. Disk at 85% stops shard allocation, at 95% the index goes <b>read-only</b> (flood stage).</li>
+        <li>Managed domains: dedicated master nodes (three) for anything serious, data nodes across three AZs, <b>UltraWarm</b> and cold storage for old log indices on S3, Index State Management to roll and delete indices by age. <b>OpenSearch Serverless</b> removes the sizing and charges per OCU-hour, with a floor of two OCUs for indexing and two for search in production.</li>
+        <li>It is not a system of record: writes are near-real-time (refresh interval, 1 s by default), there are no transactions, and a cluster block turns a logging pipeline into a backlog. Data arrives by Firehose, Logstash, Data Prepper, or a DynamoDB zero-ETL integration.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>DocumentDB and Keyspaces</h3>
+      <ul>
+        <li><b>DocumentDB</b> is a MongoDB-compatible API (currently up to the 5.0 wire protocol) on an Aurora-style architecture: one writer, up to 15 readers, storage that grows to 128 TiB and replicates six ways across three AZs, point-in-time recovery, and <b>global clusters</b>. Documents up to 16 MB, flexible schema, indexes on nested fields. It is the pick when a team writes MongoDB queries and you want Aurora's operations; not every MongoDB feature exists, so test the application's query log against the compatibility list first. <b>Elastic clusters</b> shard the writes across several nodes when one writer is not enough.</li>
+        <li><b>Keyspaces</b> is a Cassandra-compatible API (CQL) run like DynamoDB: no nodes, per-request or provisioned capacity, unlimited table size, point-in-time recovery, and a row up to 1 MB. Partition key plus clustering columns, the same hot-partition rules as Day 9, lightweight transactions for conditional writes. It is for teams with Cassandra data models and drivers who want to stop running Cassandra, and for time-ordered wide rows per partition.</li>
+        <li>Both are "same API, AWS operations". The question to ask is whether the API is the point. If the application is new, DynamoDB usually wins against Keyspaces and against DocumentDB for known access patterns, and Aurora PostgreSQL with <code>jsonb</code> wins against DocumentDB when the documents are queried in ad hoc ways.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Neptune</h3>
+      <ul>
+        <li>A <b>graph database</b>: vertices and edges with properties, queried in <b>Gremlin</b> or <b>openCypher</b> (property graph) or <b>SPARQL</b> (RDF). Aurora-style storage, one writer, up to 15 readers, 128 TiB, global database. <b>Neptune Analytics</b> loads a graph into memory for algorithms like PageRank and community detection; <b>Serverless</b> scales the compute by NCU.</li>
+        <li>It wins when the question is <b>traversal</b>: who is within three hops, what is connected to this and that, which path exists. In SQL that is a self-join per hop whose cost explodes; in a graph each hop follows pointers. Fraud rings, identity resolution, knowledge graphs, recommendations, network topology, access control with inheritance.</li>
+        <li>It loses when the question is a lookup or a scan: a friends list is a DynamoDB adjacency list (<code>PK = user, SK = FRIEND#id</code>) at a fraction of the cost. Model the queries first; one or two hops over known keys is not a graph workload.</li>
+        <li>The floor is high: a db.r6g.large writer and reader is about $500 a month before storage and I/O, and Serverless has a 1 NCU minimum per instance. Bulk loads come from S3 in CSV or RDF; it is not an analytics engine for a billion-edge graph without Neptune Analytics.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Timestream</h3>
+      <ul>
+        <li><b>Timestream for LiveAnalytics</b>: serverless time-series storage with SQL and time functions. Records carry a timestamp, dimensions (device, Region) and measures; writes land in a <b>memory store</b> (retention from an hour to a year) and age into a <b>magnetic store</b> (up to 200 years) automatically, with a price per GB-hour in memory, per GB-month on magnetic, and per GB scanned by queries. Late-arriving data within the memory retention is accepted. Scheduled queries pre-aggregate for dashboards.</li>
+        <li><b>Timestream for InfluxDB</b>: managed InfluxDB on instances, for teams with the InfluxDB API, Flux and Telegraf already in place.</li>
+        <li>It wins for metrics and telemetry queried by series and time range with aggregates; it loses for anything queried by key, where DynamoDB with a device-plus-time key is cheaper, and for heavy analytics over everything, which is an S3 and Athena or Redshift job. Watch the query cost: a dashboard that scans a year of raw data every refresh is priced by the terabyte.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Redshift</h3>
+      <ul>
+        <li>A <b>columnar, massively parallel</b> data warehouse: a leader node plans a query, compute nodes each scan their slice of the columns, compressed, with <b>sort keys</b> and <b>distribution styles</b> deciding how much each node reads and whether a join needs a shuffle. Aggregates over billions of rows in seconds; single-row lookups in hundreds of milliseconds, which is why it is never behind a web request.</li>
+        <li><b>RA3</b> nodes separate compute from <b>managed storage</b> on S3 with a local SSD cache, so you size compute for the queries and pay $0.024 per GB-month for data. <b>Serverless</b> charges per RPU-second with an 8 RPU base; <b>concurrency scaling</b> adds transient clusters for queue spikes, an hour a day free; <b>Spectrum</b> queries S3 directly, <b>data sharing</b> gives other clusters and accounts live read access, and <b>zero-ETL</b> from Aurora and DynamoDB replicates tables in without a pipeline.</li>
+        <li>The lake question of Day 22 in one line: Athena when the data is in S3 and queries are occasional, Redshift when the same analysts run many queries a day over the same curated tables and want sub-second dashboards, and both when the lake is the source and Redshift is the serving layer.</li>
+        <li>Operations that bite: <code>VACUUM</code> and <code>ANALYZE</code> (mostly automatic now), workload management queues and query timeouts, disk full on DC2 nodes, and the cost of a cluster running 24 hours for a 9-to-5 team; pause it, or go serverless.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Numbers to remember</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>What</th><th>Number</th><th>Why it matters</th><th>Can it be raised?</th></tr>
+      <tr><td>Hash slots</td><td class="num">16,384</td><td><code>CRC16(key) mod 16384</code> picks the shard. One shard owns them all with cluster mode disabled; hash tags <code>{…}</code> decide what stays together.</td><td>No</td></tr>
+      <tr><td>Shards · replicas per shard</td><td class="num">500 · 5</td><td>Cluster mode enabled scales writes and memory by shards; reads by replicas. 500 nodes per cluster in all, 300 per Region by default.</td><td>Node quota by ticket</td></tr>
+      <tr><td>Failover</td><td class="num">typically &lt; 1 min</td><td>Multi-AZ promotes a replica and repoints DNS; cluster-aware clients follow the slot map faster. Writes in flight to the old primary are lost.</td><td>—</td></tr>
+      <tr><td>Reserved memory</td><td class="num">25% of RAM</td><td>Room for the fork that snapshots and replica syncs need. Set to 0 and the node swaps during a <code>BGSAVE</code> and is replaced.</td><td>Parameter group</td></tr>
+      <tr><td>Redis value · key size</td><td class="num">512 MB · 512 MB</td><td>The limit is the single thread, not the number: anything over a few hundred KB blocks every other command while it moves.</td><td>No; do not try</td></tr>
+      <tr><td>Memcached item size</td><td class="num">1 MB default</td><td><code>max_item_size</code> up to 128 MB in the parameter group; large items fragment slabs.</td><td>Parameter group</td></tr>
+      <tr><td>Connections per node</td><td class="num">65,000 (<code>maxclients</code>)</td><td>A pool per container times containers exhausts it; <code>CurrConnections</code> and <code>NewConnections</code> show it coming. TLS handshakes cost CPU on the one core.</td><td>No; pool</td></tr>
+      <tr><td>Snapshot retention</td><td class="num">up to 35 days</td><td>Automatic daily plus manual; a snapshot is minutes to hours old. Restore creates a new cluster.</td><td>Copy to S3 for longer</td></tr>
+      <tr><td>Serverless cache</td><td class="num">up to 5 TB · scales in about a minute</td><td>Pay per GB-hour and per ECPU; set a maximum to cap the bill. A doubling of traffic every few minutes is what it absorbs; a 10× step still throttles briefly.</td><td>Max by setting</td></tr>
+      <tr><td>Redis command thread</td><td class="num">1 core</td><td><code>EngineCPUUtilization</code> is the metric, not <code>CPUUtilization</code>: 100% of one core on a 16-core node reads as 6%. Scale by shards, not by bigger nodes.</td><td>Shards or replicas</td></tr>
+      <tr><td>MemoryDB</td><td class="num">500 shards · 5 replicas · log in 3 AZs</td><td>Writes acknowledged after the transaction log: single-digit ms. Snapshots from the log; failover with no data loss.</td><td>—</td></tr>
+      <tr><td>OpenSearch shard</td><td class="num">10–50 GB each · ≈ 1,000 shards per node max</td><td>Too many small shards exhaust heap; too few large ones cannot rebalance. Heap is half the RAM up to about 32 GB.</td><td>Design</td></tr>
+      <tr><td>OpenSearch JVM pressure · disk</td><td class="num">75% / 95% · 85% / 95%</td><td>Sustained 75% GC pressure slows indexing, 95% stops it; disk 85% stops allocation, 95% makes indices read-only.</td><td>Add nodes or delete</td></tr>
+      <tr><td>OpenSearch Serverless floor</td><td class="num">2 + 2 OCUs (production) · 1 + 1 (dev)</td><td>About $700 a month before data in production mode. Not a small-log-pipeline option.</td><td>—</td></tr>
+      <tr><td>DocumentDB</td><td class="num">16 MB document · 15 readers · 128 TiB · MongoDB 5.0 API</td><td>Aurora-style storage; check the compatibility list for the operators and aggregation stages the app uses.</td><td>—</td></tr>
+      <tr><td>Keyspaces</td><td class="num">1 MB row · 10 GB per partition recommended · 5,000 WCU / partition</td><td>Same hot-partition physics as DynamoDB; 35-day PITR; LWT for conditional writes.</td><td>Quotas by ticket</td></tr>
+      <tr><td>Neptune</td><td class="num">15 readers · 128 TiB · 1 NCU min (Serverless)</td><td>Reads scale by readers; the writer is one instance. Bulk load from S3.</td><td>—</td></tr>
+      <tr><td>Timestream memory store</td><td class="num">1 hour – 1 year · magnetic to 200 years</td><td>Memory-store retention decides how late data may arrive and what the fast queries cover. Query cost is per GB scanned.</td><td>Per table</td></tr>
+      <tr><td>Redshift</td><td class="num">RA3 up to 128 nodes · Serverless 8–512 RPU base · 1 h/day free concurrency scaling</td><td>Managed storage $0.024 per GB-month; pay compute only when the queries run (Serverless) or 24 h (provisioned).</td><td>By ticket</td></tr>
+      <tr><td>DAX (from Day 9)</td><td class="num">item cache 5 min · eventual reads only · 1 + 10 nodes</td><td>The no-code cache for DynamoDB; strongly consistent reads bypass it.</td><td>TTL per cluster</td></tr>
+    </table>
+  </div>
+
+  <h2>How it fails in production</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Symptom</th><th>Likely cause</th><th>How you find out</th><th>Fix</th></tr>
+      <tr><td>Cache node replaced at 03:00; database at 100% CPU, API errors for twenty minutes</td><td>No replica: the new node is empty and the database is sized for the 1% of reads that used to miss. Every miss becomes a query; retries pile up.</td><td>ElastiCache event <code>NodeReplacementComplete</code>, <code>CacheHitRate</code> at 0 then climbing, database connections and CPU pegged, p99 latency × 20.</td><td>A Multi-AZ replica; request coalescing; stale-while-revalidate; a breaker at the database's capacity; a load test that starts with a flushed cache.</td></tr>
+      <tr><td><code>Evictions</code> rising; hit ratio drifting from 98% to 85% over weeks</td><td>The working set outgrew the node; or keys are written without TTLs so nothing ages out; or <code>volatile-*</code> policy with keys that have no TTL.</td><td><code>Evictions</code> &gt; 0, <code>DatabaseMemoryUsagePercentage</code> at the ceiling, <code>CurrItems</code> flat.</td><td>TTL on every key, <code>allkeys-lru</code>, a larger node or more shards; audit with <code>redis-cli --bigkeys</code> and <code>--memkeys</code>.</td></tr>
+      <tr><td><code>OOM command not allowed when used memory &gt; 'maxmemory'</code></td><td><code>maxmemory-policy</code> is <code>noeviction</code>, or <code>volatile-lru</code> with no TTLs to evict.</td><td>Application errors on writes only; reads fine.</td><td><code>allkeys-lru</code> for a cache; for a store that must not evict, MemoryDB or a bigger node and an alarm at 80%.</td></tr>
+      <tr><td><code>SwapUsage</code> climbing, latency spikes every night, then a node replacement</td><td><code>reserved-memory-percent</code> set to 0 to "use all the memory"; the nightly snapshot's fork pushes the node into swap.</td><td><code>SwapUsage</code> &gt; 50 MB, spikes aligned with the snapshot window, <code>FreeableMemory</code> near zero.</td><td>Reserve 25%; take snapshots from a replica; size for the data plus the fork.</td></tr>
+      <tr><td>Latency up, <code>CPUUtilization</code> 8%, <code>EngineCPUUtilization</code> 98%</td><td>Redis commands run on one core; the node's 16 cores are idle. Usually a few expensive commands: <code>KEYS *</code>, <code>SMEMBERS</code> on a huge set, Lua loops, big <code>MGET</code>s.</td><td><code>SLOWLOG GET 25</code> shows the commands; <code>EngineCPUUtilization</code> is the metric to alarm on.</td><td>Replace <code>KEYS</code> with <code>SCAN</code>, big sets with paged structures, <code>DEL</code> with <code>UNLINK</code>; then add shards for write CPU and replicas for read CPU.</td></tr>
+      <tr><td>One shard at 100% while the others idle</td><td>A hot key, or a hash tag that puts a whole tenant's keys on one slot, or a key pattern with few distinct values.</td><td>Per-node metrics diverge; <code>redis-cli --hotkeys</code> (needs an LFU policy) names the key.</td><td>Split the hot key (<code>key:{0–9}</code>), read it from replicas, cache it in process for a second, or narrow the hash tag.</td></tr>
+      <tr><td><code>CROSSSLOT Keys in request don't hash to the same slot</code> after enabling cluster mode</td><td><code>MGET</code>, <code>MSET</code>, transactions, Lua scripts, <code>SUNION</code> across keys on different shards.</td><td>Errors on exactly the multi-key calls; single-key calls fine.</td><td>Hash tags for keys that belong together; split the rest into per-shard pipelines; a cluster-aware client that does it for you.</td></tr>
+      <tr><td>Failover happened, the cluster is healthy, the application errors for ten minutes</td><td>Clients cached the old primary's IP (JVM DNS cache, a DNS TTL override) or hold dead connections with no timeout.</td><td><code>FailoverComplete</code> event at minute 0; application <code>READONLY You can't write against a read only replica</code> or connection timeouts until restarts.</td><td>Short DNS TTL in the client, connect and read timeouts of a second, reconnect on <code>READONLY</code>; or cluster mode with a cluster-aware client.</td></tr>
+      <tr><td>Stale data: a user changes their email and sees the old one for an hour</td><td>Lazy loading with a one-hour TTL and no invalidation on write.</td><td>Reproducible; the write path never touches the cache.</td><td>Delete or write-through the key on write, versioned keys, or a TTL that matches the staleness the product accepts.</td></tr>
+      <tr><td>The database is hammered for a key that does not exist</td><td>A scraper or a bug asks for ids that return nothing; a miss is never cached.</td><td>Database rows read ≈ 0 with queries per second high; cache hit ratio normal.</td><td>Negative caching: store a sentinel for "not found" with a short TTL; rate-limit at the edge.</td></tr>
+      <tr><td>Every hour at :00, a burst of database load</td><td>Keys written by a batch at the same time expire together (TTL 3600).</td><td>Miss rate spikes aligned to the clock; the batch job's schedule.</td><td>Jitter the TTL by ±10%; refresh hot keys early.</td></tr>
+      <tr><td>Memcached: a quarter of requests miss after a node reboot; another quarter after the client restarts</td><td>No replication: the node's keys are gone; and a client without consistent hashing remaps every key when the node list changes.</td><td><code>GetMisses</code> up on all nodes after a client deploy; one node's <code>CurrItems</code> at zero after a reboot.</td><td>Consistent hashing with auto discovery; accept the loss or move to Redis / Valkey with replicas.</td></tr>
+      <tr><td>Serverless cache throttles during a flash crowd</td><td>Traffic rose faster than the scaling step: it doubles smoothly over minutes, not instantly 10×.</td><td><code>ThrottledCmds</code> and elevated latency for a few minutes.</td><td>Pre-warm with a load test or set a higher minimum via the node-based alternative for a planned event.</td></tr>
+      <tr><td>OpenSearch: writes rejected, <code>cluster_block_exception</code>, indices read-only</td><td>Disk crossed the 95% flood-stage watermark; or JVM pressure above 95%; or the cluster is red after a node loss with no replicas.</td><td><code>ClusterStatus.red</code>, <code>ClusterIndexWritesBlocked</code>, <code>FreeStorageSpace</code>, <code>JVMMemoryPressure</code>.</td><td>Delete or roll old indices, add storage or nodes, then clear the block (<code>index.blocks.read_only_allow_delete</code>); replicas and ISM policies so it does not recur.</td></tr>
+      <tr><td>DocumentDB migration passes tests and fails in production on one query</td><td>An unsupported operator or aggregation stage, or an index type (text, sparse) that does not exist.</td><td>The application's query log against the compatibility list; the <code>profiler</code> on DocumentDB.</td><td>Rewrite the query, or add the index DocumentDB does support; run the real query log in the proof of concept.</td></tr>
+      <tr><td>Redshift dashboards slow every morning; queries queue</td><td>ETL and dashboards share one WLM queue; a cluster sized for the average; no result caching because the tables change every minute.</td><td><code>WLMQueueWaitTime</code>, <code>QueriesCompletedPerSecond</code>, the SYS_QUERY_HISTORY view.</td><td>Separate queues, concurrency scaling, materialised views for the dashboards, or Serverless with a higher base RPU in the morning.</td></tr>
+    </table>
+  </div>
+
+  <h2>What drives the bill</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Item</th><th>How it is charged</th><th>Figure (us-east-1, list)</th><th>How to pay less</th></tr>
+      <tr><td><b>ElastiCache nodes</b></td><td>Per node-hour, every node including replicas; Valkey about 20% below Redis OSS.</td><td class="num">cache.t4g.micro $0.016 · cache.m7g.large $0.158 · cache.r7g.large $0.219 · r7g.xlarge $0.438 per h</td><td>Valkey; reserved nodes (1 year ≈ 35–40% off, 3 years ≈ 55–60%); right-size by <code>DatabaseMemoryUsagePercentage</code>; shorter TTLs and smaller values before bigger nodes.</td></tr>
+      <tr><td><b>ElastiCache Serverless</b></td><td>Per GB-hour stored (1 GB minimum for Redis, 100 MB for Valkey) plus ECPUs.</td><td class="num">$0.125 per GB-h · $0.0034 per million ECPUs</td><td>Set a usage maximum; it wins for small or spiky caches and loses to reserved nodes for large steady ones.</td></tr>
+      <tr><td><b>Snapshots and transfer</b></td><td>Snapshot storage beyond the free copy per cluster; cross-AZ traffic between the app and the cache.</td><td class="num">$0.085 per GB-month · $0.01 per GB each way across AZs</td><td>Few manual snapshots; keep the app's reads on the replica in its own AZ (reader endpoint is zone-unaware, so route yourself if the volume is large). Replication traffic itself is free.</td></tr>
+      <tr><td><b>MemoryDB</b></td><td>Per node-hour plus data written to the log.</td><td class="num">db.r7g.large ≈ $0.32 per h · $0.20 per GB written</td><td>Only for data with no other home; shard count for memory, not for CPU.</td></tr>
+      <tr><td><b>OpenSearch</b></td><td>Per instance-hour plus EBS; UltraWarm and cold tiers per GB; Serverless per OCU-hour.</td><td class="num">r7g.large.search ≈ $0.19 per h · UltraWarm storage $0.024 per GB-month · OCU $0.24 per h</td><td>Hot for 7 days, UltraWarm for 90, delete after; ISM policies; gp3 instead of gp2; three small masters not three large.</td></tr>
+      <tr><td><b>DocumentDB</b></td><td>Instance-hours, storage, I/O; or I/O-optimised.</td><td class="num">db.r6g.large $0.327 per h · storage $0.10 per GB-month · I/O $0.20 per million</td><td>I/O-optimised when I/O is over a quarter of the bill; stop the dev cluster; reserved instances.</td></tr>
+      <tr><td><b>Neptune</b></td><td>Instance-hours or NCU-hours, storage, I/O.</td><td class="num">db.r6g.large ≈ $0.35 per h · Serverless $0.16 per NCU-h</td><td>Serverless with a low minimum for bursty graphs; one reader, not three, until the metrics say otherwise.</td></tr>
+      <tr><td><b>Keyspaces</b></td><td>Per request unit or provisioned unit, storage, PITR.</td><td class="num">$1.45 per million WRU · $0.29 per million RRU · $0.30 per GB-month</td><td>Roughly twice DynamoDB per request: use it for the API, not the price.</td></tr>
+      <tr><td><b>Timestream</b></td><td>Writes per GB, memory store per GB-hour, magnetic per GB-month, queries per GB scanned.</td><td class="num">writes $0.50 per million 1 KB records · memory $0.036 per GB-h · magnetic $0.03 per GB-month · query $0.01 per GB</td><td>Short memory retention; batch records into multi-measure rows; scheduled queries for dashboards instead of raw scans.</td></tr>
+      <tr><td><b>Redshift</b></td><td>Node-hours or RPU-hours, managed storage, Spectrum per TB scanned.</td><td class="num">ra3.xlplus $1.086 per h · RPU $0.375 per h (8 minimum) · storage $0.024 per GB-month · Spectrum $5 per TB</td><td>Pause provisioned clusters nights and weekends; Serverless for intermittent use; reserved nodes (up to 75% off) for 24 × 7; sort keys so Spectrum and scans read less.</td></tr>
+      <tr><td><b>The hidden multipliers</b></td><td>A replica per shard doubles the cache bill; cross-AZ reads add cents per GB; a 10 KB value cached for a million users is 10 GB plus overhead; one hot dashboard scanning a year of Timestream or Spectrum per refresh.</td><td class="num">often 2–4× the naive estimate</td><td>Price the memory from <code>--memkeys</code>, not from a guess; cap serverless; alarm on per-GB-scanned services.</td></tr>
+    </table>
+  </div>
+
+  <h2>Which cache? ElastiCache, DAX, MemoryDB, or in-process</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Property</th><th>In-process (per instance)</th><th>ElastiCache Redis / Valkey</th><th>ElastiCache Memcached</th><th>DAX</th><th>MemoryDB</th></tr>
+      <tr><td>What it fronts</td><td>anything</td><td>anything</td><td>anything</td><td>DynamoDB only</td><td>nothing: it is the store</td></tr>
+      <tr><td>Latency</td><td>nanoseconds</td><td>sub-ms</td><td>sub-ms</td><td>microseconds</td><td>µs reads · ms writes</td></tr>
+      <tr><td>Shared across instances</td><td>no: N copies, N misses</td><td>yes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+      <tr><td>Survives a node loss</td><td>no</td><td>with replicas, yes (async)</td><td>no</td><td>yes (replicas)</td><td>yes, no lost writes</td></tr>
+      <tr><td>Data structures</td><td>whatever you code</td><td>rich</td><td>strings</td><td>DynamoDB items</td><td>rich</td></tr>
+      <tr><td>Application change</td><td>code</td><td>code: a client and a pattern</td><td>code</td><td>none: swap the SDK client</td><td>code, as a database</td></tr>
+      <tr><td>Consistency</td><td>stale per instance</td><td>as your pattern</td><td>as your pattern</td><td>eventual only</td><td>strong on the primary</td></tr>
+      <tr><td>Cost shape</td><td>free</td><td>per node-hour or serverless</td><td>per node-hour</td><td>per node-hour, 3 nodes min</td><td>2–3× ElastiCache + writes</td></tr>
+      <tr><td>Use it for</td><td>config, feature flags, a hot item for a second</td><td>sessions, rate limits, leaderboards, cache-aside for any DB</td><td>a large flat cache of big values</td><td>read-heavy DynamoDB with hot items, no code change</td><td>session store, game state, durable leaderboard, vector store</td></tr>
+    </table>
+  </div>
+
+  <h2>Which purpose-built database?</h2>
+  <div class="card table-wrap">
+    <table>
+      <tr><th>Workload</th><th>Pick</th><th>Why</th><th>What would change your mind</th></tr>
+      <tr><td>Product search with facets and relevance; log analytics; vector similarity</td><td class="num">OpenSearch</td><td>Inverted index with scoring, aggregations and k-NN; dashboards; ingestion from Firehose or DynamoDB zero-ETL.</td><td>Only exact-match lookups: DynamoDB. Logs you query once a month: S3 and Athena.</td></tr>
+      <tr><td>MongoDB application the team wants to stop operating</td><td class="num">DocumentDB</td><td>Same drivers and queries, Aurora-style operations, PITR, global clusters.</td><td>Unsupported operators in the query log: MongoDB Atlas on AWS, or rewrite to Aurora <code>jsonb</code>.</td></tr>
+      <tr><td>New application with JSON documents and known access patterns</td><td class="num">DynamoDB</td><td>Cheaper, serverless, the patterns map to keys. Documents are just items.</td><td>Ad hoc queries over nested fields from day one: DocumentDB or Aurora PostgreSQL.</td></tr>
+      <tr><td>Fraud rings, identity graph, "who is connected to whom within 3 hops"</td><td class="num">Neptune</td><td>Traversals are pointer-chasing, not joins; Gremlin or openCypher express the question.</td><td>One or two hops over known keys: a DynamoDB adjacency list. Whole-graph algorithms: Neptune Analytics.</td></tr>
+      <tr><td>Cassandra application; wide rows by partition and time, very high write rate</td><td class="num">Keyspaces</td><td>CQL and the Cassandra drivers with no nodes to run; unlimited table size.</td><td>A new application: DynamoDB is half the price per request with the same model.</td></tr>
+      <tr><td>Metrics and IoT telemetry queried by series and time window</td><td class="num">Timestream</td><td>Tiered memory and magnetic storage, SQL with time functions, scheduled aggregates.</td><td>Reads by device key only: DynamoDB with device + time keys. Existing InfluxDB tooling: Timestream for InfluxDB.</td></tr>
+      <tr><td>Analytics over terabytes, many analysts, dashboards with sub-second expectations</td><td class="num">Redshift</td><td>Columnar MPP, result caching, data sharing, zero-ETL from the operational stores.</td><td>Occasional queries over data already in S3: Athena. Under 100 GB with a few users: Aurora read replica.</td></tr>
+      <tr><td>Session store or leaderboard that must survive a restart</td><td class="num">MemoryDB</td><td>Redis API with a durable Multi-AZ log; no database behind it to fall over.</td><td>A loss is acceptable for a performance blip: ElastiCache at a third of the price.</td></tr>
+      <tr><td>Read-heavy DynamoDB with a few hot items</td><td class="num">DAX</td><td>Microsecond item cache, no application change, write-through.</td><td>Strongly consistent reads needed, or other stores to cache too: ElastiCache.</td></tr>
+      <tr><td>"We need a cache" with no measurement</td><td class="num">Measure first</td><td>A cache hides a slow query that an index would fix for free; a 60% hit ratio is a second system for a 2× gain.</td><td>Performance Insights shows a read pattern with a 95%+ repeat rate: cache it, lazy loading, jittered TTL, replica.</td></tr>
+    </table>
+  </div>
+
+  <h2>Hands-on lab</h2>
+  <div class="card lab">
+    <p><b>Goal:</b> build a Multi-AZ Valkey replication group, put a lazy-loading cache in front of a DynamoDB table and measure the hit ratio, fill the node until it evicts and see both eviction policies, force a failover and time the window your clients would see, reproduce a stampede and stop it with a lock, read the metrics that matter, hit <code>CROSSSLOT</code> on a cluster-mode-enabled cluster and fix it with a hash tag, and compare the serverless option. Everything runs from a <b>CloudShell VPC environment</b> in the same subnet, so nothing needs an instance.</p>
+    <p><b>Cost:</b> under a dollar if you finish in a sitting. Two <code>cache.t4g.micro</code> nodes are about 3 cents an hour, the cluster-mode cluster the same, the serverless cache about a cent an hour at this size, and the DynamoDB table is on-demand with a few thousand requests. Delete everything at the end: a forgotten replication group is $25 a month.</p>
+    <ol>
+      <li>Network. Use the default VPC: a subnet group across two AZs and a security group that allows 6379 from itself (CloudShell will sit in the same group). Then the replication group: Valkey, cluster mode disabled, one primary and one replica, Multi-AZ with automatic failover, TLS in transit.
+<pre class="code">export AWS_DEFAULT_REGION=ap-south-1
+VPC=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true --query 'Vpcs[0].VpcId' --output text)
+SUBS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC --query 'Subnets[0:2].SubnetId' --output text)
+SG=$(aws ec2 create-security-group --group-name day10-cache --description day10 --vpc-id $VPC --query GroupId --output text)
+aws ec2 authorize-security-group-ingress --group-id $SG --protocol tcp --port 6379 --source-group $SG
+aws elasticache create-cache-subnet-group --cache-subnet-group-name day10 \
+  --cache-subnet-group-description day10 --subnet-ids $SUBS
+aws elasticache create-replication-group --replication-group-id day10-valkey \
+  --replication-group-description "day10 lazy loading" --engine valkey --engine-version 8.0 \
+  --cache-node-type cache.t4g.micro --num-cache-clusters 2 \
+  --multi-az-enabled --automatic-failover-enabled --transit-encryption-enabled \
+  --cache-subnet-group-name day10 --security-group-ids $SG
+aws elasticache wait replication-group-available --replication-group-id day10-valkey
+aws elasticache describe-replication-groups --replication-group-id day10-valkey \
+  --query 'ReplicationGroups[0].[Status,MultiAZ,AutomaticFailover,NodeGroups[0].PrimaryEndpoint.Address,NodeGroups[0].ReaderEndpoint.Address,NodeGroups[0].NodeGroupMembers[*].[CacheClusterId,PreferredAvailabilityZone,CurrentRole]]'</pre>
+        Creation takes about ten minutes. Note the two endpoints and the two nodes in two AZs with roles <code>primary</code> and <code>replica</code>. While you wait, create the DynamoDB table for step 3.</li>
+
+      <li>Connect. In the console open CloudShell, choose <b>Create VPC environment</b>, pick the default VPC, one of the two subnets and the <code>day10-cache</code> security group. In that shell install a client and talk to the primary endpoint. The CLI you ran step 1 in works here too.
+<pre class="code">sudo dnf install -y redis6 python3-pip &gt;/dev/null && pip3 install -q redis boto3
+export AWS_DEFAULT_REGION=ap-south-1
+PRI=$(aws elasticache describe-replication-groups --replication-group-id day10-valkey \
+  --query 'ReplicationGroups[0].NodeGroups[0].PrimaryEndpoint.Address' --output text)
+RDR=$(aws elasticache describe-replication-groups --replication-group-id day10-valkey \
+  --query 'ReplicationGroups[0].NodeGroups[0].ReaderEndpoint.Address' --output text)
+alias vk="redis6-cli --tls -h $PRI"; alias vkr="redis6-cli --tls -h $RDR"
+vk PING
+vk SET user:42:email "a@example.com" EX 60
+vk TTL user:42:email
+vkr GET user:42:email                       # read from the replica: replicated within ms
+vkr SET x 1                                 # READONLY: replicas do not take writes
+vk INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
+vk CONFIG GET reserved-memory-percent 2&gt;/dev/null || aws elasticache describe-cache-parameters \
+  --cache-parameter-group-name default.valkey8 --query "Parameters[?ParameterName=='reserved-memory-percent'].ParameterValue" --output text</pre>
+        <code>maxmemory_human</code> is what a t4g.micro gives you after the 25% reservation. Note the policy in the default group.</li>
+
+      <li>Lazy loading against DynamoDB. Create a products table with 1,000 items, then run a cache-aside reader that asks for products with a skew (a few are hot). The first run is cold; the second shows the hit ratio the TTL buys. The reader prints the cache hits, the DynamoDB reads, and the latency of each path.
+<pre class="code">aws dynamodb create-table --table-name day10-products --billing-mode PAY_PER_REQUEST \
+  --attribute-definitions AttributeName=id,AttributeType=S --key-schema AttributeName=id,KeyType=HASH
+aws dynamodb wait table-exists --table-name day10-products
+python3 - &lt;&lt;'PY'
+import boto3, json
+t = boto3.resource('dynamodb').Table('day10-products')
+with t.batch_writer() as b:
+    for i in range(1000):
+        b.put_item(Item={'id': f'p{i}', 'name': f'Product {i}', 'price': i, 'desc': 'x' * 500})
+print('loaded')
+PY
+cat &gt; cache_aside.py &lt;&lt;'PY'
+import boto3, json, os, random, redis, time, sys
+r = redis.Redis(host=os.environ['PRI'], port=6379, ssl=True, socket_timeout=1)
+t = boto3.resource('dynamodb').Table('day10-products')
+TTL = int(sys.argv[1]) if len(sys.argv) &gt; 1 else 300
+hits = misses = 0; th = []; tm = []
+def get_product(pid):
+    global hits, misses
+    key = f'product:{pid}'
+    t0 = time.perf_counter(); v = r.get(key)
+    if v is not None:
+        hits += 1; th.append(time.perf_counter() - t0); return json.loads(v)
+    misses += 1
+    item = t.get_item(Key={'id': pid}).get('Item')
+    r.set(key, json.dumps(item, default=str), ex=TTL + random.randint(0, TTL // 10))   # TTL with jitter
+    tm.append(time.perf_counter() - t0); return item
+for _ in range(3000):
+    pid = f'p{random.randint(0, 19)}' if random.random() &lt; 0.8 else f'p{random.randint(0, 999)}'   # 80% of reads on 20 keys
+    get_product(pid)
+print(f'hits {hits}  misses {misses}  hit ratio {hits/(hits+misses):.1%}')
+if th: print(f'cache hit  avg {sum(th)/len(th)*1000:.2f} ms')
+if tm: print(f'cache miss avg {sum(tm)/len(tm)*1000:.2f} ms  (DynamoDB read + SET)')
+PY
+python3 cache_aside.py 300
+python3 cache_aside.py 300
+vk DBSIZE</pre>
+        Second run: the 20 hot keys are all hits, the long tail misses once per key per TTL. Change the TTL to 5 and run again: the hit ratio falls to what the TTL allows, which is the lazy-loading model in the second simulator. <code>DBSIZE</code> is the memory the cache is actually using: keys that were read, nothing else.</li>
+
+      <li>Fill it until it evicts. Write 2 KB values in a loop until the node is full, under <code>noeviction</code> first (writes fail) and then <code>allkeys-lru</code> (old keys go). The parameter is dynamic, so the change applies without a restart.
+<pre class="code">aws elasticache create-cache-parameter-group --cache-parameter-group-name day10-noevict \
+  --cache-parameter-group-family valkey8 --description "day10 noeviction"
+aws elasticache modify-cache-parameter-group --cache-parameter-group-name day10-noevict \
+  --parameter-name-values ParameterName=maxmemory-policy,ParameterValue=noeviction
+aws elasticache modify-replication-group --replication-group-id day10-valkey \
+  --cache-parameter-group-name day10-noevict --apply-immediately
+sleep 60; vk CONFIG GET maxmemory-policy
+python3 - &lt;&lt;'PY'
+import os, redis
+r = redis.Redis(host=os.environ['PRI'], port=6379, ssl=True)
+v = 'x' * 2048; i = 0
+try:
+    while True:
+        r.set(f'fill:{i}', v); i += 1
+except redis.exceptions.ResponseError as e:
+    print(f'after {i} keys: {e}')
+PY
+vk INFO stats | grep evicted_keys
+aws elasticache modify-cache-parameter-group --cache-parameter-group-name day10-noevict \
+  --parameter-name-values ParameterName=maxmemory-policy,ParameterValue=allkeys-lru
+sleep 60; vk CONFIG GET maxmemory-policy
+python3 -c "
+import os, redis; r = redis.Redis(host=os.environ['PRI'], port=6379, ssl=True)
+for i in range(20000): r.set(f'fill2:{i}', 'y' * 2048)
+print('20000 more writes accepted')"
+vk INFO stats | grep evicted_keys
+vk EXISTS fill:0 fill:1 fill:2                 # the oldest keys are gone
+vk GET product:p0 | head -c 60; echo         # and so may be your product cache</pre>
+        Under <code>noeviction</code> the write fails with <code>OOM command not allowed</code>; under <code>allkeys-lru</code> it succeeds and <code>evicted_keys</code> climbs. The cache that cannot evict errors; the cache that can silently loses the product keys you loaded in step 3. Both are the "cache smaller than the working set" problem; the fix is a TTL on everything and a node sized from <code>used_memory</code>. Flush before the next step: <code>vk FLUSHALL</code>.</li>
+
+      <li>Force a failover and time it. In a second CloudShell tab, run a loop that writes and reads through the primary endpoint five times a second and prints every error; in the first, trigger a test failover. Count the seconds of errors and the <code>READONLY</code> replies: that is what every client in production would see.
+<pre class="code"># tab 2
+python3 - &lt;&lt;'PY'
+import os, redis, time
+r = redis.Redis(host=os.environ['PRI'], port=6379, ssl=True, socket_timeout=1, socket_connect_timeout=1)
+err = 0; first = None; last = None
+for i in range(600):
+    try:
+        r.set('hb', i); r.get('hb'); 
+        if first and not last: last = time.time(); print(f'recovered after {last-first:.1f} s, {err} failed calls')
+    except Exception as e:
+        err += 1; first = first or time.time(); print(f'{time.strftime("%H:%M:%S")} {type(e).__name__}: {str(e)[:60]}')
+        r = redis.Redis(host=os.environ['PRI'], port=6379, ssl=True, socket_timeout=1, socket_connect_timeout=1)  # reconnect: DNS re-resolved
+    time.sleep(0.2)
+PY
+# tab 1
+aws elasticache test-failover --replication-group-id day10-valkey --node-group-id 0001
+aws elasticache describe-events --source-identifier day10-valkey --source-type replication-group \
+  --duration 30 --query 'Events[*].[Date,Message]' --output table
+aws elasticache describe-replication-groups --replication-group-id day10-valkey \
+  --query 'ReplicationGroups[0].NodeGroups[0].NodeGroupMembers[*].[CacheClusterId,CurrentRole]'</pre>
+        The events show <code>Test Failover API called</code>, then <code>Failover from primary node … to replica node … completed</code>; the roles have swapped. The loop shows a window of connection errors, possibly a few <code>READONLY</code> replies while DNS still points at the old primary, then recovery. The data survived: <code>vk GET hb</code>. Now remove the reconnect line from the loop and run it again: a client that keeps its dead connection never recovers.</li>
+
+      <li>The stampede, and the lock that stops it. Fifty threads miss the same key at the same moment. Without coalescing, every thread reads DynamoDB; with a <code>SET NX</code> lock, one does and the others wait for the value.
+<pre class="code">cat &gt; stampede.py &lt;&lt;'PY'
+import boto3, json, os, redis, sys, threading, time
+r = redis.Redis(host=os.environ['PRI'], port=6379, ssl=True)
+t = boto3.resource('dynamodb').Table('day10-products')
+LOCK = sys.argv[1] == 'lock'; db_reads = 0; lk = threading.Lock()
+def read_db(pid):
+    global db_reads
+    with lk: db_reads += 1
+    time.sleep(0.05)                                   # a 50 ms query
+    return t.get_item(Key={'id': pid})['Item']
+def get(pid):
+    key = f'product:{pid}'
+    v = r.get(key)
+    if v: return json.loads(v)
+    if LOCK:
+        if r.set(key + ':lock', 1, nx=True, px=2000):   # single flight
+            item = read_db(pid); r.set(key, json.dumps(item, default=str), ex=300); r.delete(key + ':lock'); return item
+        for _ in range(100):                             # the others wait for the value
+            time.sleep(0.01); v = r.get(key)
+            if v: return json.loads(v)
+    item = read_db(pid); r.set(key, json.dumps(item, default=str), ex=300); return item
+r.delete('product:p7', 'product:p7:lock')
+th = [threading.Thread(target=get, args=('p7',)) for _ in range(50)]
+t0 = time.time(); [x.start() for x in th]; [x.join() for x in th]
+print(f'{sys.argv[1]}: 50 concurrent misses → {db_reads} DynamoDB reads in {time.time()-t0:.2f} s')
+PY
+python3 stampede.py nolock
+python3 stampede.py lock</pre>
+        Fifty reads against one. Scale that to every key on a cold node and you have the difference between a database that survives a restart and one that does not. The waiting threads could instead return a stale copy kept under a second key, which is stale-while-revalidate.</li>
+
+      <li>The metrics. Pull the four that decide whether the cache is healthy, for the primary node, over the last hour. <code>CacheHitRate</code> should show the step-3 runs, <code>Evictions</code> the step-4 fill, <code>EngineCPUUtilization</code> stays low, and <code>ReplicationLag</code> is milliseconds.
+<pre class="code">NODE=$(aws elasticache describe-replication-groups --replication-group-id day10-valkey \
+  --query 'ReplicationGroups[0].NodeGroups[0].NodeGroupMembers[?CurrentRole==`primary`].CacheClusterId' --output text)
+for M in CacheHitRate Evictions EngineCPUUtilization ReplicationLag DatabaseMemoryUsagePercentage CurrConnections; do
+  echo "== $M"
+  aws cloudwatch get-metric-statistics --namespace AWS/ElastiCache --metric-name $M \
+    --dimensions Name=CacheClusterId,Value=$NODE-001 --statistics Average Maximum --period 300 \
+    --start-time $(date -u -d '-1 hour' +%FT%TZ) --end-time $(date -u +%FT%TZ) \
+    --query 'sort_by(Datapoints,&amp;Timestamp)[*].[Timestamp,Average,Maximum]' --output text
+done</pre>
+        If the cluster id already ends in <code>-001</code>, drop the suffix. These six metrics plus <code>SwapUsage</code> are the alarm set for every production cache: hit rate below the design value, evictions above zero, engine CPU above 80%, swap above 50 MB.</li>
+
+      <li>Cluster mode enabled. Create a two-shard Valkey cluster with no replicas (lab only), connect with <code>-c</code> so the client follows <code>MOVED</code>, and see which commands need hash tags.
+<pre class="code">aws elasticache create-replication-group --replication-group-id day10-cme \
+  --replication-group-description "day10 cluster mode" --engine valkey --engine-version 8.0 \
+  --cache-node-type cache.t4g.micro --num-node-groups 2 --replicas-per-node-group 0 \
+  --cache-parameter-group-name default.valkey8.cluster.on --transit-encryption-enabled \
+  --cache-subnet-group-name day10 --security-group-ids $SG
+aws elasticache wait replication-group-available --replication-group-id day10-cme
+CFG=$(aws elasticache describe-replication-groups --replication-group-id day10-cme \
+  --query 'ReplicationGroups[0].ConfigurationEndpoint.Address' --output text)
+redis6-cli --tls -c -h $CFG CLUSTER SLOTS
+redis6-cli --tls -c -h $CFG SET user:1 a            # → Redirected to slot …
+redis6-cli --tls -c -h $CFG SET user:2 b
+redis6-cli --tls -c -h $CFG MGET user:1 user:2      # CROSSSLOT if they landed on different shards
+redis6-cli --tls -c -h $CFG MSET {user:3}:name c {user:3}:cart d
+redis6-cli --tls -c -h $CFG MGET {user:3}:name {user:3}:cart   # same slot: works
+redis6-cli --tls -h $CFG CLUSTER KEYSLOT user:1; redis6-cli --tls -h $CFG CLUSTER KEYSLOT '{user:3}:name'</pre>
+        The slot map has two ranges, one per shard. The hash tag makes the slot depend on <code>user:3</code> only, so every key of that user sits on one shard and multi-key commands work. Online resharding is <code>modify-replication-group-shard-configuration --node-group-count 3 --apply-immediately</code>; try it and watch slots move with <code>CLUSTER SLOTS</code> while reads continue.</li>
+
+      <li>Serverless. Create a serverless Valkey cache, point the step-3 script at it, and look at the price shape: GB-hours of data plus ECPUs, no node to size, no replica to pay for, and a maximum you set.
+<pre class="code">aws elasticache create-serverless-cache --serverless-cache-name day10-sls --engine valkey \
+  --subnet-ids $SUBS --security-group-ids $SG \
+  --cache-usage-limits 'DataStorage={Maximum=1,Unit=GB},ECPUPerSecond={Maximum=5000}'
+until [ "$(aws elasticache describe-serverless-caches --serverless-cache-name day10-sls --query 'ServerlessCaches[0].Status' --output text)" = available ]; do sleep 15; done
+SLS=$(aws elasticache describe-serverless-caches --serverless-cache-name day10-sls --query 'ServerlessCaches[0].Endpoint.Address' --output text)
+PRI=$SLS python3 cache_aside.py 300
+redis6-cli --tls -h $SLS DBSIZE
+aws cloudwatch get-metric-statistics --namespace AWS/ElastiCache --metric-name ElastiCacheProcessingUnits \
+  --dimensions Name=clusterId,Value=day10-sls --statistics Sum --period 300 \
+  --start-time $(date -u -d '-30 min' +%FT%TZ) --end-time $(date -u +%FT%TZ) --query 'Datapoints[*].[Timestamp,Sum]' --output text</pre>
+        Serverless is cluster mode enabled underneath, so the same hash-tag rules apply, and the client library must support it. The ECPU count is your bill: a cache-aside read of a 1 KB value is about one ECPU.</li>
+
+      <li>Cleanup. Delete the serverless cache, both replication groups, the parameter group, the subnet group, the security group and the table. Close the CloudShell VPC environment first, since it holds an ENI in the security group.
+<pre class="code">aws elasticache delete-serverless-cache --serverless-cache-name day10-sls
+aws elasticache delete-replication-group --replication-group-id day10-cme
+aws elasticache delete-replication-group --replication-group-id day10-valkey
+aws elasticache wait replication-group-deleted --replication-group-id day10-valkey
+aws elasticache wait replication-group-deleted --replication-group-id day10-cme
+aws elasticache delete-cache-parameter-group --cache-parameter-group-name day10-noevict
+aws elasticache delete-cache-subnet-group --cache-subnet-group-name day10
+aws dynamodb delete-table --table-name day10-products
+aws ec2 delete-security-group --group-id $SG
+aws elasticache describe-replication-groups --query 'ReplicationGroups[*].ReplicationGroupId'
+aws elasticache describe-serverless-caches --query 'ServerlessCaches[*].ServerlessCacheName'</pre>
+        Both lists should be empty. Then the notes: which failover window did you measure, what did the stampede test show, and which eviction policy does your production parameter group use?</li>
+    </ol>
+  </div>
+
+  <h2>Interview questions</h2>
+  <details><summary>The cache node restarts and the database falls over. Why, and how do you prevent it?</summary><p>The why is arithmetic. A cache with a 99% hit ratio lets you run a database sized for one read in a hundred, and that is exactly what most teams do, because the cheap database is the point of the cache. When the node restarts it comes back empty, and for the next minutes every read is a miss: the database sees a hundred times its normal load. It cannot shed it: connections fill, queries queue, latency climbs, clients time out and retry, which adds more load, and the cache refills slowly because each miss now takes seconds instead of milliseconds, so the storm lasts longer than the working set would suggest. It is not the cache that failed; it is the database that was never sized for its miss rate. Prevention is in layers. First, the cache should not go cold: a replica in another AZ with Multi-AZ automatic failover means a restart promotes a warm replica in under a minute, and a cluster-mode cluster loses a shard's share, not everything. Second, the application must not amplify a miss: request coalescing so that one database read serves every concurrent miss for the same key, TTLs with jitter so keys never expire together, and stale-while-revalidate so a stale value is served while one refresh runs in the background. Third, the database must be protected from the storm that gets through: a rate limit or circuit breaker on the database client at the capacity you measured, so excess misses fail fast and the database keeps serving, and a database with enough headroom for the miss rate you decided to accept, say ten times normal rather than a hundred. Fourth, warm the cache on purpose after a replacement, from a snapshot or a list of hot keys, and rehearse with a test failover and a load test that starts flushed. And the honest conclusion: if the business cannot survive the cache being lost, it is not a cache but a database, and it should be MemoryDB or DAX, which fail over warm. I would end by saying the monitoring: alarm on hit ratio, evictions and swap, because a cache that is slowly shrinking is the same outage in slow motion.</p></details>
+  <details><summary>Redis or Memcached? Give the real reasons, not the feature list.</summary><p>Memcached is a multi-threaded cache of strings with no replication, no persistence and no failover; the client hashes keys across nodes, so a node loss costs that node's keys, and a change in the node list reshuffles keys unless the client uses consistent hashing. It is simple and it uses every core, which is why it remains the answer for one case: a large flat cache of big values, where the loss of a node is a brief dip in hit ratio and throughput per node matters more than anything else. Redis OSS or Valkey is single-threaded for commands, which caps one shard at one core, but it replicates, snapshots, fails over, and has data structures: sorted sets for leaderboards, hashes for objects, streams for queues, atomic counters with expiry for rate limits, Lua for compound operations. Those features turn it from a cache into the shared state of a stateless fleet. So the real question is whether losing the node is acceptable and whether you need anything but GET and SET. For almost every team the answer is Redis or Valkey with cluster mode enabled and a replica per shard, and Valkey specifically because it is the engine AWS prices lower and develops. I would say what neither is: a database. ElastiCache Redis has no append-only log and its snapshot is minutes old; if the data has no other home, MemoryDB.</p></details>
+  <details><summary>Cluster mode enabled or disabled? What changes for the application?</summary><p>Cluster mode disabled is one shard: one primary with all 16,384 slots, up to five replicas for reads, a primary endpoint and a reader endpoint. The dataset must fit one node's memory and the writes one core; every command works; any client works. Cluster mode enabled splits the slots over up to 500 shards, each a primary with replicas, behind a configuration endpoint; the client fetches the slot map and routes each key with CRC16 modulo 16384, following MOVED redirects when the map changes. Writes and memory scale with shards, resharding is online, and a shard failure affects a fraction of the keys. The application pays in three places: the client library must be cluster-aware; multi-key commands, transactions and scripts need every key on one shard, which means hash tags like {user:42} in the key names, and that is a change to every key format in the codebase; and operations like SCAN or FLUSHALL become per-shard. My rule is to enable cluster mode from the first day for anything that could grow, because the migration later is a key-naming project under pressure, and to keep it disabled only for small caches with legacy clients. Serverless is cluster mode enabled underneath, so the same hash-tag discipline applies there.</p></details>
+  <details><summary>Lazy loading or write-through? When does each one hurt?</summary><p>Lazy loading reads the cache, on a miss reads the database and writes the value with a TTL. It caches what is read, so memory is spent only on live keys, and it tolerates a cache failure as a performance problem. It hurts in two ways: every miss costs two round trips plus the database read, which under a cold cache is the storm; and a write to the database does not touch the cache, so a value is stale for up to a TTL unless the write path invalidates it. Write-through writes the cache on every database write. Reads of recently written data never miss and are never stale; it hurts because every write costs twice, because memory is spent on data nobody reads, and because after a node loss the cache is empty until something is written, which for a read-heavy catalogue could be forever. In practice I use both: write-through or delete-on-write for freshness, lazy loading with a jittered TTL as the safety net that repopulates after any loss and bounds the staleness of anything the write path missed. The TTL is a product decision, not a technical one: how old may this value be? Sessions can be seconds stale, prices cannot, an avatar can be a day. And on the write side I would say the thing that is not a pattern but a decision: what the application does when the cache is down. Read through to the database with a breaker, or fail the request; whichever it is, it is decided in code before the day it matters.</p></details>
+  <details><summary>Evictions started appearing on a cache that has run for a year. What do you do?</summary><p>Evictions mean the node is full and the policy is removing keys to make room, so the hit ratio is about to fall and the database is about to take the difference. I look at three things in order. Memory: DatabaseMemoryUsagePercentage at the ceiling, and whether the growth is the working set or garbage; redis-cli --bigkeys and --memkeys tell me what is large, and a scan of TTLs tells me whether keys are being written without an expiry, which is the usual cause of a cache that fills slowly over a year. Policy: allkeys-lru is right for a cache, and if it is volatile-lru and some keys lack TTLs the node will fill and then error instead of evicting. Reserved memory: 25% should be there, or the next snapshot will swap. Then the fix depends on what I found. Keys without TTLs get them, with jitter. A larger working set gets a bigger node or another shard, scaled online with a replica in place. Values that are too large get trimmed or moved to S3 with a pointer. And I alarm on Evictions above zero and on hit ratio below the design value, because this is exactly the signal that arrived before the outage and nobody was watching.</p></details>
+  <details><summary>Latency went up; CPU on the cache node is 9%. Where is the time going?</summary><p>Redis executes commands on one thread, so CPUUtilization across a sixteen-core node hides a saturated core; EngineCPUUtilization is the metric, and at 9% overall it is probably near 100%. Then SLOWLOG GET: the usual suspects are KEYS with a pattern, SMEMBERS or HGETALL on a structure with a million members, a Lua script that loops, or a DEL of a huge key that blocks while it frees memory, for which UNLINK exists. The fix is to replace the command, then to spread the load: replicas for reads through the reader endpoint, shards for writes. If the engine CPU is low too, I look at the network and the client: TLS handshakes from an application that opens a connection per request, which shows as NewConnections; a cross-AZ hop on every call; a pool too small so requests queue in the client; or a big value that saturates the node's network bandwidth. And I check for a snapshot or a replica sync in progress, because the fork costs CPU and memory on the node that does it, which is why snapshots belong on a replica.</p></details>
+  <details><summary>ElastiCache, DAX or MemoryDB for a session store?</summary><p>I start with what a lost session costs. If a user being logged out during a cache failover is an acceptable incident, ElastiCache Valkey with a replica and Multi-AZ failover is the cheapest answer, and the session has a TTL anyway. If a session holds state that must not vanish, a half-finished checkout, a game in progress, a shopping cart that the product promises to keep, then losing a node must lose nothing, and that is MemoryDB: the same API, every write in a Multi-AZ transaction log before it is acknowledged, failover without data loss, at two to three times the price of ElastiCache and with single-digit millisecond writes instead of sub-millisecond. DAX is the answer only when the session already lives in DynamoDB and the goal is read latency with no code change; it is a read-through, write-through cache for one store, eventual reads only. In many systems the right split is two stores: DynamoDB as the durable session record with a TTL, and ElastiCache as a read cache in front for the hot path, which is also the setup where the cache can be lost without consequence. What I avoid is the half-measure: an ElastiCache cluster treated as durable because it has a replica, since replication is asynchronous and a failover drops the last writes.</p></details>
+  <details><summary>Design the OpenSearch domain for 2 TB a day of logs kept for 90 days.</summary><p>I size by shards and by tiers. Daily indices, so retention is a delete and the hot tier holds a known number of days. 2 TB a day of raw logs is about 2 TB indexed with compression and field choices, maybe more with replicas: with one replica that is 4 TB a day on disk. Shards of 30 to 50 GB: 40 to 60 primary shards per daily index, spread over the data nodes. Hot for seven days is about 28 TB with replicas, on instances with enough heap for that shard count, which puts me at a dozen or more r-family data nodes with gp3 volumes, across three AZs, plus three dedicated master nodes. Days 8 to 90 go to UltraWarm, which stores them on S3 behind a cache and costs a fraction, and an Index State Management policy does the rollover, the move and the delete. Ingestion comes through Firehose or OpenSearch Ingestion with a buffer in front so a cluster block becomes a backlog, not a loss. Mappings matter more than nodes: explicit mappings, no dynamic field explosion, keywords where nobody searches text, and no indexing of the raw message twice. Then the alarms: ClusterStatus, JVMMemoryPressure above 75%, FreeStorageSpace, ClusterIndexWritesBlocked, and the ingest backlog. If the team would rather not size at all and the volume is this large and steady, Serverless with a time-series collection is a defensible answer; at small volumes it is not, because of the OCU floor, and at that point I would ask whether CloudWatch Logs Insights and S3 with Athena do the job without a cluster.</p></details>
+  <details><summary>A team wants DocumentDB because "the data is JSON". Argue.</summary><p>JSON is a format, not a workload, so I ask what they do with it. If the access patterns are known and the documents are read and written by key, DynamoDB stores JSON as items, scales further, costs less, and has no instances. If the documents are queried in ad hoc ways across nested fields and the team thinks in SQL, Aurora PostgreSQL with jsonb and GIN indexes gives joins, transactions and reporting for free. DocumentDB earns its place in one case: the team has a MongoDB application and its drivers, aggregation pipelines and query habits, and wants Aurora-style operations, readers, PITR and global clusters without running MongoDB. Even then I would run the real query log against the compatibility list, because the API is MongoDB 5.0 and not every operator or index type is there, and I would compare with MongoDB Atlas on AWS if they need the latest features. What I would not accept is "we might need flexible schema later": every store here has that, and the cost of picking a document database for a key-value workload is paid every month in instance hours.</p></details>
+  <details><summary>Redshift, Athena or Aurora for the analytics team?</summary><p>It depends on three numbers: data size, query frequency and who is waiting. Under a hundred gigabytes with a handful of people, an Aurora read replica with the right indexes answers reporting queries without a second system, and that is where most companies should start. When the data is in S3 anyway and the queries are occasional, Athena: no cluster, pay per terabyte scanned, columnar Parquet and partitioning make that cheap, and nobody is on call for it. Redshift is for the warehouse pattern: terabytes to petabytes, the same analysts running many queries a day over curated tables, dashboards that expect sub-second responses from result caching and materialised views, and data arriving continuously through zero-ETL from Aurora and DynamoDB or through Glue. RA3 separates compute from managed storage so the cluster is sized for the queries, Serverless charges per RPU-second for a team that works office hours, Spectrum reaches the lake for the long tail, and data sharing lets other teams query without copies. The decision I give in interviews: lake first, Athena on it, and Redshift as the serving layer when the query load and latency expectations justify a cluster that someone tunes. Day 22 goes deeper.</p></details>
+  <details><summary>Build a rate limiter for 100 requests per minute per API key, across 200 containers.</summary><p>The counter must be shared and atomic, which is Redis or Valkey. The simple version is a fixed window: INCR on a key like rl:{apikey}:2026-10-11T14:05 and EXPIRE it on first use, or a Lua script or MULTI to do both; if the count exceeds 100, reject. One round trip, microseconds of engine time, and the hash tag keeps the key on one shard. Its flaw is the window edge: 100 at 14:05:59 and 100 at 14:06:00. A sliding window fixes it with a sorted set per key: ZADD the timestamp, ZREMRANGEBYSCORE older than a minute, ZCARD for the count, EXPIRE, in one script; more memory but exact. A token bucket, stored as a hash of tokens and last-refill time and updated by a script, gives bursts with a steady rate. Then the operational side. The limiter is in the hot path of every request, so the cache client has a short timeout and a decision for when the cache is down: fail open and log, since a rate limiter outage should not be an API outage. The keys expire on their own, so memory is bounded by the number of active API keys. The hot key risk is one abusive key hammering one shard, which at a few thousand operations a second is fine for Valkey; at hundreds of thousands I would count locally per container for a second and sync. And I would say why not DynamoDB: the atomic counter works but each check is a write unit and single-digit milliseconds, which at this rate is both slower and dearer than the cache.</p></details>
+  <details><summary>Serverless ElastiCache or nodes?</summary><p>Serverless removes the sizing: I pick an engine, it runs the shards, scales within about a minute as the data and the request rate grow, is Multi-AZ by default, and bills per GB-hour of data plus per ECPU, with a maximum I set. It wins for caches that are small, spiky, new, or owned by a team with no one to tune node types, and for development accounts where a node pair would idle. It loses on steady large caches: at a few hundred gigabytes the GB-hour price plus ECPUs costs more than reserved r7g nodes with replicas, and a flash crowd that goes from zero to ten times in seconds throttles briefly because scaling is smooth, not instant. Nodes give control: the node type, the shard count, the parameter group, a scheduled scale-up before a known peak, and reserved pricing. Serverless is cluster mode enabled underneath, so the client must be cluster-aware and the keys need hash tags for multi-key operations. My default is serverless for a new cache under about 50 GB and nodes with reserved pricing once the usage is steady and measured, in either case with a replica, a Multi-AZ setting, and the alarms from the diagram.</p></details>
+
+  <div class="next">
+    <b>Next — <a href="../day-11/index.html">Day 11: Messaging and orchestration</a>.</b> SQS standard against FIFO, visibility timeouts, long polling and dead-letter queues with redrive; SNS filter policies; EventBridge buses, rules, Pipes and the Scheduler; Step Functions standard against express with retries and the saga pattern; Amazon MQ; Kinesis against MSK; AppSync. And the question every consumer must answer: a message is processed twice. Is that a bug?
+  </div>
+</main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — The application and the VPC.</b> ElastiCache is a cluster of nodes in your subnets, reached over TCP on 6379 (Redis / Valkey) or 11211 (Memcached) through a security group. The application holds a pool of connections, and the three settings that decide the bad days are on its side: a connect and read timeout of about a second, a reconnect policy that re-resolves DNS, and what it does on a cache error: read the database, or fail. GET, miss, read the database, SET: that loop is the whole of caching.",
+    "<b>Step 2 — Redis OSS / Valkey replication group.</b> With cluster mode disabled one shard holds all 16,384 hash slots: a primary in one AZ takes writes and reads, replicas in other AZs take reads through the reader endpoint, replication is asynchronous. With cluster mode enabled the slots are split across shards, each a primary with replicas, behind a configuration endpoint; the client routes each key by CRC16 and keys that must stay together share a {hash tag}. Multi-AZ automatic failover promotes a replica in under a minute, and shards are added online.",
+    "<b>Step 3 — Memcached.</b> Nodes without replication, persistence or failover; the client hashes each key to a node, and auto discovery keeps the node list current. It is multi-threaded and uses every core of a big node, stores only strings, and losing one node of N loses one N-th of the keys. The case for it: a large, flat cache of big values where the dip in hit ratio from a node loss is acceptable. Everything else is Redis or Valkey.",
+    "<b>Step 4 — Patterns and memory.</b> Lazy loading fills the cache on a miss with a TTL and caches only what is read, stale for up to a TTL. Write-through fills it on every write, always fresh, at twice the writes and with memory spent on data nobody reads; most systems combine them. TTLs get jitter so keys never expire together; misses on absent keys are cached too. When memory is full, maxmemory-policy decides: allkeys-lru for a cache, noeviction for a store that must error instead; and 25% is kept in reserve for the fork that snapshots and replica syncs need.",
+    "<b>Step 5 — The database behind.</b> It sees only the misses. At a 99% hit ratio that is one read in a hundred, so the database is sized for one percent of the traffic, which is the point of the cache and the whole of the risk. Every design decision about the cache should be checked against one number: the read rate the database takes if the cache is empty, and for how long.",
+    "<b>Step 6 — MemoryDB.</b> The same Redis / Valkey API as a durable primary database: every write goes to a Multi-AZ transaction log before it is acknowledged, replicas read from the log, failover loses nothing, snapshots come from the log. Reads are microseconds, writes single-digit milliseconds, and the price is two to three times ElastiCache. It is the answer when the data has no other home; then there is no database behind it to fall over.",
+    "<b>Step 7 — Purpose-built.</b> Each store is excellent at one shape of data and one query style. OpenSearch: full-text relevance, log analytics and vectors over an inverted index in shards. DocumentDB: the MongoDB API on Aurora-style storage. Neptune: graph traversals in Gremlin, openCypher or SPARQL. Keyspaces: the Cassandra API with no nodes. Timestream: time series with memory and magnetic tiers. Redshift: the columnar warehouse. A cache in front of any of them has the same failure mode as in step 5.",
+    "<b>Step 8 — Seeing inside.</b> CacheHitRate below the design value, Evictions above zero, DatabaseMemoryUsagePercentage near the ceiling, EngineCPUUtilization (the one core) above 80%, SwapUsage above a few MB, ReplicationLag in seconds, CurrConnections climbing: each is an outage announced in advance. INFO, SLOWLOG and --bigkeys answer the next question. Watch the database's connections and p99 next to the cache's hit ratio: when one falls the other rises.",
+    "<b>Step 9 — The answer.</b> The database falls over because it was sized for the miss rate of a warm cache and the restart made the miss rate one hundred percent. Prevent the cold start with a Multi-AZ replica and cluster mode; prevent the amplification with request coalescing, jittered TTLs and stale-while-revalidate; protect the database with a breaker at its capacity and headroom for the miss rate you accept; warm new nodes on purpose; alarm on hit ratio, evictions and swap; and rehearse with a test failover. If the data must not be lost, it is a database: MemoryDB or DAX."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const money = x => "$" + Math.round(x).toLocaleString("en-US");
+  const money2 = x => x >= 100 ? money(x) : "$" + x.toFixed(2);
+  const n = x => Math.round(x).toLocaleString("en-US");
+  const pct = x => { const p = x * 100; return p >= 100 ? "100%" : p <= 0 ? "0%" : p.toFixed(p >= 99.95 ? 2 : p >= 10 ? 1 : 2) + "%"; };
+  const pctc = x => Math.round(x * 100) + "%";
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+  const gb = b => b >= 1024 ** 3 ? (b / 1024 ** 3).toFixed(b >= 10 * 1024 ** 3 ? 0 : 1) + " GB" : b >= 1024 ** 2 ? Math.round(b / 1024 ** 2) + " MB" : Math.round(b / 1024) + " KB";
+  const secs = s => s >= 3600 ? (s / 3600).toFixed(1) + " h" : s >= 90 ? (s / 60).toFixed(1) + " min" : Math.round(s) + " s";
+  function buttons(id, title, items, onPick) {
+    $(id).innerHTML = `<b>${title}</b>`;
+    items.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.dataset.key = key;
+      b.onclick = () => onPick(key);
+      $(id).appendChild(b);
+    });
+  }
+  const mark = (id, key) => [...$(id).querySelectorAll("button")].forEach(b => b.classList.toggle("on", b.dataset.key === key));
+
+  // ---------- Simulator 1: the cache restarts ----------
+  const cr = { hit: "0.99", keys: "100000", db: "1000", topo: "single", guard: "none" };
+  buttons("crHit", "Hit ratio on a normal day", [["0.9", "90%"], ["0.95", "95%"], ["0.99", "99%"], ["0.999", "99.9%"]], k => { cr.hit = k; paintCr(); });
+  buttons("crKeys", "Working set (hot keys)", [["10000", "10 thousand"], ["100000", "100 thousand"], ["1000000", "1 million"]], k => { cr.keys = k; paintCr(); });
+  buttons("crDb", "Database capacity", [["200", "200 reads / s (small RDS)"], ["1000", "1,000 reads / s"], ["5000", "5,000 reads / s"], ["50000", "50,000 reads / s (DynamoDB, warm)"]], k => { cr.db = k; paintCr(); });
+  buttons("crTopo", "Cache deployment", [
+    ["single", "one node, no replica"], ["multiaz", "primary + replica, Multi-AZ failover"], ["cluster", "cluster mode, 3 shards, replicas; one shard lost"], ["memcached", "Memcached, 4 nodes; one lost"]
+  ], k => { cr.topo = k; paintCr(); });
+  buttons("crGuard", "On a miss, the application", [
+    ["none", "reads the database, every request"], ["coalesce", "coalesces: one DB read per key, jittered TTLs"], ["stale", "coalesces + serves stale + breaker at DB capacity"]
+  ], k => { cr.guard = k; paintCr(); });
+  $("crRate").oninput = paintCr;
+
+  function paintCr() {
+    Object.entries({ crHit: cr.hit, crKeys: cr.keys, crDb: cr.db, crTopo: cr.topo, crGuard: cr.guard }).forEach(([id, k]) => mark(id, k));
+    const rate = +$("crRate").value, hit = +cr.hit, W = +cr.keys, cap = +cr.db;
+    $("crRateLbl").textContent = n(rate) + " reads / s";
+    const steady = rate * (1 - hit);
+    const cold = cr.topo === "single" ? 1 : cr.topo === "cluster" ? 1 / 3 : cr.topo === "memcached" ? 0.25 : 0;
+    const window = cr.topo === "multiaz" ? 30 : 0;
+    // demand on the database in the first minute: raw, then capped by the breaker if there is one
+    let raw;
+    if (cr.topo === "multiaz") raw = cr.guard === "none" ? rate : Math.min(rate, W / 3);
+    else raw = steady + (cr.guard === "none" ? rate * cold : Math.min(rate * cold, W / 3 * cold));
+    const demand = cr.guard === "stale" ? Math.min(raw, cap * 0.8) : raw;
+    const over = raw > cap;
+    const thrash = over && cr.guard !== "stale";
+    const ratio = demand / cap;
+    const delivered = thrash ? cap * 0.5 : demand;
+    const coldKeys = W * cold;
+    const dup = cr.guard === "none" ? 1.5 : 1;
+    const refillRate = Math.max(1, delivered - steady > delivered * 0.2 ? delivered - steady : delivered * 0.2);
+    const refillS = cr.topo === "multiaz" ? 0 : coldKeys * dup / refillRate;
+
+    let result, colour, story, fix;
+    const topoName = { single: "a single node", multiaz: "a Multi-AZ pair", cluster: "a three-shard cluster", memcached: "a four-node Memcached cluster" }[cr.topo];
+    if (cr.topo === "multiaz") {
+      if (cr.guard === "none" && over) { result = "Database falls over for the window"; colour = "bad";
+        story = `The keys are safe on the replica, but for about ${window} seconds the primary endpoint is unreachable while DNS and the clients move. The application falls through to the database with every request: ${n(demand)} reads a second against a capacity of ${n(cap)}, ${ratio.toFixed(1)}× too many. Connections fill, queries queue, and the thirty seconds become minutes of errors.`;
+        fix = "During a failover the cache is not cold, it is briefly absent. Fail fast on cache errors for a few seconds, or coalesce and cap the fall-through at the database's capacity; either keeps the window at thirty seconds."; }
+      else if (cr.guard === "none") { result = "Survives: a 30-second blip"; colour = "pub";
+        story = `The replica is warm, so after the ${window}-second failover window the hit ratio is back where it was. During the window the application falls through to the database at ${n(demand)} reads a second, which this database absorbs (${pct(ratio)} of capacity). Thirty seconds of higher latency and some timeouts; nothing to refill.`;
+        fix = "Keep the client's timeouts at a second and reconnect on error so the window stays at the failover time, not the application's DNS cache."; }
+      else if (over && cr.guard === "coalesce") { result = "Database falls over for the window"; colour = "bad";
+        story = `The keys are safe on the replica, but for about ${window} seconds the cache is unreachable. Coalescing keeps the fall-through to the distinct hot keys, ${n(demand)} reads a second, and that alone is ${ratio.toFixed(1)}× the database's capacity: it thrashes for the window and takes minutes to drain.`;
+        fix = "Add the breaker: during a failover, cap the fall-through at the database's capacity and fail the rest fast or serve stale; thirty seconds of partial errors beats minutes of total ones."; }
+      else { result = "Survives: a 30-second blip"; colour = "pub";
+        story = `The replica is warm. For ${window} seconds the cache is unreachable; the application coalesces ${cr.guard === "stale" ? "and caps the database at 80% of its capacity, serving stale values for the rest" : "so the database sees at most the distinct hot keys, " + n(demand) + " reads a second"}. The database stays at ${pct(Math.min(ratio, 0.8))} of capacity and nothing has to be refilled.`;
+        fix = "This is the design to copy: a warm replica makes the restart a failover, and the application makes the failover a blip."; }
+    } else if (thrash) {
+      result = "Database falls over"; colour = "bad";
+      story = `${topoName[0].toUpperCase() + topoName.slice(1)} loses ${pctc(cold)} of the keys at once. On a normal day the database takes ${n(steady)} reads a second; in the first minute it is asked for ${n(demand)}, ${ratio.toFixed(ratio >= 10 ? 0 : 1)}× its capacity. ${cr.guard === "none" ? "Every miss becomes a query, duplicates included: fifty requests for one key are fifty queries." : "Coalescing cuts the duplicates, but the distinct keys alone exceed the capacity."} Past its capacity the database thrashes: effective throughput about half, so the refill of ${n(coldKeys)} keys takes about ${secs(refillS)} instead of ${secs(coldKeys * dup / Math.max(1, demand))}, and the application errors the whole time.`;
+      fix = cr.topo === "single" ? "A replica with Multi-AZ failover, first of all: this is a cold start that should have been a failover. Then coalescing, a breaker at the database's capacity, and a database with headroom for the miss rate you decide to accept." :
+        cr.topo === "cluster" ? "The shard's replica should have taken over: with a replica per shard this is a failover, not a cold shard. Add coalescing and a breaker for the day a whole shard pair is lost." :
+        "Memcached cannot fail over; a quarter of the keys are gone until refilled. Coalesce, cap the database with a breaker, or move to Valkey with replicas.";
+    } else if (over) {
+      result = "Degraded, database survives"; colour = "orange";
+      const shed = 1 - cap * 0.8 / raw;
+      story = `${pctc(cold)} of the keys are gone, and ${n(raw)} reads a second would reach the database. The breaker holds it at ${n(cap * 0.8)}, 80% of its capacity; the other ${pctc(Math.max(0, shed))} are served stale where a stale copy exists and fail fast where none does. The database never thrashes, so the refill runs at full speed: ${n(coldKeys)} keys in about ${secs(refillS)}.`;
+      fix = cr.topo === "single" ? "The breaker turned an outage into degradation; a Multi-AZ replica turns it into a blip. Do both." : "Replicas on every shard or node remove the cold start; the breaker stays for the day it is not enough.";
+    } else {
+      result = "Survives"; colour = "pub";
+      story = `${pctc(cold)} of the keys are gone, and the database is asked for ${n(demand)} reads a second in the first minute, ${pct(ratio)} of its capacity. ${cr.guard === "none" ? "Duplicates included, it fits." : "Coalescing keeps it to the distinct hot keys."} The refill of ${n(coldKeys)} keys takes about ${secs(refillS)}, with latency up and no errors.`;
+      fix = ratio > 0.5 ? "It fits today. Grow the traffic or shrink the database and it will not; a replica and a breaker are cheaper than the headroom." : "The database has real headroom for its miss rate; keep it that way when the next cost review proposes a smaller instance.";
+    }
+    big("crSteady", `${n(steady)} reads / s`, "text");
+    big("crStorm", `${n(demand)} reads / s`, colour);
+    big("crHead", `${ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(1)}× capacity`, colour);
+    big("crResult", result, colour);
+    $("crTable").innerHTML = "<tr><th>What</th><th>Value</th></tr>" + [
+      ["Normal day", `${n(rate)} reads / s × (1 − ${pct(hit)}) = <b>${n(steady)} reads / s</b> at the database, ${pct(steady / cap)} of its capacity`],
+      ["Keys lost at once", cr.topo === "multiaz" ? "none: the replica has them; the cache is unreachable for about 30 s while clients move" : `${pctc(cold)} of ${n(W)} = <b>${n(coldKeys)} keys</b>`],
+      ["Demand in the first minute", `<b>${n(demand)} reads / s</b>${cr.guard === "none" ? " (every request, duplicates included)" : cr.guard === "coalesce" ? " (one read per distinct hot key; about a third of the working set is asked for in the first seconds)" : over ? ` (${n(raw)} coalesced, capped by the breaker at 80% of capacity)` : " (coalesced; under the breaker's cap)"}`],
+      ["Database capacity", `${n(cap)} reads / s · demand is <b>${ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(2)}×</b>`],
+      ["What the database delivers", thrash ? `about ${n(cap * 0.5)} reads / s: past capacity it thrashes (queues, lock waits, retries)` : `${n(Math.min(demand, cap))} reads / s, no thrashing`],
+      ["Time to a warm cache", cr.topo === "multiaz" ? "none: the replica is warm; ≈ 30 s of failover" : `≈ <b>${secs(refillS)}</b>${cr.guard === "none" ? " (1.5× for duplicate fetches)" : ""}`]
+    ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+    $("crMsg").innerHTML = `<b>${result}.</b> ${story} <b>What to change:</b> ${fix}`;
+  }
+  paintCr();
+
+  // ---------- Simulator 2: lazy loading or write-through ----------
+  const lw = { pattern: "lazy", keys: "1000000", ttl: "600", size: "2" };
+  buttons("lwPattern", "Pattern", [["lazy", "lazy loading"], ["through", "write-through only"], ["both", "write-through + lazy loading"]], k => { lw.pattern = k; paintLw(); });
+  buttons("lwKeys", "Keys the application touches", [["100000", "100 thousand"], ["1000000", "1 million"], ["10000000", "10 million"]], k => { lw.keys = k; paintLw(); });
+  buttons("lwTtl", "TTL", [["60", "1 minute"], ["600", "10 minutes"], ["3600", "1 hour"], ["86400", "24 hours"]], k => { lw.ttl = k; paintLw(); });
+  buttons("lwSize", "Value size", [["0.5", "0.5 KB"], ["2", "2 KB"], ["10", "10 KB"]], k => { lw.size = k; paintLw(); });
+  $("lwReads").oninput = paintLw; $("lwWrites").oninput = paintLw;
+
+  const NODES = [["cache.t4g.micro", 0.5, 0.016], ["cache.t4g.small", 1.37, 0.032], ["cache.t4g.medium", 3.09, 0.065], ["cache.m7g.large", 6.38, 0.158], ["cache.r7g.large", 13.07, 0.219], ["cache.r7g.xlarge", 26.32, 0.438], ["cache.r7g.2xlarge", 52.82, 0.877], ["cache.r7g.4xlarge", 105.81, 1.754], ["cache.r7g.8xlarge", 209.55, 3.508], ["cache.r7g.16xlarge", 419.09, 7.016]];
+
+  function paintLw() {
+    Object.entries({ lwPattern: lw.pattern, lwKeys: lw.keys, lwTtl: lw.ttl, lwSize: lw.size }).forEach(([id, k]) => mark(id, k));
+    const R = +$("lwReads").value, Wr = +$("lwWrites").value, W = +lw.keys, T = +lw.ttl, kb = +lw.size;
+    $("lwReadsLbl").textContent = n(R) + " / s"; $("lwWritesLbl").textContent = n(Wr) + " / s";
+    // 80% of the reads go to 20% of the keys; each active key is refilled once per TTL
+    const hotW = 0.2 * W, coldW = 0.8 * W, hotR = 0.8 * R, coldR = 0.2 * R;
+    const lazyMisses = Math.min(hotR, hotW / T) + Math.min(coldR, coldW / T);
+    const lazyCached = Math.min(hotW, hotR * T) + Math.min(coldW, coldR * T);
+    let hit, dbReads, cacheWrites, cached, stale;
+    if (lw.pattern === "lazy") {
+      hit = 1 - lazyMisses / R; dbReads = lazyMisses; cacheWrites = lazyMisses; cached = lazyCached;
+      stale = `up to ${secs(T)} after a write (writes do not touch the cache)`;
+    } else if (lw.pattern === "through") {
+      cached = Math.min(W, Wr * T);
+      hit = cached / W; dbReads = R * (1 - hit); cacheWrites = Wr;
+      stale = "never: every write updates the cache";
+    } else {
+      hit = 1 - lazyMisses / R; dbReads = lazyMisses; cacheWrites = lazyMisses + Wr; cached = Math.min(W, lazyCached + Wr * T);
+      stale = "never for written keys; a TTL still bounds anything the write path missed";
+    }
+    const bytes = cached * (kb * 1024 + 100);
+    const need = bytes / 1024 ** 3 / 0.75;
+    const node = NODES.find(x => x[1] >= need) || NODES[NODES.length - 1];
+    const shards = node === NODES[NODES.length - 1] && need > node[1] ? Math.ceil(need / node[1]) : 1;
+    const nodesCost = node[2] * 730 * 2 * shards;
+    const ecpuPerOp = Math.max(1, Math.ceil(kb));
+    const ops = (R + cacheWrites) * 3600 * 730;
+    const slsCost = Math.max(bytes / 1024 ** 3, 0.1) * 0.125 * 730 + ops * ecpuPerOp / 1e6 * 0.0034;
+    const dbSaved = (R - dbReads) * 3600 * 730 * 0.5 * Math.ceil(kb / 4) / 1e6 * 0.125;
+    const best = Math.min(nodesCost, slsCost);
+    const hitColour = hit >= 0.95 ? "pub" : hit >= 0.8 ? "orange" : "bad";
+    big("lwHit", pct(hit), hitColour);
+    big("lwDb", `${n(dbReads)} / s`, hitColour);
+    big("lwMem", gb(bytes), "text");
+    big("lwCost", money(best), "text");
+    let lesson;
+    if (lw.pattern === "lazy" && hit < 0.05) lesson = `At ${n(R)} reads a second over ${n(W)} keys, even a hot key is read less than once per ${secs(T)}, so every read arrives after its value expired: there is nothing to cache at this TTL. Lengthen it by a lot, or skip the cache and index the database.`;
+    else if (lw.pattern === "lazy") lesson = hit >= 0.95 ? `With every active key re-read once per ${secs(T)}, the database sees ${n(dbReads)} reads a second instead of ${n(R)}: the TTL, not the node size, sets the hit ratio. The price is staleness of up to ${secs(T)}; if the product cannot take that, add delete-on-write or write-through for the keys that change.` : `A ${secs(T)} TTL over ${n(W)} keys means up to ${n(W / T)} refills a second whatever the read rate: the hot fifth of the keys hits, the long tail is re-read before it is read again, and the database still carries ${n(dbReads)} reads a second. Lengthen the TTL (and invalidate on write), or accept that the long tail is not worth caching.`;
+    else if (lw.pattern === "through") lesson = `Write-through alone caches what was written in the last ${secs(T)}: ${n(cached)} of ${n(W)} keys, so reads hit ${pct(hit)} of the time and the database carries ${n(dbReads)} reads a second. Fresh, but the cache holds what was written, not what is read. On its own it is the wrong pattern for a read-heavy workload; combine it with lazy loading.`;
+    else lesson = `Lazy loading sets the hit ratio at ${pct(hit)}; write-through keeps the written keys fresh and adds ${n(Wr)} cache writes a second, which is nothing for the cache and everything for correctness. This is the pattern most systems should run: every key has a TTL, every write updates or deletes its key, and the cache self-heals after a loss.`;
+    const costNote = slsCost < nodesCost ? `Serverless is cheaper here at ${money(slsCost)} a month against ${money(nodesCost)} for a ${node[0]} pair${shards > 1 ? ` × ${shards} shards` : ""}: small data, and the ECPU price only bites at high request rates.` : `A ${node[0]} pair${shards > 1 ? ` × ${shards} shards` : ""} at ${money(nodesCost)} a month beats serverless at ${money(slsCost)}; reserved nodes would take another third off. Serverless loses once the data or the request rate is large and steady.`;
+    $("lwTable").innerHTML = "<tr><th>What</th><th>Value</th></tr>" + [
+      ["Keys in the cache", `<b>${n(cached)}</b> of ${n(W)} (${lw.pattern === "through" ? "written" : "read"} within one TTL)`],
+      ["Hit ratio · database reads", `<b>${pct(hit)}</b> · ${n(dbReads)} reads / s reach the database (from ${n(R)})`],
+      ["Cache writes", `${n(cacheWrites)} / s (${lw.pattern === "lazy" ? "the misses" : lw.pattern === "through" ? "the application's writes" : "misses + the application's writes"})`],
+      ["Staleness", stale],
+      ["Memory", `${n(cached)} × (${kb} KB + 100 B) = <b>${gb(bytes)}</b>; needs ${gb(need * 1024 ** 3)} of RAM at 75% usable`],
+      ["Node-based, Multi-AZ pair", `${node[0]} (${node[1]} GB) × 2${shards > 1 ? ` × ${shards} shards` : ""} = <b>${money(nodesCost)} / month</b>`],
+      ["Serverless", `${gb(bytes)} × $0.125 / GB-h + ${n(ops / 1e6)} M commands × ${ecpuPerOp} ECPU × $0.0034 / M = <b>${money(slsCost)} / month</b>`],
+      ["Database reads avoided", `${n((R - dbReads) * 3600 * 730 / 1e6)} M a month, ≈ ${money(dbSaved)} as DynamoDB eventual reads; against RDS, an instance size or a replica`]
+    ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+    $("lwMsg").innerHTML = `<b>${pct(hit)} hit ratio, ${n(dbReads)} database reads a second, ${gb(bytes)} of cache.</b> ${lesson} ${costNote}`;
+  }
+  paintLw();
+
+  // ---------- Simulator 3: which purpose-built store ----------
+  const ws = { shape: "kv", size: "tb", write: "high", lat: "ms", cons: "eventual" };
+  buttons("wsShape", "The data and the question", [
+    ["kv", "lookups by key"], ["doc", "nested documents, queries on several fields"], ["text", "full-text search, relevance, log analytics"],
+    ["graph", "relationships, many hops"], ["wide", "wide rows by partition and time, Cassandra model"], ["ts", "metrics by series and time window"], ["olap", "aggregates over everything"]
+  ], k => { ws.shape = k; paintWs(); });
+  buttons("wsSize", "Size", [["gb", "10 GB"], ["tb", "1 TB"], ["ptb", "100 TB"]], k => { ws.size = k; paintWs(); });
+  buttons("wsWrite", "Write rate", [["low", "low: hundreds / s"], ["high", "high: tens of thousands / s"], ["extreme", "extreme: millions / s"]], k => { ws.write = k; paintWs(); });
+  buttons("wsLat", "Read latency the product needs", [["sub", "sub-millisecond"], ["ms", "milliseconds"], ["sec", "seconds are fine"]], k => { ws.lat = k; paintWs(); });
+  buttons("wsCons", "Consistency", [["eventual", "eventual is fine"], ["strong", "must be durable and read-your-writes"]], k => { ws.cons = k; paintWs(); });
+
+  function paintWs() {
+    Object.entries({ wsShape: ws.shape, wsSize: ws.size, wsWrite: ws.write, wsLat: ws.lat, wsCons: ws.cons }).forEach(([id, k]) => mark(id, k));
+    const big_ = ws.size === "ptb", small = ws.size === "gb";
+    let pick, alt, cache, floor, why, change;
+    switch (ws.shape) {
+      case "kv":
+        if (ws.lat === "sub" && ws.cons === "strong") { pick = "MemoryDB"; alt = "DynamoDB + DAX"; cache = "it is the store"; floor = 450; why = "Sub-millisecond reads with no acceptable loss: the Redis API over a Multi-AZ transaction log. DynamoDB with DAX is the alternative when strong reads are rare, since DAX serves only eventual reads."; change = "If a lost write is acceptable on failover, ElastiCache in front of DynamoDB at a third of the price."; }
+        else if (ws.lat === "sub") { pick = "DynamoDB + ElastiCache or DAX"; alt = "MemoryDB"; cache = "yes: that is the sub-ms"; floor = small ? 60 : 300; why = "The durable copy in DynamoDB, the hot keys in a cache. DAX if no code change is wanted and the reads are eventual; ElastiCache if other stores or data structures are cached too."; change = "Working set over a few hundred GB with sub-ms everywhere: MemoryDB, and no second store."; }
+        else { pick = "DynamoDB"; alt = ws.cons === "strong" ? "Aurora" : "Keyspaces"; cache = "only for hot items"; floor = small ? 5 : 200; why = `Key lookups at any size: single-digit milliseconds, per-request pricing, strongly consistent reads on the table${big_ ? ", and 100 TB is routine" : ""}.`; change = "Access patterns that keep changing: Aurora first, DynamoDB for the hot path once they settle (Day 9)."; }
+        break;
+      case "doc":
+        if (ws.write === "extreme") { pick = "DynamoDB"; alt = "DocumentDB elastic cluster"; cache = "for hot items"; floor = 200; why = "Millions of writes a second is partition-key territory; documents are items, and the multi-field queries become GSIs on known patterns."; change = "Queries nobody can enumerate: DocumentDB elastic clusters shard the writes and keep the query language."; }
+        else if (ws.cons === "strong" && !big_) { pick = "Aurora PostgreSQL (jsonb)"; alt = "DocumentDB"; cache = "ElastiCache for hot reads"; floor = 150; why = "Ad hoc queries over nested fields with GIN indexes, transactions and joins when the documents relate to anything else. DocumentDB when the team already speaks MongoDB."; change = "A MongoDB application and drivers in hand: DocumentDB, after checking the query log against the compatibility list."; }
+        else { pick = "DocumentDB"; alt = "DynamoDB"; cache = "ElastiCache for hot reads"; floor = 500; why = "MongoDB API on Aurora-style storage: flexible queries on nested fields, 15 readers, PITR, global clusters, up to 128 TiB."; change = "If the access patterns are known and few, DynamoDB is cheaper and has no instances to run."; }
+        break;
+      case "text":
+        if (small && ws.lat === "sec") { pick = "OpenSearch Serverless or Aurora full-text"; alt = "OpenSearch domain"; cache = "no"; floor = 350; why = "At 10 GB a serverless collection in dev mode, or PostgreSQL tsvector if the data is already in Aurora; a three-node domain is more than this needs."; change = "Relevance tuning, facets, vectors or growth: an OpenSearch domain with dedicated masters."; }
+        else { pick = "OpenSearch"; alt = big_ ? "OpenSearch + S3 (UltraWarm, Athena for cold)" : "OpenSearch Serverless"; cache = "no: it caches its own filters"; floor = big_ ? 3000 : 700; why = `Inverted index with scoring, aggregations and k-NN${big_ ? "; hot indices on data nodes, older ones in UltraWarm and cold storage on S3" : ""}. Ingest through Firehose, Ingestion pipelines or DynamoDB zero-ETL.`; change = "Only exact-match lookups: DynamoDB. Logs queried once a month: S3 and Athena, no cluster."; }
+        break;
+      case "graph":
+        if (ws.write === "extreme" || (ws.lat === "sub")) { pick = "DynamoDB adjacency list"; alt = "Neptune"; cache = "yes, for the hot vertices"; floor = 200; why = "Extreme writes or sub-millisecond reads are not what a graph database gives; edges as items (PK = node, SK = EDGE#other) serve one and two hops by key."; change = "Questions of three hops or more, or path queries: Neptune, fed from the DynamoDB stream."; }
+        else { pick = "Neptune"; alt = "DynamoDB adjacency list"; cache = "ElastiCache for repeated traversals"; floor = 550; why = "Traversals in Gremlin or openCypher follow pointers instead of self-joins; fraud rings, identity resolution, permissions with inheritance, recommendations."; change = "One or two hops over known keys: the adjacency list is a tenth of the price. Whole-graph algorithms: Neptune Analytics."; }
+        break;
+      case "wide":
+        if (ws.write === "extreme" || big_) { pick = "Keyspaces"; alt = "DynamoDB"; cache = "for hot partitions"; floor = 200; why = "The Cassandra model, CQL and drivers with no nodes: unlimited table size, per-request or provisioned capacity, PITR."; change = "A new application: DynamoDB with the same partition + sort key model at about half the price per request."; }
+        else { pick = "DynamoDB"; alt = "Keyspaces"; cache = "for hot partitions"; floor = small ? 5 : 200; why = "The same partition-and-sort model at a lower price per request, with Streams, TTL, DAX and global tables."; change = "An existing Cassandra application with its drivers: Keyspaces keeps the code."; }
+        break;
+      case "ts":
+        if (ws.lat === "sub" || (ws.write === "extreme" && ws.cons === "strong")) { pick = "DynamoDB (series + time keys)"; alt = "Timestream"; cache = "ElastiCache for the latest value"; floor = 200; why = "Lookups by series and recent range in milliseconds, with TTL to age data out; sub-millisecond latest-value reads come from the cache."; change = "Aggregates across many series over long windows: Timestream, or S3 and Athena."; }
+        else if (big_ && ws.lat === "sec") { pick = "S3 + Athena (Parquet) with Timestream for recent data"; alt = "Timestream"; cache = "no"; floor = 100; why = "100 TB of history is a lake; Timestream's memory store holds the recent window for fast queries and dashboards."; change = "Dashboards over months with second latency: Timestream with scheduled queries pre-aggregating."; }
+        else { pick = "Timestream"; alt = "DynamoDB or Timestream for InfluxDB"; cache = "no"; floor = small ? 30 : 400; why = "Serverless time series: memory then magnetic tiers, SQL with time functions, scheduled queries for dashboards, late data accepted within the memory retention."; change = "Reads only by device key: DynamoDB. An InfluxDB toolchain already in place: Timestream for InfluxDB."; }
+        break;
+      case "olap":
+        if (ws.lat === "sub" || ws.lat === "ms") { pick = "Precompute: Redshift or Athena → DynamoDB / ElastiCache"; alt = "Redshift with result cache"; cache = "yes: the answers, not the data"; floor = 300; why = "No warehouse answers an aggregate over everything in milliseconds on demand; compute the aggregates on a schedule and serve them by key."; change = "A few dashboards with repeated queries: Redshift result caching and materialised views can reach sub-second."; }
+        else if (small) { pick = "Athena on S3 (Parquet)"; alt = "Aurora read replica"; cache = "no"; floor = 10; why = "10 GB in Parquet is cents per query; no cluster, no one on call."; change = "Many analysts all day: Redshift Serverless; data already in Aurora: a replica and SQL."; }
+        else { pick = "Redshift"; alt = "Athena"; cache = "no: result cache built in"; floor = big_ ? 2500 : 800; why = `Columnar MPP over ${big_ ? "100 TB" : "a terabyte"}: sort and distribution keys, result caching, materialised views, data sharing, zero-ETL from Aurora and DynamoDB, Spectrum for the lake.`; change = "Occasional queries over data already in S3: Athena at a fraction of the cost. Office-hours use: Redshift Serverless."; }
+        break;
+    }
+    big("wsPick", pick, "pub"); big("wsAlt", alt, "text"); big("wsCache", cache, cache.startsWith("no") ? "muted" : "orange"); big("wsFloor", "≈ " + money(floor) + " / mo", "text");
+    $("wsTable").innerHTML = "<tr><th>What</th><th>Value</th></tr>" + [
+      ["Why", why],
+      ["What would change your mind", change],
+      ["Cache in front", cache === "it is the store" ? "MemoryDB is the cache and the store; nothing behind it to fall over." : cache.startsWith("no") ? "Not as a rule; the store's own caching does more than an external one would, and a cache would be another hit-ratio to lose." : "Lazy loading with jittered TTLs and a replica; size the store for the miss rate you accept (first simulator)."],
+      ["Monthly floor", `≈ ${money(floor)} at list price before data and traffic: the smallest production footprint, two AZs where there are nodes`]
+    ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+    $("wsMsg").innerHTML = `<b>${pick}.</b> ${why} <b>Runner-up:</b> ${alt}. <b>What would change the answer:</b> ${change}`;
+  }
+  paintWs();
+</script>
+</body>
+</html>
