@@ -416,7 +416,7 @@
       <tr><td>Delay · message timer</td><td class="num">up to 15 minutes</td><td>For longer delays: EventBridge Scheduler, or a Step Functions Wait.</td><td>No</td></tr>
       <tr><td>maxReceiveCount</td><td class="num">1 – 1,000</td><td>Receives before the DLQ. 3–5 for a Lambda consumer; 1 when a retry is never safe.</td><td>Per redrive policy</td></tr>
       <tr><td>Lambda SQS mapping</td><td class="num">batch 10 (FIFO) / 10,000 (standard) · window 5 min · max concurrency 2–1,000 · +300 / min</td><td>The mapping scales by 300 concurrent invocations a minute up to the cap; a backlog of a million messages takes minutes to reach full speed.</td><td>Per mapping</td></tr>
-      <tr><td>SNS</td><td class="num">256 KB · 12.5 M subscriptions a topic · 100,000 topics</td><td>Filter policies up to 150 per topic... per subscription one policy of 150 values. FIFO topics 3,000 msg/s.</td><td>By ticket</td></tr>
+      <tr><td>SNS</td><td class="num">256 KB · 12.5 M subscriptions a topic · 100,000 topics</td><td>One filter policy per subscription, up to 150 values. FIFO topics 3,000 msg/s.</td><td>By ticket</td></tr>
       <tr><td>EventBridge event · rules · targets</td><td class="num">256 KB · 300 rules a bus · 5 targets a rule</td><td>Rules are raised by ticket to 2,000; targets are not. Fan out beyond five with SNS or a second rule.</td><td>Rules by ticket</td></tr>
       <tr><td>EventBridge retry · latency</td><td class="num">24 h · 185 attempts · ≈ 0.5 s</td><td>Then the target's DLQ. Half a second is fine for events, wrong for a request path.</td><td>Per target</td></tr>
       <tr><td>EventBridge PutEvents</td><td class="num">10,000 / s (large Regions) · 2,400 elsewhere · 10 entries a call</td><td>A burst past the quota returns <code>ThrottlingException</code>; the SDK retries, the producer sees latency.</td><td>By ticket</td></tr>
@@ -428,7 +428,7 @@
       <tr><td>Kinesis Lambda consumer</td><td class="num">1 invocation a shard (×10 parallelization) · batch 10,000 · bisect · max retry · max record age</td><td>A failing batch blocks the shard until retries are exhausted or the record ages out; <code>IteratorAge</code> is the alarm.</td><td>Per mapping</td></tr>
       <tr><td>MSK</td><td class="num">partitions per broker ≈ 1,000–4,000 by size · Serverless 2,400 partitions a cluster · 200 MB/s in</td><td>A topic's partition count is its parallelism and cannot shrink. Consumer group size ≤ partitions.</td><td>Brokers, Express brokers</td></tr>
       <tr><td>Amazon MQ</td><td class="num">mq.t3.micro to mq.m5.4xlarge · active/standby failover tens of seconds</td><td>A broker has a ceiling in messages a second and connections; you find it in a load test, not a quota page.</td><td>Bigger broker, network of brokers</td></tr>
-      <tr><td>AppSync</td><td class="num">256 KB request/response · 30 s resolver · 500 K connection-minutes... per million billed</td><td>Subscription payloads are the mutation's selection set; a 1 MB result does not fit.</td><td>Some by ticket</td></tr>
+      <tr><td>AppSync</td><td class="num">256 KB request/response · 30 s resolver · subscriptions push the mutation’s selection set</td><td>Subscription payloads are the mutation's selection set; a 1 MB result does not fit.</td><td>Some by ticket</td></tr>
     </table>
   </div>
 
@@ -710,3 +710,242 @@ aws sqs list-queues --queue-name-prefix day11</pre>
     <b>Next — <a href="../day-12/index.html">Day 12: Lambda and API Gateway in depth</a>.</b> The execution model, cold starts, reserved and provisioned concurrency, event source mappings, VPC access, layers, SnapStart, destinations and limits; REST against HTTP against WebSocket APIs, authorisers, throttling and usage plans; Cognito. And the question: Lambda is throttled at peak. What do you check, and what are the three fixes?
   </div>
 </main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Producers.</b> An API, a worker or an AWS service sends to a queue, publishes to a topic, puts events on a bus or records on a stream, all over HTTPS to a Regional endpoint that is multi-AZ without you doing anything. Every one of those calls is retried by the SDK on a 5xx or a lost response, and the retry of a call that in fact succeeded is the first and most common duplicate: a new message with a new id and the same business content. The producer's job is to carry a business key in the body, so the consumer can tell.",
+    "<b>Step 2 — SQS.</b> A queue is a buffer with a lease on every message. Receive does not remove: the message becomes invisible for the visibility timeout, 30 seconds by default, and must be deleted before it expires or it comes back for someone else. The standard queue has unlimited throughput, best-effort order and at-least-once delivery. The FIFO queue orders messages inside a message group, delivers one message per group at a time, and drops a resent message with the same deduplication id for five minutes. Long polling waits up to 20 seconds for a message; a batch moves ten. A message received more than maxReceiveCount times goes to the dead-letter queue, and a redrive sends it back after the fix.",
+    "<b>Step 3 — Consumers.</b> A Lambda event source mapping polls for you and invokes with a batch; a worker fleet runs the loop itself. Either way the order of operations decides correctness: receive, claim the business key with a conditional write, act, and only then delete. The visibility timeout sits above the slowest honest run, six times the function timeout for Lambda, extended for long work. Partial batch failures keep the good nine out of the DLQ. The consumer is written on the assumption it will see every message more than once.",
+    "<b>Step 4 — SNS.</b> One publish, a copy to every subscription: queues, functions, HTTP endpoints, email, SMS, push. A filter policy per subscription on attributes or body fields keeps the refund team from receiving the charges, at the topic, before any delivery cost. Raw message delivery hands the subscriber the payload rather than an envelope. SNS keeps nothing: a subscriber that is down gets retries and then silence, which is why the durable pattern is a topic feeding a queue per consumer.",
+    "<b>Step 5 — EventBridge.</b> A bus takes events as JSON; rules match on any field with patterns and send each match to up to five targets with a transform; AWS services publish to the default bus for free, your services to custom buses, SaaS vendors to partner buses. Delivery is at-least-once with 24 hours of retries and a DLQ per target, at about half a second. An archive records events and a replay sends them through the rules again for a window, which is the recovery tool after a bad consumer deploy. Pipes connect one source to one target with filtering and enrichment and no glue function; the Scheduler runs cron, rate and one-off schedules with time zones against any API.",
+    "<b>Step 6 — Step Functions.</b> A state machine holds a multi-step process as data: each Task state calls a service, its output is the next state's input, and Retry and Catch on each state decide what a failure means. The saga shape is a Catch that runs the compensations in reverse: release the reservation, refund the charge. Standard executions are exactly-once, run up to a year, keep every transition, and cost $25 per million transitions; Express runs up to five minutes, at-least-once, at $1 per million plus duration. Callbacks pause for a human; Distributed Map fans out to ten thousand children.",
+    "<b>Step 7 — Streams, brokers, and the push to clients.</b> Kinesis and MSK are logs, not queues: records are ordered per shard or partition, retained for a time you set, and every reader keeps its own position, so nothing is deleted by reading and any number of consumers see the same data. Amazon MQ runs ActiveMQ or RabbitMQ brokers in your VPC for the protocols an existing application speaks. AppSync pushes data to browsers and phones over WebSocket subscriptions. The strip below is what each service promises about delivery, order and retention, and the one thing none of them promises: that your handler ran once.",
+    "<b>Step 8 — Seeing inside.</b> ApproximateAgeOfOldestMessage is the metric that maps to the SLO: a deep queue draining fast is healthy, a shallow queue ageing is not. NotVisible is the in-flight count and tells you the consumers are working; NumberOfEmptyReceives is the short-polling bill; a DLQ above zero pages. For streams the age of the iterator and the consumer lag; for EventBridge failed invocations and throttled rules; for Step Functions failed and timed-out executions; for MQ queue size and a consumer count of zero.",
+    "<b>Step 9 — The answer.</b> A message processed twice is the contract, not a bug: producer retries, expired visibility timeouts, consumers that crash between acting and deleting, and the queue's own rare redelivery all produce it, and FIFO dedup removes only the first within five minutes. The consumer is made safe with a business key, a claim by conditional write before the act, idempotent operations where the downstream allows, delete after durability, a visibility timeout above the slowest run, and a DLQ with a small maxReceiveCount. Exactly-once is at-least-once delivery plus an idempotent consumer; the queue sells the first half."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const money = x => "$" + Math.round(x).toLocaleString("en-US");
+  const money2 = x => x >= 100 ? money(x) : "$" + x.toFixed(2);
+  const n = x => Math.round(x).toLocaleString("en-US");
+  const pct = x => { const p = x * 100; return p >= 100 ? "100%" : p <= 0 ? "0%" : p.toFixed(p >= 10 ? 1 : p >= 1 ? 2 : 3) + "%"; };
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+  const secs = s => s >= 86400 ? (s / 86400).toFixed(1) + " d" : s >= 3600 ? (s / 3600).toFixed(1) + " h" : s >= 90 ? (s / 60).toFixed(1) + " min" : s >= 1 ? Math.round(s) + " s" : Math.round(s * 1000) + " ms";
+  function buttons(id, title, items, onPick) {
+    $(id).innerHTML = `<b>${title}</b>`;
+    items.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.dataset.key = key;
+      b.onclick = () => onPick(key);
+      $(id).appendChild(b);
+    });
+  }
+  const mark = (id, key) => [...$(id).querySelectorAll("button")].forEach(b => b.classList.toggle("on", b.dataset.key === key));
+  const row = ([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`;
+
+  // ---------- Simulator 1: processed twice ----------
+  const dp = { work: "5", vis: "30", fail: "0.01", max: "3", queue: "standard", guard: "none" };
+  buttons("dpWork", "Work per message", [["1", "1 s"], ["5", "5 s"], ["30", "30 s"], ["120", "2 min"], ["600", "10 min"]], k => { dp.work = k; paintDp(); });
+  buttons("dpVis", "Visibility timeout", [["30", "30 s (default)"], ["120", "2 min"], ["900", "15 min"], ["3600", "1 h"]], k => { dp.vis = k; paintDp(); });
+  buttons("dpFail", "Consumer fails after acting, before deleting", [["0.001", "0.1%"], ["0.01", "1%"], ["0.05", "5%"], ["0.2", "20% (deploys, timeouts)"]], k => { dp.fail = k; paintDp(); });
+  buttons("dpMax", "maxReceiveCount", [["1", "1"], ["3", "3"], ["5", "5"], ["10", "10"]], k => { dp.max = k; paintDp(); });
+  buttons("dpQueue", "Queue", [["standard", "standard"], ["fifo", "FIFO with a deduplication id"]], k => { dp.queue = k; paintDp(); });
+  buttons("dpGuard", "The consumer", [
+    ["none", "acts, then deletes (no idempotency)"], ["after", "acts, then records the key"], ["claim", "claims the key (conditional write), then acts"], ["natural", "idempotent operation (upsert / set)"]
+  ], k => { dp.guard = k; paintDp(); });
+  $("dpRate").oninput = paintDp;
+
+  function paintDp() {
+    Object.entries({ dpWork: dp.work, dpVis: dp.vis, dpFail: dp.fail, dpMax: dp.max, dpQueue: dp.queue, dpGuard: dp.guard }).forEach(([id, k]) => mark(id, k));
+    const rate = +$("dpRate").value, work = +dp.work, vis = +dp.vis, fail = +dp.fail, maxRc = +dp.max;
+    $("dpRateLbl").textContent = n(rate) + " messages / h";
+    const fifo = dp.queue === "fifo";
+    const producer = fifo ? 0 : rate / 20000;
+    const queue = fifo ? 0 : rate / 100000;
+    const visFrac = work > vis ? 1 : work * 3 > vis ? 0.02 : 0;
+    // each message whose work exceeds the timeout is redelivered maxReceiveCount-1 more times, then dead-lettered
+    const visDups = work > vis ? rate * (maxRc - 1) : rate * visFrac;
+    const crash = rate * fail;
+    const dups = producer + queue + visDups + crash;
+    const dlqVis = work > vis ? rate : 0;
+    const dlqPoison = rate * Math.pow(fail, maxRc) * 0; // crash-after-act retries succeed the second time; no DLQ from them
+    const dlq = dlqVis + dlqPoison;
+    const harm = dp.guard === "none" ? dups : dp.guard === "after" ? crash * 0.02 + (work > vis ? 0 : 0) : 0;
+    const harmNote = dp.guard === "none" ? "every duplicate delivery runs the side effect again" :
+      dp.guard === "after" ? "a crash between the act and the record leaves no trace; about 2% of the consumer-failure duplicates slip through" :
+      dp.guard === "claim" ? "the second delivery fails the conditional write and is skipped" : "running it twice has the effect of once";
+
+    let result, colour, story, fix;
+    if (work > vis) {
+      result = "Broken: every message runs " + maxRc + "×"; colour = "bad";
+      story = `The work takes ${secs(work)} and the lease is ${secs(vis)}: every message is redelivered while the first consumer is still on it, each attempt "fails" to delete in time, and after ${maxRc} receives it lands in the DLQ fully processed, ${maxRc} times over. ${n(rate)} messages an hour become ${n(rate * maxRc)} runs and ${n(rate)} dead letters.`;
+      fix = `Visibility timeout above the slowest honest run (${secs(work * 3)} here, or extend it from the consumer); then the idempotency key, because the next slow day will do this again.`;
+    } else if (harm > 0 && harm >= 1) {
+      result = "Duplicates reach the world"; colour = dp.guard === "none" ? "bad" : "orange";
+      story = `${n(dups)} duplicate deliveries an hour: ${n(producer + queue)} from producer and queue retries, ${n(visDups)} from the slow tail crossing the timeout, ${n(crash)} from consumers that acted and did not delete. ${dp.guard === "none" ? "The consumer runs the side effect on each of them." : "The consumer records the key after acting, so a crash between the two leaves no record: " + n(harm) + " an hour get through."}`;
+      fix = dp.guard === "none" ? (fifo ? "FIFO removed the producer duplicates and nothing else. Claim the business key with a conditional write before the act, pass it downstream as the idempotency key, delete after durability." : "A business key claimed with a conditional write before the act; the key passed to the payment provider; delete after the work is durable. FIFO would remove only the " + n(producer) + " producer duplicates.") :
+        "Claim before acting, not after: the conditional write is the first thing the consumer does, and it is released if the act fails.";
+    } else {
+      result = "Safe: duplicates are absorbed"; colour = "pub";
+      story = `${n(dups)} duplicate deliveries an hour still happen (${n(producer + queue)} producer and queue, ${n(visDups)} timeout tail, ${n(crash)} consumer failures) and none of them changes anything: ${harmNote}. ${fifo ? "FIFO dedup removed the producer retries; the consumer removed the rest." : ""}`;
+      fix = dp.guard === "natural" ? "Keep the operation naturally idempotent as it evolves: the day someone adds an increment or an email, it needs a key." : "This is the design: at-least-once delivery, an idempotent consumer. Alarm on the DLQ and on the duplicate-skip counter so a rise in either is noticed.";
+    }
+    big("dpDups", n(dups) + " / h", dups > rate * 0.05 ? "orange" : "text");
+    big("dpHarm", n(harm) + " / h", harm >= 1 ? colour : "pub");
+    big("dpDlq", n(dlq) + " / h", dlq > 0 ? "bad" : "text");
+    big("dpResult", result, colour);
+    $("dpTable").innerHTML = "<tr><th>Source of the second delivery</th><th>Per hour</th><th>Removed by</th></tr>" + [
+      ["Producer retried a SendMessage whose reply was lost (1 in 20,000)", `<b>${n(producer)}</b>${fifo ? " (FIFO dedup id, 5-minute window)" : ""}`, "FIFO dedup id · idempotency key"],
+      ["Queue's own internal redelivery (1 in 100,000, standard only)", `<b>${n(queue)}</b>`, "FIFO · idempotency key"],
+      [`Visibility timeout (${secs(vis)}) expired before the work (${secs(work)}, tail ${secs(work * 3)}) finished`, `<b>${n(visDups)}</b>${work > vis ? ` (every message, ${maxRc - 1} extra times)` : visFrac ? " (2% slow tail)" : ""}`, "longer timeout · heartbeat · idempotency key"],
+      [`Consumer acted, then crashed or timed out before DeleteMessage (${pct(fail)})`, `<b>${n(crash)}</b>`, "idempotency key, claimed before the act"],
+      ["Duplicate side effects after the consumer's guard", `<b>${n(harm)}</b>`, harmNote],
+      ["Dead letters", `<b>${n(dlq)}</b>`, work > vis ? "fix the timeout; these were processed" : "none from these sources; poison messages would land here after " + maxRc + " receives"]
+    ].map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join("");
+    $("dpMsg").innerHTML = `<b>${result}.</b> ${story} <b>What to change:</b> ${fix}`;
+  }
+  paintDp();
+
+  // ---------- Simulator 2: drain the backlog ----------
+  const bk = { work: "0.2", model: "lambda100", batch: "10", poll: "long", backlog: "0" };
+  buttons("bkWork", "Work per message", [["0.05", "50 ms"], ["0.2", "200 ms"], ["1", "1 s"], ["5", "5 s"], ["30", "30 s"]], k => { bk.work = k; paintBk(); });
+  buttons("bkModel", "Consumer", [["lambda10", "Lambda, max concurrency 10"], ["lambda100", "Lambda, max concurrency 100"], ["lambda1000", "Lambda, max concurrency 1,000"], ["ecs2", "ECS, 2 tasks × 10 threads"], ["ecs10", "ECS, 10 tasks × 10 threads"], ["ecs50", "ECS, 50 tasks × 10 threads"]], k => { bk.model = k; paintBk(); });
+  buttons("bkBatch", "Batch size", [["1", "1"], ["10", "10"]], k => { bk.batch = k; paintBk(); });
+  buttons("bkPoll", "Polling", [["long", "long (WaitTimeSeconds 20)"], ["short", "short (WaitTimeSeconds 0)"]], k => { bk.poll = k; paintBk(); });
+  buttons("bkBacklog", "Backlog at the start", [["0", "none"], ["100000", "100 thousand"], ["1000000", "1 million"]], k => { bk.backlog = k; paintBk(); });
+  $("bkRate").oninput = paintBk;
+
+  function paintBk() {
+    Object.entries({ bkWork: bk.work, bkModel: bk.model, bkBatch: bk.batch, bkPoll: bk.poll, bkBacklog: bk.backlog }).forEach(([id, k]) => mark(id, k));
+    const rate = +$("bkRate").value, work = +bk.work, batch = +bk.batch, start = +bk.backlog;
+    $("bkRateLbl").textContent = n(rate) + " msg / s";
+    const lambda = bk.model.startsWith("lambda");
+    const conc = lambda ? +bk.model.slice(6) : +bk.model.slice(3) * 10;
+    const tasks = lambda ? 0 : +bk.model.slice(3);
+    const perInv = lambda ? 0.1 + work * batch : work * batch;   // seconds per invocation / per batch
+    const maxThru = conc * batch / perInv;
+    const H = 3600, M = 30 * 24 * 3600;
+    const net = rate - maxThru;
+    const depth1h = Math.max(0, start + net * H);
+    const drainS = net < 0 ? start / -net : Infinity;
+    const age1h = depth1h > 0 ? Math.min(H + (start > 0 ? 0 : 0), depth1h / Math.max(rate, 1)) : (maxThru > 0 ? Math.min(perInv, H) : H);
+    const served = Math.min(rate, maxThru);
+    // requests per month
+    const sendsPerS = rate / Math.min(batch === 10 ? 10 : 1, Math.max(1, rate));
+    const sends = (rate >= 10 ? rate / 10 : rate) * M;
+    const receivesBusy = (served / batch) * M;
+    const deletes = (served / batch) * M;
+    const busyFrac = Math.min(1, rate / maxThru);
+    const idlePollers = lambda ? Math.max(5, Math.min(conc, Math.ceil(rate / maxThru * conc))) * (1 - busyFrac) : conc * (1 - busyFrac);
+    const emptyPerS = lambda ? idlePollers / 20 : idlePollers * (bk.poll === "short" ? 20 : 1 / 20);
+    const empties = emptyPerS * M;
+    const reqs = sends + receivesBusy + deletes + empties;
+    const sqsCost = reqs / 1e6 * 0.40;
+    const invocations = lambda ? served / batch * M : 0;
+    const gbs = lambda ? invocations * perInv * 0.5 : 0;
+    const lambdaCost = invocations / 1e6 * 0.20 + gbs * 0.0000166667;
+    const ecsCost = tasks * (0.5 * 0.04048 + 1 * 0.004445) * 730;
+    const total = sqsCost + lambdaCost + ecsCost;
+
+    let result, colour, story, fix;
+    const name = lambda ? `Lambda at ${n(conc)} concurrent` : `${tasks} ECS tasks (${n(conc)} threads)`;
+    if (net > 0) {
+      result = "Backlog grows"; colour = "bad";
+      story = `${name} reaches ${n(maxThru)} messages a second with ${secs(perInv)} per ${lambda ? "invocation" : "batch"}; arrivals are ${n(rate)}. The queue gains ${n(net)} a second: ${n(depth1h)} messages after an hour, and the oldest message is ${secs(age1h)} old and getting older.`;
+      fix = lambda ? (conc < 1000 ? `Raise the mapping's maximum concurrency to about ${n(Math.ceil(rate * perInv / batch * 1.3))}; ${batch === 1 ? "batch 10 to cut the per-invocation overhead; " : ""}then look at the handler's ${secs(work)}.` : `A thousand concurrent is the account's default ceiling: ask for more, make the handler faster, or move this steady load to a container fleet of ${n(Math.ceil(rate * work / 10 * 1.3))} tasks.`) :
+        `Scale the service to about ${n(Math.ceil(rate * work / 10 * 1.3))} tasks on backlog-per-task, not CPU; or more threads if the work is I/O bound.`;
+    } else if (start > 0 && drainS > 3600) {
+      result = "Drains, slowly"; colour = "orange";
+      story = `${name} delivers ${n(maxThru)} a second against ${n(rate)} arriving, ${n(-net)} a second of headroom. The ${n(start)} backlog takes ${secs(drainS)} to clear; the oldest message peaks near ${secs(Math.min(drainS, 14 * 86400))}.`;
+      fix = `For the burst, more consumers for an hour: ${lambda ? "a higher maximum concurrency is instant" : "scale out on backlog per task"}; the retention clock (4 days by default) is the deadline.`;
+    } else {
+      result = "Keeps up"; colour = "pub";
+      story = `${name} delivers up to ${n(maxThru)} a second; arrivals are ${n(rate)}, so the consumer is busy ${pct(busyFrac)} of the time${start > 0 ? ` and the ${n(start)} backlog clears in ${secs(drainS)}` : ""}. The oldest message waits about ${secs(age1h)}.`;
+      fix = busyFrac < 0.1 && !lambda ? "The fleet idles 90% of the time: a Lambda consumer or fewer tasks would cost less; scale on backlog per task so it grows for the burst." : busyFrac > 0.8 ? "Little headroom: a 25% rise in traffic tips this into a growing backlog. Alarm on age and leave room." : "Alarm on ApproximateAgeOfOldestMessage, not depth, and on the DLQ.";
+    }
+    big("bkThru", n(maxThru) + " msg / s", colour);
+    big("bkDepth", n(depth1h), depth1h > 0 ? colour : "text");
+    big("bkAge", secs(age1h), colour);
+    big("bkCost", money(total), total > 1000 ? "orange" : "text");
+    $("bkTable").innerHTML = "<tr><th>Line</th><th>Per month</th></tr>" + [
+      ["Sends (batches of 10 when the rate allows)", `${n(sends / 1e6)} M requests · ${money2(sends / 1e6 * 0.40)}`],
+      [`Receives (${batch} a request, busy)`, `${n(receivesBusy / 1e6)} M · ${money2(receivesBusy / 1e6 * 0.40)}`],
+      [`Deletes (${batch} a request)`, `${n(deletes / 1e6)} M · ${money2(deletes / 1e6 * 0.40)}`],
+      [`Empty receives (${bk.poll} polling, ${lambda ? "Lambda's pollers long-poll regardless" : n(Math.round(idlePollers)) + " idle threads"})`, `<b>${n(empties / 1e6)} M · ${money2(empties / 1e6 * 0.40)}</b>`],
+      ["SQS total", `<b>${money2(sqsCost)}</b>`],
+      lambda ? [`Lambda: ${n(invocations / 1e6)} M invocations × ${secs(perInv)} at 512 MB`, `<b>${money2(lambdaCost)}</b>`] : [`Fargate: ${tasks} tasks × 0.5 vCPU, 1 GB, all month`, `<b>${money2(ecsCost)}</b>`],
+      ["Total", `<b>${money2(total)}</b>`]
+    ].map(row).join("");
+    $("bkMsg").innerHTML = `<b>${result}.</b> ${story} <b>What to change:</b> ${fix}${bk.poll === "short" && !lambda && empties > 1e6 ? ` <b>And:</b> short polling costs ${money2(empties / 1e6 * 0.40)} a month of empty receives; set ReceiveMessageWaitTimeSeconds=20 on the queue.` : ""}`;
+  }
+  paintBk();
+
+  // ---------- Simulator 3: which messaging service ----------
+  const wm = { shape: "work", order: "none", replay: "no", rate: "100", readers: "one" };
+  buttons("wmShape", "What moves", [["work", "jobs for a pool of workers"], ["event", "an event other systems react to"], ["stream", "a record stream for analytics / processing"], ["process", "a multi-step process with retries"], ["time", "something at a time or on a schedule"], ["legacy", "an app that speaks AMQP / JMS / MQTT"], ["push", "live updates to browsers and phones"]], k => { wm.shape = k; paintWm(); });
+  buttons("wmOrder", "Order", [["none", "not needed"], ["key", "per key (customer, device)"], ["global", "global"]], k => { wm.order = k; paintWm(); });
+  buttons("wmReplay", "Replay old messages", [["no", "never"], ["days", "for days"], ["forever", "for months or years"]], k => { wm.replay = k; paintWm(); });
+  buttons("wmRate", "Rate", [["10", "10 / s"], ["100", "100 / s"], ["1000", "1,000 / s"], ["10000", "10,000 / s"], ["100000", "100,000 / s"]], k => { wm.rate = k; paintWm(); });
+  buttons("wmReaders", "Readers", [["one", "one consumer service"], ["few", "a few known services"], ["many", "many teams, other accounts, SaaS"]], k => { wm.readers = k; paintWm(); });
+
+  function paintWm() {
+    Object.entries({ wmShape: wm.shape, wmOrder: wm.order, wmReplay: wm.replay, wmRate: wm.rate, wmReaders: wm.readers }).forEach(([id, k]) => mark(id, k));
+    const rate = +wm.rate, M = 30 * 24 * 3600, msgs = rate * M, mm = msgs / 1e6;
+    const kb = 1; // 1 KB messages
+    const gb = msgs * kb / 1e6;
+    const costs = {
+      sqs: mm * 3 / 10 * 0.40, fifo: mm * 3 / 10 * 0.50, sns: mm * 0.50, eb: mm * 1.0,
+      kinesis: Math.max(Math.ceil(rate * kb / 1000) , 1) * 0.015 * 730 + mm * 0.014,
+      kinesisOd: 0.04 * 730 + gb * 0.12,
+      msk: 460 + gb * 0.10, mskSls: 550 + gb * 0.15, mq: 420, mqMicro: 26,
+      sfnStd: mm * 5 * 25, sfnExp: mm * 1.0 + mm * 1e6 * 1 * 0.0625 * 0.00001667, sched: Math.max(0, mm - 14) * 1.0, appsync: mm * 4 + mm * 2
+    };
+    let pick, alt, guar, floor, why, change;
+    const S = wm.shape, O = wm.order, R = wm.replay, Rd = wm.readers;
+    if (S === "work") {
+      if (R !== "no") { pick = "Kinesis Data Streams"; alt = "SQS + an archive copy to S3"; guar = "at least once · per shard"; floor = costs.kinesisOd; why = "A queue deletes what it delivers; replay needs a log. Readers keep their own position and re-read from a timestamp."; change = "If replay is a rare recovery rather than a feature: SQS and a copy of every message to S3 via Firehose from an SNS topic."; }
+      else if (O === "global") { pick = "SQS FIFO, one group"; alt = "SQS standard with versioned upserts"; guar = "exactly-once processing (5 min) · one consumer at a time"; floor = costs.fifo; why = "Global order means one consumer and 300 messages a second (3,000 batched). Ask whether 'latest state wins' would do instead."; change = rate >= 1000 ? "At this rate one group cannot keep up: shard by key with FIFO high throughput, or Kinesis with one shard if a log fits." : "If the consumer only needs the newest state: a standard queue and an idempotent upsert with a version."; }
+      else if (O === "key") { pick = "SQS FIFO, group = key"; alt = "Kinesis (if readers multiply)"; guar = "exactly-once processing (5 min) · ordered per group"; floor = costs.fifo; why = "Order per entity with as many groups as entities; high throughput mode scales by group count. Producer dedup for free."; change = rate >= 10000 ? "At tens of thousands a second check the high-throughput quota for the Region; a log (Kinesis) is the alternative." : "If order turns out to be 'latest wins': standard."; }
+      else { pick = "SQS standard"; alt = "EventBridge → SQS (if routing is needed)"; guar = "at least once · best-effort order"; floor = costs.sqs; why = "Unlimited throughput, per-request pricing, a lease per message, a DLQ. The consumer pool competes for work."; change = Rd === "many" ? "Several services want the same job: SNS in front, one queue each." : "If jobs become a process with steps and compensation: Step Functions driven by the queue through a Pipe."; }
+    } else if (S === "event") {
+      if (R === "forever" || rate >= 100000) { pick = rate >= 100000 || R === "forever" && Rd !== "many" ? "Kinesis Data Streams" : "MSK"; alt = pick === "MSK" ? "Kinesis" : "MSK"; guar = "at least once · per shard / partition"; floor = pick === "MSK" ? costs.msk : costs.kinesisOd; why = "Events every reader may re-read for months at very high rates are a log. Topics and buses retain nothing or little."; change = "If replay is really 'rebuild a projection once a year': EventBridge with an archive and S3 is far cheaper."; }
+      else if (Rd === "many" || R === "days") { pick = "EventBridge"; alt = "SNS → SQS"; guar = "at least once · no order · 24 h retries"; floor = costs.eb; why = "Content-based rules per team, cross-account buses, AWS and SaaS events alongside yours, an archive to replay, a DLQ per target."; change = rate >= 10000 ? "Above the PutEvents quota (10,000 a second in the big Regions) ask for a raise or fan out with SNS, which has no such ceiling." : O === "key" ? "Order per key: route to a FIFO queue with the group taken from a field." : "If every subscriber is known and in one account, SNS → SQS is simpler and nearly free."; }
+      else { pick = O !== "none" ? "SNS FIFO → SQS FIFO" : "SNS → SQS"; alt = "EventBridge"; guar = O !== "none" ? "exactly-once processing · ordered per group" : "at least once · no order"; floor = costs.sns + costs.sqs * Math.max(1, Rd === "few" ? 3 : 1); why = "One publish, a buffer per subscriber, filter policies at the topic, free delivery to queues. The subscriber that is down loses nothing."; change = "When the publisher stops knowing its subscribers, or SaaS events join: EventBridge."; }
+    } else if (S === "stream") {
+      if (R === "forever" || rate >= 100000) { pick = "MSK"; alt = "Kinesis Data Streams"; guar = "at least once · per partition · exactly-once with transactions"; floor = costs.msk; why = "Months of retention, hundreds of partitions, the Kafka ecosystem (Connect, Flink, Debezium). A broker-hour price that wins at high volume."; change = "If the team does not run Kafka today and the consumers are Lambda and Firehose: Kinesis at a fraction of the operations."; }
+      else { pick = "Kinesis Data Streams"; alt = "MSK"; guar = "at least once · per shard"; floor = rate >= 1000 ? costs.kinesis : costs.kinesisOd; why = "Ordered per shard, retained up to a year, any number of readers at their own position, Lambda and Firehose and Flink without brokers."; change = R === "no" && Rd === "one" ? "One reader that never replays is a queue: SQS is cheaper and absorbs bursts without resharding." : "If the organisation already speaks Kafka: MSK."; }
+    } else if (S === "process") {
+      if (rate >= 1000) { pick = "Step Functions Express"; alt = "Standard with Express children"; guar = "at least once (async) · at most once (sync)"; floor = costs.sfnExp; why = "Thousands a second of a short process: per-request pricing. Steps must be idempotent."; change = "Any step over five minutes, an approval, or an audit requirement: Standard for the outer process."; }
+      else { pick = "Step Functions Standard"; alt = "EventBridge choreography"; guar = "exactly-once execution · tasks at least once"; floor = costs.sfnStd; why = "Retries, Catch, compensation, callbacks, a year of runtime and a history someone can read. Five states a run assumed."; change = "If ten teams own ten steps and nobody owns the sequence: events on a bus, each team with a rule."; }
+    } else if (S === "time") {
+      pick = "EventBridge Scheduler"; alt = "SQS delay (≤ 15 min) · Step Functions Wait"; guar = "at least once · flexible window"; floor = costs.sched; why = "Cron, rate and one-off schedules with time zones, a million of them, invoking any API directly, deleting themselves after a one-off."; change = "A delay inside a workflow: Wait. A short delay for a message: the queue's delay.";
+    } else if (S === "legacy") {
+      pick = "Amazon MQ"; alt = "SQS, one queue at a time"; guar = "at least once (JMS / AMQP semantics)"; floor = rate >= 1000 ? costs.mq : costs.mqMicro; why = "The protocols the application already speaks, managed: ActiveMQ for JMS and OpenWire, RabbitMQ for AMQP 0-9-1. A broker you size."; change = "Every queue the team can migrate goes to SQS; what stays on MQ is the protocol work (MQTT devices, a vendor's JMS client).";
+    } else {
+      pick = "AppSync subscriptions / Events API"; alt = "API Gateway WebSocket"; guar = "at least once to connected clients · no retention"; floor = costs.appsync; why = "Clients subscribe over WebSocket; a mutation or a published event fans out with server-side filters and per-field auth. No connection fleet to run."; change = "Server-to-server, no browsers: this is a queue or a bus, not a push API.";
+    }
+    const floorTxt = floor < 1 ? "≈ $0" : floor < 100 ? "≈ " + money2(floor) : "≈ " + money(floor);
+    big("wmPick", pick, "orange");
+    big("wmAlt", alt, "text");
+    big("wmGuar", guar, "text");
+    big("wmFloor", floorTxt + " / month", floor > 1000 ? "orange" : "text");
+    $("wmTable").innerHTML = "<tr><th>Service</th><th>Shape</th><th>Delivery · order · retention</th><th>At this rate</th></tr>" + [
+      ["SQS standard", "queue, competing consumers", "at least once · best effort · ≤ 14 d", money2(costs.sqs)],
+      ["SQS FIFO", "queue, per-group order", "exactly-once processing · per group · ≤ 14 d", money2(costs.fifo)],
+      ["SNS", "topic, fan-out", "at least once · none · no retention", money2(costs.sns) + " + queues"],
+      ["EventBridge", "bus with rules", "at least once · none · archive", money2(costs.eb)],
+      ["Kinesis Data Streams", "log, shards", "at least once · per shard · ≤ 365 d", money2(costs.kinesisOd) + " on-demand · " + money2(costs.kinesis) + " provisioned"],
+      ["MSK", "log, partitions", "at least once · per partition · as configured", money2(costs.msk) + " (3 brokers)"],
+      ["Step Functions", "orchestration", "Standard exactly-once · Express at least once", money2(costs.sfnStd) + " Standard · " + money2(costs.sfnExp) + " Express"],
+      ["Amazon MQ", "broker", "at least once · per queue · until consumed", money2(costs.mq) + " active/standby"],
+      ["AppSync", "push to clients", "at least once to connected · none", money2(costs.appsync)]
+    ].map(r => `<tr${r[0].split(" ")[0] === pick.split(" ")[0] ? ' class="hit"' : ""}><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td class="num">${r[3]}</td></tr>`).join("");
+    $("wmMsg").innerHTML = `<b>${pick}.</b> ${why} <b>What would change the answer:</b> ${change}`;
+  }
+  paintWm();
+</script>
+</body>
+</html>
