@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 11 — Messaging and orchestration</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .sim .calc { margin: 14px 0 12px; }
+  .sim .calc .big { font-size: 21px; }
+  .sim h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .sim .seg b { min-width: 170px; }
+  .sim input[type=range] { width: 260px; accent-color: var(--orange); vertical-align: middle; }
+  td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .sim td.num { white-space: nowrap; }
+  .table-wrap code, .card code { overflow-wrap: anywhere; }
+  td.t { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .lab li { margin-bottom: 12px; }
+  svg .box { fill: var(--card); stroke: var(--border); stroke-width: 1.2; }
+  svg .lbl { font-size: 12.5px; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  svg .title { font-size: 13px; font-weight: 700; }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+  svg .arrow.both { marker-start: url(#arr); }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--pub); }
+  svg .msg { fill: var(--az-fill); stroke: var(--az); stroke-width: 1; }
+  svg .msg.inflight { fill: var(--orange); stroke: var(--orange); }
+  svg .msg.dead { fill: var(--bad); stroke: var(--bad); }
+  svg .msg.grp { fill: var(--priv-fill); stroke: var(--priv); }
+  svg text.mono { font-size: 10.5px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-10/index.html">← Day 10</a><a href="../README.md">30-day plan</a><a href="../day-12/index.html">Day 12 →</a></nav>
+  <header>
+    <div class="tag">Day 11 of 30 · Week 2 — Databases, Messaging, Serverless, Containers</div>
+    <h1>Messaging and orchestration</h1>
+    <p class="lead">A queue between two services buys you three things: the producer never waits for the consumer, a burst becomes a backlog instead of an outage, and a consumer that dies loses nothing. It costs you one thing, and most teams discover it in production: the message that was processed twice. SQS promises at-least-once delivery, and so does every other system on this page once you read the small print; the consumer that charges a card and then crashes before deleting the message will charge it again. This page is about building on that promise instead of fighting it. First the queue: SQS standard against FIFO, the visibility timeout, long polling, dead-letter queues and redrive. Then the fan-out and routing layer: SNS with filter policies, EventBridge with buses, rules, Pipes and the Scheduler. Then the orchestrators: Step Functions standard against express, retries, and the saga pattern for a process that must undo itself. Then the streams and the rest: Kinesis against MSK, Amazon MQ for protocols you did not choose, and AppSync for clients that want to be told. The centre of the page is the interview question: a message is processed twice. Is that a bug? How do you make the consumer safe?</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 700" role="img" aria-label="Producers publish to an SNS topic, an EventBridge bus or directly to SQS; SQS standard and FIFO queues with visibility timeouts and a dead-letter queue feed consumers; EventBridge rules, Pipes and the Scheduler route events; Step Functions orchestrates multi-step work with retries and compensation; Kinesis and MSK carry ordered replayable streams; Amazon MQ serves legacy protocols; AppSync pushes data to clients; the metrics to watch; and the answer to whether a message processed twice is a bug">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke" style="fill: var(--muted)"/></marker>
+        </defs>
+
+        <!-- Step 1: Region and producers -->
+        <g data-step="1">
+          <rect x="12" y="12" width="976" height="446" rx="14" fill="var(--region-fill)" stroke="var(--region)" stroke-width="1.5"/>
+          <text x="28" y="34" class="title" style="fill: var(--region)">Region · every service here is Regional, multi-AZ by default, reached over HTTPS; nothing lives in your VPC unless you add an endpoint or a broker</text>
+          <rect x="30" y="58" width="150" height="84" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="105" y="78" text-anchor="middle" class="title">Producers</text>
+          <text x="105" y="94" text-anchor="middle" class="small">API · worker · AWS service</text>
+          <text x="105" y="108" text-anchor="middle" class="small">SendMessage · Publish</text>
+          <text x="105" y="122" text-anchor="middle" class="small">PutEvents · PutRecord</text>
+          <text x="105" y="136" text-anchor="middle" class="small">retry on 5xx · the first duplicate</text>
+          <path d="M180 84 L205 84" class="arrow"/>
+          <path d="M180 110 L205 190" class="arrow"/>
+        </g>
+
+        <!-- Step 2: SQS -->
+        <g data-step="2">
+          <rect x="205" y="160" width="320" height="150" rx="12" fill="var(--card)" stroke="var(--orange)" stroke-width="1.5"/>
+          <text x="217" y="180" class="title" style="fill: var(--orange)">SQS · a queue is a buffer with a lease on every message</text>
+          <text x="217" y="196" class="small" style="font-weight:700; fill: var(--text)">Standard · unlimited throughput · best-effort order · at-least-once</text>
+          <rect x="217" y="203" width="22" height="14" rx="3" class="msg"/><rect x="243" y="203" width="22" height="14" rx="3" class="msg"/><rect x="269" y="203" width="22" height="14" rx="3" class="msg"/>
+          <rect x="295" y="203" width="22" height="14" rx="3" class="msg inflight"/><rect x="321" y="203" width="22" height="14" rx="3" class="msg inflight"/>
+          <text x="350" y="214" class="small">■ in flight: invisible until the visibility timeout (30 s default)</text>
+          <text x="217" y="234" class="small" style="font-weight:700; fill: var(--text)">FIFO · .fifo · exactly-once processing · ordered per MessageGroupId</text>
+          <rect x="217" y="241" width="22" height="14" rx="3" class="msg grp"/><rect x="243" y="241" width="22" height="14" rx="3" class="msg grp"/>
+          <text x="252" y="252" text-anchor="middle" class="mono" style="fill: var(--priv)">A</text>
+          <rect x="275" y="241" width="22" height="14" rx="3" class="msg grp"/><rect x="301" y="241" width="22" height="14" rx="3" class="msg grp"/>
+          <text x="310" y="252" text-anchor="middle" class="mono" style="fill: var(--priv)">B</text>
+          <text x="334" y="252" class="small">dedup id 5 min · 300 msg/s per group · a group is locked while one is in flight</text>
+          <text x="217" y="276" class="small">long polling 20 s · batch 10 · retention 4 d (max 14) · delay ≤ 15 min · 256 KB (1 MiB)</text>
+          <rect x="420" y="283" width="96" height="20" rx="5" class="box" style="stroke: var(--bad)"/>
+          <text x="468" y="297" text-anchor="middle" class="small" style="fill: var(--bad); font-weight:700">DLQ · redrive back</text>
+          <text x="217" y="297" class="small">ReceiveCount &gt; maxReceiveCount →</text>
+        </g>
+
+        <!-- Step 3: Consumers -->
+        <g data-step="3">
+          <rect x="30" y="160" width="150" height="150" rx="10" class="box" style="stroke: var(--pub)"/>
+          <text x="105" y="180" text-anchor="middle" class="title" style="fill: var(--pub)">Consumers</text>
+          <text x="105" y="196" text-anchor="middle" class="small">Lambda event source mapping</text>
+          <text x="105" y="210" text-anchor="middle" class="small">ECS workers · a poll loop</text>
+          <text x="105" y="230" text-anchor="middle" class="small" style="font-weight:700; fill: var(--text)">receive → claim → act → delete</text>
+          <text x="105" y="246" text-anchor="middle" class="small">idempotency key per message</text>
+          <text x="105" y="260" text-anchor="middle" class="small">conditional write · upsert</text>
+          <text x="105" y="274" text-anchor="middle" class="small">delete only after success</text>
+          <text x="105" y="288" text-anchor="middle" class="small">visibility ≥ 6× the work time</text>
+          <text x="105" y="302" text-anchor="middle" class="small">partial batch failures</text>
+          <path d="M205 236 L180 236" class="arrow both"/>
+        </g>
+
+        <!-- Step 4: SNS -->
+        <g data-step="4">
+          <rect x="205" y="58" width="230" height="84" rx="10" class="box" style="stroke: var(--az)"/>
+          <text x="217" y="78" class="title" style="fill: var(--az)">SNS topic · fan-out</text>
+          <text x="217" y="94" class="small">one publish → every subscription: SQS, Lambda,</text>
+          <text x="217" y="108" class="small">HTTP, email, SMS, Firehose · filter policy per sub</text>
+          <text x="217" y="122" class="small">attributes or body · raw delivery · FIFO topic → FIFO queue</text>
+          <text x="217" y="136" class="small">no retention: a subscriber that is down misses it unless it is a queue</text>
+          <path d="M320 142 L320 160" class="arrow"/>
+          <text x="326" y="155" class="small">filtered</text>
+        </g>
+
+        <!-- Step 5: EventBridge -->
+        <g data-step="5">
+          <rect x="460" y="58" width="270" height="84" rx="10" class="box" style="stroke: var(--priv)"/>
+          <text x="472" y="78" class="title" style="fill: var(--priv)">EventBridge · bus · rules · targets</text>
+          <text x="472" y="94" class="small">default bus (AWS events) · custom · partner · 300 rules a bus</text>
+          <text x="472" y="108" class="small">pattern match on any field → 5 targets · transform · retry 24 h</text>
+          <text x="472" y="122" class="small">archive + replay · schema registry · cross-account · ~0.5 s</text>
+          <text x="472" y="136" class="small">Pipes: source → filter → enrich → target · Scheduler: cron, at, rate</text>
+          <path d="M435 100 L460 100" class="arrow both"/>
+          <path d="M540 142 L540 160" class="arrow"/>
+          <text x="546" y="155" class="small">rule → queue, function, state machine, API</text>
+        </g>
+
+        <!-- Step 6: Step Functions -->
+        <g data-step="6">
+          <rect x="545" y="160" width="210" height="150" rx="12" fill="var(--card)" stroke="var(--region)" stroke-width="1.5"/>
+          <text x="557" y="180" class="title" style="fill: var(--region)">Step Functions · the state is the data</text>
+          <rect x="557" y="188" width="60" height="18" rx="4" class="box" style="stroke: var(--region)"/><text x="587" y="200" text-anchor="middle" class="small">Reserve</text>
+          <path d="M617 197 L627 197" class="arrow"/>
+          <rect x="628" y="188" width="60" height="18" rx="4" class="box" style="stroke: var(--region)"/><text x="658" y="200" text-anchor="middle" class="small">Charge</text>
+          <path d="M688 197 L698 197" class="arrow"/>
+          <rect x="699" y="188" width="48" height="18" rx="4" class="box" style="stroke: var(--region)"/><text x="723" y="200" text-anchor="middle" class="small">Ship</text>
+          <path d="M658 206 L658 220" class="arrow bad"/>
+          <rect x="612" y="221" width="92" height="18" rx="4" class="box" style="stroke: var(--bad)"/><text x="658" y="233" text-anchor="middle" class="small" style="fill: var(--bad)">Catch → Release</text>
+          <text x="557" y="256" class="small">Retry: errors, interval, backoff, max · Catch → compensate</text>
+          <text x="557" y="270" class="small">Standard: 1 year · exactly-once · $25 / M transitions</text>
+          <text x="557" y="284" class="small">Express: 5 min · at-least-once · $1 / M + duration</text>
+          <text x="557" y="298" class="small">Map (distributed, 10k) · Parallel · Wait · callback .waitForTaskToken</text>
+        </g>
+
+        <!-- Step 7: streams, MQ, AppSync -->
+        <g data-step="7">
+          <rect x="770" y="160" width="210" height="150" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="782" y="180" class="title" style="fill: var(--edge)">Streams · a log, not a queue</text>
+          <text x="782" y="196" class="small">Kinesis Data Streams: shards</text>
+          <text x="782" y="210" class="small">1 MB/s in · 2 MB/s out per shard · 24 h–365 d</text>
+          <text x="782" y="224" class="small">enhanced fan-out · on-demand · KCL checkpoints</text>
+          <text x="782" y="242" class="small">MSK: Kafka brokers or Serverless</text>
+          <text x="782" y="256" class="small">partitions · consumer groups · offsets</text>
+          <text x="782" y="270" class="small">keep for as long as you pay · connectors</text>
+          <text x="782" y="290" class="small" style="font-weight:700; fill: var(--text)">readers keep their own position;</text>
+          <text x="782" y="304" class="small" style="font-weight:700; fill: var(--text)">nothing is deleted by reading</text>
+          <rect x="755" y="58" width="225" height="84" rx="10" class="box" style="stroke: var(--dc)"/>
+          <text x="767" y="78" class="title">AppSync · Amazon MQ</text>
+          <text x="767" y="94" class="small">AppSync: GraphQL, resolvers, subscriptions over</text>
+          <text x="767" y="108" class="small">WebSocket, Events API: the server pushes to clients</text>
+          <text x="767" y="122" class="small">Amazon MQ: ActiveMQ / RabbitMQ brokers in your VPC</text>
+          <text x="767" y="136" class="small">AMQP, JMS, MQTT, STOMP · active/standby · you size it</text>
+          <rect x="205" y="326" width="775" height="118" rx="10" class="box" style="stroke: var(--border)"/>
+          <text x="217" y="346" class="title">What each one promises</text>
+          <text x="217" y="364" class="small"><tspan font-weight="700" style="fill: var(--text)">Delivery</tspan>: SQS standard, SNS, EventBridge, Kinesis, MSK, Express workflows, MQ: at least once. SQS FIFO: exactly-once processing within the 5-minute dedup window. Standard workflows: exactly-once execution of the state machine, but each task runs at least once.</text>
+          <text x="217" y="380" class="small"><tspan font-weight="700" style="fill: var(--text)">Order</tspan>: SQS standard, SNS standard, EventBridge: none promised. FIFO queue and topic: per message group. Kinesis: per shard. Kafka: per partition. Order is always "per key", and the key is yours to choose.</text>
+          <text x="217" y="396" class="small"><tspan font-weight="700" style="fill: var(--text)">Retention</tspan>: SQS up to 14 days and a message is gone once deleted. SNS: none. EventBridge: an archive you replay. Kinesis: up to a year. Kafka: as configured. Step Functions: history 90 days.</text>
+          <text x="217" y="412" class="small"><tspan font-weight="700" style="fill: var(--text)">Consumers</tspan>: a queue has competing consumers and each message goes to one of them. A topic or bus copies to every subscriber. A stream lets any number read the same records at their own pace.</text>
+          <text x="217" y="432" class="small" style="font-weight:700; fill: var(--bad)">None of them promises that your handler ran once. That promise is made by the handler.</text>
+        </g>
+
+        <!-- Step 8: metrics -->
+        <g data-step="8">
+          <rect x="12" y="470" width="300" height="218" rx="12" class="box" style="stroke: var(--az)"/>
+          <text x="24" y="490" class="title" style="fill: var(--az)">Seeing inside</text>
+          <text x="24" y="508" class="small">SQS: ApproximateAgeOfOldestMessage (the SLO metric)</text>
+          <text x="24" y="522" class="small">ApproximateNumberOfMessagesVisible · NotVisible (in flight)</text>
+          <text x="24" y="536" class="small">NumberOfEmptyReceives (short polling bill) · DLQ depth &gt; 0</text>
+          <text x="24" y="552" class="small">Lambda ESM: IteratorAge (streams) · Errors · Throttles</text>
+          <text x="24" y="566" class="small">SNS: NumberOfNotificationsFailed · FilteredOut</text>
+          <text x="24" y="580" class="small">EventBridge: FailedInvocations · ThrottledRules · DLQ</text>
+          <text x="24" y="596" class="small">Step Functions: ExecutionsFailed · TimedOut · Throttled</text>
+          <text x="24" y="610" class="small">Kinesis: WriteProvisionedThroughputExceeded</text>
+          <text x="24" y="624" class="small">GetRecords.IteratorAgeMilliseconds · MSK: consumer lag</text>
+          <text x="24" y="640" class="small">MQ: QueueSize · ConsumerCount = 0 · MemoryUsage</text>
+          <text x="24" y="660" class="small" style="font-weight:700; fill: var(--text)">Alarm on age and lag, not on depth:</text>
+          <text x="24" y="674" class="small">a deep queue draining fast is fine; a shallow one ageing is not.</text>
+        </g>
+
+        <!-- Step 9: the answer -->
+        <g data-step="9">
+          <rect x="328" y="470" width="660" height="218" rx="12" fill="var(--card)" stroke="var(--bad)" stroke-width="1.5"/>
+          <text x="340" y="490" class="title" style="fill: var(--bad)">A message is processed twice. Is that a bug?</text>
+          <text x="340" y="508" class="small">No. It is the contract. At-least-once delivery means every producer retry, every visibility timeout that expires before the work is done,</text>
+          <text x="340" y="522" class="small">every consumer that crashes after acting and before deleting, and the queue's own rare internal duplicate will all deliver a message again.</text>
+          <text x="340" y="536" class="small">The bug is a consumer that is not safe to run twice. Make it safe:</text>
+          <text x="340" y="556" class="small"><tspan font-weight="700" style="fill: var(--text)">1.</tspan> Give every message a business key (order id, payment id), not the queue's message id, which changes when the producer retries.</text>
+          <text x="340" y="572" class="small"><tspan font-weight="700" style="fill: var(--text)">2.</tspan> Claim it before acting: a conditional write to DynamoDB (attribute_not_exists) or a unique index. A second delivery fails the claim and is skipped.</text>
+          <text x="340" y="588" class="small"><tspan font-weight="700" style="fill: var(--text)">3.</tspan> Make the act itself idempotent where you can: upsert, not insert; set, not increment; pass the key to the payment provider as its idempotency key.</text>
+          <text x="340" y="604" class="small"><tspan font-weight="700" style="fill: var(--text)">4.</tspan> Delete the message only after the work is durable. Set the visibility timeout above the slowest honest run; extend it for long work.</text>
+          <text x="340" y="620" class="small"><tspan font-weight="700" style="fill: var(--text)">5.</tspan> A DLQ with maxReceiveCount so a poison message stops after a few tries; alarm on it; redrive after the fix. Report partial batch failures.</text>
+          <text x="340" y="636" class="small"><tspan font-weight="700" style="fill: var(--text)">6.</tspan> FIFO dedup only removes duplicates the producer sends within 5 minutes with the same id. It does not make the consumer safe.</text>
+          <text x="340" y="658" class="small">Exactly-once is a property of the pair: at-least-once delivery plus an idempotent consumer. Buy the first; build the second.</text>
+          <text x="340" y="674" class="small">The queue's job is to never lose the message. Your job is to never mind seeing it twice.</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption"><b>The whole picture.</b> Producers on the left send to a queue, publish to a topic, put events on a bus or put records on a stream, and every one of those calls is retried on a 5xx, which is the first place a duplicate is born. SQS in the middle is a buffer with a lease on every message: a consumer receives a message, it becomes invisible for the visibility timeout, and if the consumer deletes it in time it is gone, otherwise it comes back. The standard queue scales without limit and promises only that nothing is lost; the FIFO queue orders messages inside a group and removes producer duplicates for five minutes. A message received too many times goes to the dead-letter queue, from which a redrive sends it back. Consumers on the left are where correctness lives: claim, act, delete, in that order. Above the queue, SNS copies one publish to every subscription that its filter policy allows, and EventBridge matches events against rules and sends them to targets, with Pipes for point-to-point plumbing and the Scheduler for time. Step Functions holds a multi-step process as data, retries each step and runs the compensation when a step fails. On the right, Kinesis and MSK are logs rather than queues: readers keep their own position and nothing is deleted by reading; AppSync pushes data to clients and Amazon MQ runs the brokers for protocols you inherited. The strip underneath says what each one promises, and the one thing none of them does. Bottom left are the metrics, bottom right is the answer to the question of the day.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">SQS queues, in-flight messages</span>
+      <span style="--c:var(--pub)">Consumers</span>
+      <span style="--c:var(--az)">SNS, metrics</span>
+      <span style="--c:var(--priv)">EventBridge, FIFO groups</span>
+      <span style="--c:var(--region)">Step Functions</span>
+      <span style="--c:var(--edge)">Producers, streams</span>
+      <span style="--c:var(--bad)">DLQ, failure, the answer</span>
+    </div>
+  </div>
+
+  <h2>Processed twice: where the duplicates come from, and what they cost</h2>
+  <div class="card sim">
+    <p>Thursday, 11:00. Finance asks why a customer was charged twice. The queue did what it promised; the question is how many duplicate deliveries your setup produces in an hour, where they come from, and whether the consumer turns them into duplicate side effects. Pick the traffic, how long the work takes, the visibility timeout, how often the consumer fails after acting, the queue type and what the consumer does about it. The simulator counts the duplicates, the messages that reach the dead-letter queue, and the ones that hurt.</p>
+    <div class="seg"><b>Messages per hour</b><input type="range" id="dpRate" min="100" max="200000" step="100" value="20000"> <span id="dpRateLbl"></span></div>
+    <div class="seg" id="dpWork"></div>
+    <div class="seg" id="dpVis"></div>
+    <div class="seg" id="dpFail"></div>
+    <div class="seg" id="dpMax"></div>
+    <div class="seg" id="dpQueue"></div>
+    <div class="seg" id="dpGuard"></div>
+    <div class="calc">
+      <div><div class="lbl">Duplicate deliveries per hour</div><div class="big" id="dpDups"></div></div>
+      <div><div class="lbl">Duplicate side effects</div><div class="big" id="dpHarm"></div></div>
+      <div><div class="lbl">To the dead-letter queue</div><div class="big" id="dpDlq"></div></div>
+      <div><div class="lbl">Verdict</div><div class="big" id="dpResult"></div></div>
+    </div>
+    <div class="table-wrap"><table id="dpTable"></table></div>
+    <p class="result" id="dpMsg"></p>
+    <p class="note">Model: four sources of a second delivery. The producer retries a SendMessage whose response was lost, about one call in 20,000 on a normal day, and each retry is a new message with a new id on a standard queue; a FIFO queue drops it when the producer sends a deduplication id. The queue itself, on standard, re-delivers a message on rare internal retries, taken as one in 100,000. The visibility timeout expires before the work is done: if the work takes longer than the timeout every message is redelivered, and all of its retries fail the same way until maxReceiveCount sends it, already processed, to the DLQ; if the work's slow tail (taken as 3× the typical time) crosses the timeout, 2% of messages are redelivered. The consumer fails after the side effect and before the delete at the rate you pick, and that message comes back after the timeout. A consumer with no idempotency turns every duplicate into a duplicate side effect; a claim with a conditional write catches all of them except the ones whose claim and act are not atomic, taken as 2% of the consumer-failure duplicates when the claim is written after the act; an idempotent operation catches all of them. FIFO exactly-once processing removes the producer and queue duplicates; it does nothing about the visibility and consumer ones.</p>
+  </div>
+
+  <h2>Drain the backlog: consumers, polling and the bill</h2>
+  <div class="card sim">
+    <p>A queue absorbs a burst; something has to drain it. Pick the arrival rate, how long each message takes, how the consumer is run and how it polls. The simulator gives the throughput the consumer can reach, whether the backlog grows or drains and how old the oldest message gets, and the monthly bill split into SQS requests, compute and the empty receives that short polling pays for.</p>
+    <div class="seg"><b>Arrivals per second</b><input type="range" id="bkRate" min="1" max="5000" step="1" value="200"> <span id="bkRateLbl"></span></div>
+    <div class="seg" id="bkWork"></div>
+    <div class="seg" id="bkModel"></div>
+    <div class="seg" id="bkBatch"></div>
+    <div class="seg" id="bkPoll"></div>
+    <div class="seg" id="bkBacklog"></div>
+    <div class="calc">
+      <div><div class="lbl">Consumer throughput</div><div class="big" id="bkThru"></div></div>
+      <div><div class="lbl">Backlog after one hour</div><div class="big" id="bkDepth"></div></div>
+      <div><div class="lbl">Age of oldest message</div><div class="big" id="bkAge"></div></div>
+      <div><div class="lbl">Per month</div><div class="big" id="bkCost"></div></div>
+    </div>
+    <div class="table-wrap"><table id="bkTable"></table></div>
+    <p class="result" id="bkMsg"></p>
+    <p class="note">Model: a Lambda consumer is invoked with a batch, pays about 100 ms of overhead per invocation plus the work per message, and scales to the maximum concurrency you set (the event source mapping adds up to 300 concurrent invocations a minute, so a cold start on a large backlog takes a few minutes, ignored here). An ECS consumer runs N tasks of 0.5 vCPU and 1 GB, each with 10 worker threads doing one message at a time. SQS bills every request: a send, a receive of up to 10 messages, a delete of up to 10, and every empty receive. With long polling an idle thread makes one empty receive every 20 seconds; with short polling it makes about 20 a second. Lambda is priced at $0.20 per million invocations plus $0.0000166667 per GB-second at 512 MB; Fargate at $0.04048 per vCPU-hour and $0.004445 per GB-hour; SQS at $0.40 per million requests (standard) or $0.50 (FIFO), with the first million free ignored. Arrivals are sent in batches of 10 when the rate allows.</p>
+  </div>
+
+  <h2>Which messaging service?</h2>
+  <div class="card sim">
+    <p>Every one of these services has been used as a queue, and only one of them is one. Describe the shape of the traffic and what the readers need; the simulator names the service, the runner-up, the guarantee you actually get and what the floor of the bill looks like at the rate you chose.</p>
+    <div class="seg" id="wmShape"></div>
+    <div class="seg" id="wmOrder"></div>
+    <div class="seg" id="wmReplay"></div>
+    <div class="seg" id="wmRate"></div>
+    <div class="seg" id="wmReaders"></div>
+    <div class="calc">
+      <div><div class="lbl">Pick</div><div class="big" id="wmPick"></div></div>
+      <div><div class="lbl">Runner-up</div><div class="big" id="wmAlt"></div></div>
+      <div><div class="lbl">Delivery you get</div><div class="big" id="wmGuar"></div></div>
+      <div><div class="lbl">Rough monthly floor</div><div class="big" id="wmFloor"></div></div>
+    </div>
+    <div class="table-wrap"><table id="wmTable"></table></div>
+    <p class="result" id="wmMsg"></p>
+    <p class="note">The monthly floor is us-east-1 list price for the service alone at the chosen rate, running all month, with the smallest production footprint: it tells you whether the choice costs nothing, tens, hundreds or thousands of dollars before the compute that consumes it. Replay means a reader can go back and read what it already read; a queue cannot do that, since a delete is a delete.</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>SQS standard: a lease, not a lock</h3>
+      <ul>
+        <li>A queue is stored redundantly across AZs. <code>SendMessage</code> writes a copy to several servers and acknowledges; <code>ReceiveMessage</code> samples a subset of those servers, which is why a receive on a nearly empty queue can return nothing while a message exists (the docs call it short polling's sampling) and why order is best-effort: a message that landed on a server that was not sampled comes later.</li>
+        <li>Receiving does not remove. The message becomes <b>invisible for the visibility timeout</b> (30 s by default, up to 12 hours), and the consumer must call <code>DeleteMessage</code> with the receipt handle before the timeout, or the message reappears for another consumer. <code>ChangeMessageVisibility</code> extends the lease for long work; a Lambda event source mapping does this for you up to the function's timeout.</li>
+        <li>Throughput is effectively unlimited per queue, with no provisioning. In flight at once: 120,000 messages (received, not deleted); beyond that receives return nothing. Message size 256 KB by default, raisable to 1 MiB; bigger payloads go to S3 with a pointer (the extended client library does it).</li>
+        <li><b>Long polling</b> (<code>WaitTimeSeconds</code> up to 20) makes a receive wait until a message arrives and queries every server, so it returns fewer false empties and costs a twentieth as much when the queue is idle. There is no reason to short-poll a production queue.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>SQS FIFO: order and dedup, per group</h3>
+      <ul>
+        <li>Every message carries a <b><code>MessageGroupId</code></b>. Messages in one group are delivered in order and, crucially, <b>one at a time</b>: while a message from group A is in flight, no other message of group A is delivered to anyone. Groups are the unit of parallelism; a queue with one group is single-threaded.</li>
+        <li><b><code>MessageDeduplicationId</code></b> (or a SHA-256 of the body with content-based deduplication) makes a second send with the same id within <b>5 minutes</b> a no-op. This is producer-side dedup: it removes a retried send, not a redelivered message.</li>
+        <li>Throughput: 300 messages a second per API action without batching, 3,000 with batches of 10; <b>high throughput mode</b> partitions by group and reaches tens of thousands a second, 70,000 with batching in the largest Regions. 20,000 in flight.</li>
+        <li>"Exactly-once processing" means a message is delivered once and stays unavailable until the visibility timeout passes; if your consumer fails to delete it in time it comes back, in order, and blocks its group. A poison message in a FIFO group stops the group until the DLQ takes it.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--bad)">
+      <h3>Dead-letter queues and redrive</h3>
+      <ul>
+        <li>A redrive policy on the source queue names a DLQ and a <b><code>maxReceiveCount</code></b> (1–1,000). Each receive increments <code>ApproximateReceiveCount</code>; past the limit, SQS moves the message to the DLQ instead of making it visible again. The DLQ must be the same type (standard or FIFO) and in the same account and Region.</li>
+        <li>The DLQ's retention clock is the <b>original send time</b>, not the move time: a 4-day retention with a message that spent 3 days in the source leaves one day to look at it. Give DLQs the full 14 days.</li>
+        <li>A redrive (<code>StartMessageMoveTask</code>) sends DLQ messages back to the source, or to any queue, at a rate you choose. It is for after the fix. Redriving into an unfixed consumer is a loop with extra steps.</li>
+        <li>A Lambda consumer without <code>ReportBatchItemFailures</code> makes the whole batch fail when one message fails, so nine good messages are retried with the bad one and arrive in the DLQ together. Turn partial batch responses on, always.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>SNS: one publish, many copies</h3>
+      <ul>
+        <li>A topic takes a publish and delivers a copy to each subscription: SQS queues, Lambda functions, HTTP endpoints, email, SMS, mobile push, Firehose. Delivery to SQS and Lambda is free and reliable; HTTP endpoints get a retry policy of your choosing (up to about an hour by default, 23 days configurable) and then a DLQ.</li>
+        <li>A <b>filter policy</b> per subscription selects messages by attributes or, since 2022, by fields of the JSON body: exact match, prefix, numeric ranges, anything-but, exists. The topic does the routing so the subscriber receives only what it asked for and pays nothing for the rest.</li>
+        <li><b>Raw message delivery</b> hands the subscriber the payload as sent instead of the SNS envelope; without it, a queue consumer parses JSON inside JSON. FIFO topics deliver in order to FIFO queues only, with the same group and dedup semantics as the queue.</li>
+        <li>No retention: a subscriber that is unreachable gets retries and then nothing. The reliable pattern is <b>SNS → SQS → consumer</b>: the queue holds the message for the consumer that is down; the topic only copies it.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>EventBridge: a bus with rules</h3>
+      <ul>
+        <li>An <b>event bus</b> receives events as JSON with a source, detail-type and detail. The <b>default bus</b> carries events from AWS services (an EC2 state change, a CodePipeline stage, a GuardDuty finding); custom buses carry yours; partner buses carry SaaS events. <b>Rules</b> match on any field with patterns (equals, prefix, numeric, exists, anything-but, wildcards) and send to up to five <b>targets</b> each, with input transformation.</li>
+        <li>Delivery is at-least-once with a retry policy (up to 24 hours and 185 attempts by default) and a DLQ per target. Latency is typically about half a second; it is not a queue for a tight loop. Throughput defaults to thousands of <code>PutEvents</code> a second in the big Regions, raisable.</li>
+        <li><b>Archive and replay</b>: an archive records events matching a pattern for a retention you set, and a replay sends them back through the rules for a time window, to the rules you name. That is the recovery tool after a bad deploy of a consumer.</li>
+        <li><b>Pipes</b> connect one source (SQS, Kinesis, DynamoDB Streams, MSK, MQ) to one target with optional filtering and an enrichment step (Lambda, Step Functions, API), replacing the glue function. The <b>Scheduler</b> runs one-off and recurring schedules (cron, rate, at) with a flexible window and time zone, invoking over 270 services directly, at a million schedules an account.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Step Functions: Standard and Express</h3>
+      <ul>
+        <li>A state machine is a JSON definition (Amazon States Language) of <b>states</b>: Task (call a service or a function), Choice, Parallel, Map, Wait, Pass, Succeed, Fail. The state's output is the next state's input; the data flowing through is the execution's memory, up to 256 KB. Over 220 service integrations call APIs directly, without a Lambda in between.</li>
+        <li><b>Standard</b>: an execution runs up to one year, every state transition is recorded durably, the execution is exactly-once (a second <code>StartExecution</code> with the same name within 90 days is rejected), and you pay <b>$0.025 per 1,000 transitions</b>. For long-lived, human-in-the-loop, auditable processes.</li>
+        <li><b>Express</b>: up to five minutes, at-least-once (asynchronous) or at-most-once (synchronous <code>StartSyncExecution</code>), history to CloudWatch Logs, priced per request and duration, <b>$1 per million plus about $0.00001667 per GB-second</b>. For high-volume, short, idempotent work: event processing, API orchestration, the body of a Map.</li>
+        <li>Integration patterns: <b>request-response</b> (call and continue), <b>.sync</b> (call and wait for the job: a Batch job, a Glue run, an ECS task, a child workflow), and <b>.waitForTaskToken</b> (pause until something calls <code>SendTaskSuccess</code> with the token: a human approval, an external system). Distributed Map runs up to 10,000 child executions over an S3 listing or a JSON array.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--region)">
+      <h3>Retries, catches and the saga</h3>
+      <ul>
+        <li>A Task state's <b>Retry</b> lists error names (<code>States.TaskFailed</code>, <code>States.Timeout</code>, <code>Lambda.ServiceException</code>, your own), an interval, a backoff rate, a maximum of attempts and, since 2023, jitter and a cap. Retry transient errors; do not retry a validation error 20 times.</li>
+        <li>A <b>Catch</b> routes an error to another state with the error in the input. That is how a workflow fails gracefully: catch, record, compensate, then end in a Fail state with a cause someone can read.</li>
+        <li>The <b>saga</b> pattern: a sequence of steps, each with a compensating step that undoes it (reserve stock / release stock, charge card / refund, create shipment / cancel shipment). When step N fails, the Catch runs the compensations for steps N−1 down to 1. Each step and each compensation must be idempotent, because the workflow may run them again after a retry.</li>
+        <li>A task running in Lambda has its own timeout and Lambda's own retries for asynchronous invocations; set <code>TimeoutSeconds</code> on the Task state and <code>HeartbeatSeconds</code> on long callbacks so a hung step becomes a <code>States.Timeout</code> instead of a year-long wait.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Kinesis Data Streams</h3>
+      <ul>
+        <li>A stream is a set of <b>shards</b>; a record goes to the shard chosen by the hash of its partition key and gets a sequence number. Each shard accepts <b>1 MB/s or 1,000 records a second</b> and serves <b>2 MB/s</b> to all consumers together, or 2 MB/s per consumer with <b>enhanced fan-out</b> (push over HTTP/2, up to 20 consumers). Records up to 1 MB; retention 24 hours by default, up to 365 days.</li>
+        <li>Reading is by <b>iterator</b>: a consumer asks for records from a position (trim horizon, latest, a sequence number, a timestamp) and keeps its own checkpoint (the KCL stores it in DynamoDB; a Lambda event source mapping keeps it for you). Reading deletes nothing; two consumers see the same records.</li>
+        <li><b>On-demand</b> mode scales shards for you and bills per GB; <b>provisioned</b> bills per shard-hour and needs resharding (split and merge) as traffic changes. A hot partition key is a hot shard: <code>WriteProvisionedThroughputExceeded</code> on one shard while the others idle.</li>
+        <li>Order is per shard. A Lambda consumer runs one invocation per shard at a time (or up to 10 with parallelization factor, ordered per key), and a failing batch blocks the shard until it succeeds, the record expires, or the retry and bisect settings give up: <b>a poison record stalls the shard</b>, and <code>IteratorAge</code> is the alarm.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>MSK and Amazon MQ</h3>
+      <ul>
+        <li><b>MSK</b> runs Apache Kafka: brokers across AZs, topics split into <b>partitions</b>, each a replicated ordered log; producers choose a partition by key; <b>consumer groups</b> share partitions among members and commit offsets. Retention is by time or size per topic, as long as you pay for disk. Provisioned clusters (you pick brokers and storage; Express brokers simplify it) or <b>MSK Serverless</b> (per partition-hour and GB). Connect for sinks and sources, Schema Registry via Glue.</li>
+        <li>Kafka is for when you have the ecosystem (Flink, Debezium, Connect, a team that speaks it), need retention of weeks to forever, topics with hundreds of partitions, or hundreds of MB/s. For most AWS-native work Kinesis is the same shape with nothing to operate; the choice is usually about the team, not the technology.</li>
+        <li><b>Amazon MQ</b> is a managed <b>ActiveMQ</b> or <b>RabbitMQ</b> broker in your VPC: AMQP, JMS/OpenWire, MQTT, STOMP, the protocols an existing application already speaks. Active/standby across AZs for ActiveMQ (failover is a reconnect, tens of seconds), a 3-node cluster for RabbitMQ. You size the broker and it has a ceiling.</li>
+        <li>MQ is the migration answer, not the greenfield one: it moves a JMS application to AWS without a rewrite. A new system that wants a queue wants SQS; one that wants a broker's routing wants EventBridge or SNS.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--dc)">
+      <h3>AppSync: the server calls the client</h3>
+      <ul>
+        <li>A managed <b>GraphQL</b> API: a schema, <b>resolvers</b> (JavaScript or VTL, single or pipeline) that map fields to data sources (DynamoDB, Lambda, RDS via the Data API, OpenSearch, HTTP, EventBridge), authorisation by API key, IAM, Cognito, OIDC or a Lambda authoriser, per field. Caching per resolver.</li>
+        <li><b>Subscriptions</b>: a client subscribes over WebSocket to a mutation; when the mutation runs, AppSync pushes the result to every subscribed client, filtered server-side. That is how a dashboard, a chat or an order tracker gets live data without polling and without you running a WebSocket fleet. The <b>Events API</b> does the same for plain pub/sub channels without a GraphQL schema.</li>
+        <li>Limits to know: 256 KB per request and response, a 30-second resolver timeout, and subscriptions deliver what the mutation returned, so the mutation's selection set must include what the subscriber needs.</li>
+        <li>Pricing is per operation ($4 per million queries and mutations), per real-time update and per connection-minute. For a server-to-server API with no live clients, API Gateway and Lambda are cheaper and simpler.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Consumers: Lambda or a worker fleet</h3>
+      <ul>
+        <li>A <b>Lambda event source mapping</b> polls the queue for you, invokes the function with a batch (up to 10 messages for FIFO; up to 10,000 with a batching window of up to 5 minutes for standard), deletes the messages the function reported as processed, and scales from 5 concurrent pollers by up to 300 a minute, capped by <b>maximum concurrency</b> on the mapping (2–1,000) and the account's concurrency. Set the queue's visibility timeout to <b>six times the function timeout</b>, or a slow function's batch is redelivered while it is still running.</li>
+        <li>A <b>worker on ECS or EC2</b> runs a loop: long-poll, process, delete, with a thread pool. It is the answer when the work is long (more than 15 minutes), needs a warm connection pool or a large model in memory, or when the consumer is a legacy process. Scale the service on <code>ApproximateNumberOfMessagesVisible</code> divided by the task count (backlog per task), not on CPU, which is idle while waiting.</li>
+        <li>The order of operations is the whole story: <b>receive, claim the business key, act, delete</b>. Delete first and a crash loses the message; act before claiming and a crash duplicates the act; claim after acting and a crash in between does both.</li>
+        <li>Backpressure is free: a consumer that is slow leaves messages in the queue, and the age metric tells you. A consumer that must not fall behind needs more concurrency or a faster handler, never a bigger queue.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Idempotency: the consumer's promise</h3>
+      <ul>
+        <li>An operation is idempotent when running it twice has the effect of running it once. <b>Naturally idempotent</b>: set a value, upsert a row by key, delete by key, put an object. <b>Not</b>: increment, append, insert without a unique key, send an email, charge a card.</li>
+        <li>For the second kind, <b>an idempotency key</b> turns the operation into the first kind: a business id (order 4711's payment) that is stored with the result the first time, so a second run with the same key finds the record and returns the stored result. A <b>conditional write</b> (DynamoDB <code>attribute_not_exists</code>, a unique index) makes the claim atomic across concurrent duplicates; a TTL on the record bounds the table.</li>
+        <li>Pass the key downstream: payment providers, email APIs and your own services accept an <code>Idempotency-Key</code> header for exactly this reason. Lambda Powertools has an idempotency decorator that does the DynamoDB dance for you, including the in-progress state and expiry.</li>
+        <li>Choose the key from the business, not from the transport: the SQS message id changes when the producer retries, so a dedup on it misses the most common duplicate.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Which one, in a sentence</h3>
+      <ul>
+        <li><b>SQS</b>: work for one of N identical workers, with a buffer. <b>SNS</b>: tell everyone who asked, now, cheaply, at any scale. <b>EventBridge</b>: route events by content across teams and accounts, with AWS and SaaS events included, and replay. <b>Step Functions</b>: a process with steps, retries, branches, waits and a history someone will read. <b>Scheduler</b>: at a time or on a schedule.</li>
+        <li><b>Kinesis</b>: an ordered log of records many readers consume at their own pace, AWS-native. <b>MSK</b>: the same when you have Kafka. <b>Amazon MQ</b>: a broker for an application that already speaks AMQP or JMS. <b>AppSync</b>: push data to browsers and phones.</li>
+        <li>The patterns that combine them: <b>SNS → SQS</b> (fan-out with buffering per consumer), <b>EventBridge → SQS → Lambda</b> (routing with a buffer and a DLQ), <b>SQS → Pipe → Step Functions</b> (a queue that starts a workflow per message), <b>Kinesis → Lambda</b> (ordered processing per key), <b>DynamoDB Streams → Pipe → EventBridge</b> (changes as events).</li>
+        <li>What they all share: at-least-once delivery, per-key order at best, a retry policy that ends in a DLQ, and the need for a consumer that does not mind seeing a message twice.</li>
+      </ul>
+    </div>
+  </div>
