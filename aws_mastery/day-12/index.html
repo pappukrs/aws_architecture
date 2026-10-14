@@ -226,7 +226,7 @@
     </div>
     <div class="table-wrap"><table id="thTable"></table></div>
     <p class="result" id="thMsg"></p>
-    <p class="note">Model: concurrency needed is the peak rate times the duration (Little's law). Traffic steps from a tenth of the peak to the peak; on-demand concurrency for the function grows by 1,000 environments every 10 seconds from what it already has (provisioned environments count from the start), up to the lesser of its reserved concurrency and what the account has left after the other functions. Throttled requests per second are the share of the rate that does not fit: (needed − available) ÷ duration. A synchronous caller gets the error; an asynchronous invocation is kept and retried for up to six hours, so it turns into delay; an SQS mapping leaves the message in the queue. Provisioned concurrency is priced at $0.0000041667 per GB-second kept warm, at 512 MB, all month; on-demand duration at $0.0000166667 per GB-second and $0.20 per million requests, for the peak hour only.</p>
+    <p class="note">Model: concurrency needed is the peak rate times the duration (Little's law). Traffic steps from a tenth of the peak to the peak; on-demand concurrency for the function can add 1,000 environments at once and 1,000 more every 10 seconds after that, from what it already has (provisioned environments count from the start; an SQS mapping adds 300 a minute instead), up to the lesser of its reserved concurrency and what the account has left after the other functions. Throttled requests per second are the share of the rate that does not fit: (needed − available) ÷ duration. A synchronous caller gets the error; an asynchronous invocation is kept and retried for up to six hours, so it turns into delay; an SQS mapping leaves the message in the queue. Provisioned concurrency is priced at $0.0000041667 per GB-second kept warm, at 512 MB, all month; on-demand duration at $0.0000166667 per GB-second and $0.20 per million requests, for the peak hour only.</p>
   </div>
 
   <h2>Cold starts: who pays, how often, and what removes them</h2>
@@ -650,5 +650,249 @@ aws lambda list-functions --query 'Functions[?starts_with(FunctionName, `day12`)
     <b>Next — <a href="../day-13/index.html">Day 13: ECS and EKS in depth</a>.</b> Task definitions, awsvpc networking, capacity providers, Fargate against EC2, Service Connect, the deployment circuit breaker, ECR scanning and lifecycle; the EKS control plane, node groups, Karpenter, Pod Identity and IRSA, the VPC CNI, the Load Balancer Controller; App Runner. And the question: pods are stuck in Pending and the subnet has free capacity. What is likely wrong?
   </div>
 </main>
+
+<script>
+  window.CAPTIONS = [
+    "",
+    "<b>Step 1 — Clients.</b> A browser, a mobile app or a partner's server calls the API over HTTPS, carrying a JWT from a sign-in, a SigV4 signature from AWS credentials, or an API key for metering. Lambda, API Gateway and Cognito are Regional and multi-AZ without you doing anything; the function runs in a VPC that AWS owns unless you attach it to yours. The client's retry policy is part of the design: on a 429 or a 5xx it must back off with jitter, or a throttle turns into a retry storm.",
+    "<b>Step 2 — API Gateway.</b> The front door authenticates, throttles and invokes. A REST API has the full feature set: API keys and usage plans, WAF, caching, request validation, private endpoints, for $3.50 a million. An HTTP API has JWT authorisers, lower latency and $1 a million, and lacks those extras. A WebSocket API keeps connections and routes messages. All of them throttle with token buckets, per key, route, stage and the account's 10,000 requests a second, and answer 429 before the backend is touched; all of them wait at most 29 seconds for a synchronous backend.",
+    "<b>Step 3 — Cognito.</b> A user pool is the directory and the identity provider: sign-up, sign-in, MFA, federation with social and enterprise providers, and three JWTs at the end, an ID token, an access token for the API and a refresh token. API Gateway verifies the access token itself with a JWT or Cognito authoriser, with no function to run. An identity pool goes one step further and exchanges a token for temporary AWS credentials, so an app can call S3 or DynamoDB directly with SigV4.",
+    "<b>Step 4 — The Lambda service.</b> Three doors. Synchronous: the caller waits, the error comes back to it, nothing is retried by Lambda. Asynchronous: Lambda answers 202 and queues the event internally, retries errors twice and throttles for up to six hours, then sends the event to an on-failure destination or drops it. Event source mapping: Lambda polls a queue or stream, batches records and invokes synchronously, and the source's rules decide what a failure means: visibility timeout and DLQ for SQS, a blocked shard for Kinesis.",
+    "<b>Step 5 — The execution environment.</b> Each invocation runs in a Firecracker micro-VM with the memory you chose and CPU in proportion. The first request to a new environment pays INIT: fetch the code, start the runtime, run your module-level code, up to 10 seconds, billed. Then the environment serves one request at a time, frozen in between, with globals and /tmp surviving, until AWS recycles it. A cold start is INIT on the request path; a warm start is a thaw.",
+    "<b>Step 6 — Concurrency.</b> The number of environments busy at once is requests per second times duration, and it is what Lambda limits: 1,000 per account and Region by default, shared by every function. Reserved concurrency carves a slice that nobody else can take and caps the function at it. Provisioned concurrency keeps N environments initialised and billed. A function adds at most 1,000 environments every 10 seconds. Past any of these ceilings, the invocation is throttled.",
+    "<b>Step 7 — Around the function, and what a throttle does.</b> A VPC-attached function reaches private resources through shared Hyperplane ENIs created at deploy, and has no internet without a NAT gateway or endpoints. Code ships as a zip with up to five layers or as a container image; versions and aliases make deploys and provisioned concurrency possible; SnapStart restores a post-INIT snapshot; destinations catch async results. The strip shows the same throttle four ways: an error for a synchronous caller, a delay for an asynchronous one, a returning message for SQS, a stalled shard for a stream.",
+    "<b>Step 8 — Seeing inside.</b> Throttles counts refused invocations; on a synchronous function every one is a user who saw an error. ConcurrentExecutions per function and ClaimedAccountConcurrency against the quota show who is using the pool. Duration's p99 is the hidden multiplier of concurrency. Init Duration in the REPORT line measures cold starts; spillover shows provisioned concurrency running out. On the gateway, Latency minus IntegrationLatency is the gateway's own time, and access logs carry the error the client never sees.",
+    "<b>Step 9 — The answer.</b> Find whose 429 it is, then compare concurrency with its ceilings: the function's reservation, the account's pool shared with every other function, the scaling rate for a sudden step, and duration, because a slow dependency multiplies concurrency without a single extra request. The three fixes: need less concurrency by cutting duration; have more in the right place with a quota raise, reservations and scheduled provisioned concurrency; and stop needing it all at once by putting a queue in front and throttling at the door."
+  ];
+</script>
+<script src="../assets/steps.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const money = x => "$" + Math.round(x).toLocaleString("en-US");
+  const money2 = x => x >= 100 ? money(x) : "$" + x.toFixed(2);
+  const n = x => Math.round(x).toLocaleString("en-US");
+  const pct = x => { const p = x * 100; return p >= 100 ? "100%" : p <= 0 ? "0%" : p.toFixed(p >= 10 ? 1 : p >= 1 ? 2 : 3) + "%"; };
+  const big = (id, text, colour) => { $(id).textContent = text; $(id).style.color = `var(--${colour})`; };
+  const secs = s => s >= 86400 ? (s / 86400).toFixed(1) + " d" : s >= 3600 ? (s / 3600).toFixed(1) + " h" : s >= 90 ? (s / 60).toFixed(1) + " min" : s >= 1 ? (s < 10 ? s.toFixed(1) : Math.round(s)) + " s" : Math.round(s * 1000) + " ms";
+  function buttons(id, title, items, onPick) {
+    $(id).innerHTML = `<b>${title}</b>`;
+    items.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.dataset.key = key;
+      b.onclick = () => onPick(key);
+      $(id).appendChild(b);
+    });
+  }
+  const mark = (id, key) => [...$(id).querySelectorAll("button")].forEach(b => b.classList.toggle("on", b.dataset.key === key));
+  const row = ([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`;
+  const M = 30 * 24 * 3600;
+
+  // ---------- Simulator 1: throttled at peak ----------
+  const th = { dur: "0.2", slow: "1", acct: "1000", other: "0.3", res: "none", prov: "0", mode: "sync" };
+  buttons("thDur", "Normal duration", [["0.05", "50 ms"], ["0.2", "200 ms"], ["0.5", "500 ms"], ["1", "1 s"], ["3", "3 s"]], k => { th.dur = k; paintTh(); });
+  buttons("thSlow", "Downstream today", [["1", "normal"], ["3", "database 3× slower"], ["10", "10× (calls hang to the timeout)"]], k => { th.slow = k; paintTh(); });
+  buttons("thAcct", "Account concurrency limit", [["1000", "1,000 (default)"], ["3000", "3,000"], ["10000", "10,000"], ["30000", "30,000"]], k => { th.acct = k; paintTh(); });
+  buttons("thOther", "Other functions are using", [["0", "nothing"], ["0.3", "30% of the account"], ["0.6", "60% (a backfill is running)"]], k => { th.other = k; paintTh(); });
+  buttons("thRes", "Reserved concurrency on this function", [["none", "none"], ["100", "100"], ["500", "500"], ["2000", "2,000"], ["8000", "8,000"]], k => { th.res = k; paintTh(); });
+  buttons("thProv", "Provisioned concurrency", [["0", "none"], ["100", "100"], ["500", "500"], ["2000", "2,000"]], k => { th.prov = k; paintTh(); });
+  buttons("thMode", "Who calls it", [["sync", "API Gateway (synchronous)"], ["async", "S3 / SNS / EventBridge (asynchronous)"], ["sqs", "API → SQS → Lambda (max concurrency)"]], k => { th.mode = k; paintTh(); });
+  $("thRate").oninput = paintTh;
+
+  function paintTh() {
+    Object.entries({ thDur: th.dur, thSlow: th.slow, thAcct: th.acct, thOther: th.other, thRes: th.res, thProv: th.prov, thMode: th.mode }).forEach(([id, k]) => mark(id, k));
+    const rate = +$("thRate").value, d0 = +th.dur, slow = +th.slow, acct = +th.acct, other = +th.other;
+    $("thRateLbl").textContent = n(rate) + " requests / s";
+    const d = d0 * slow, need = rate * d, need0 = rate * d0;
+    const reserved = th.res === "none" ? 0 : Math.min(+th.res, acct - 100);
+    const freePool = Math.max(0, acct * (1 - other) - 0);
+    const cap = reserved ? reserved : freePool;
+    const capWhy = reserved ? (reserved < +th.res ? `reserved ${n(reserved)} (the account keeps 100 unreserved)` : `its reserved concurrency of ${n(reserved)}`) : `the account's ${n(acct)} less ${pct(other)} used by other functions`;
+    const prov = Math.min(+th.prov, cap);
+    const sqs = th.mode === "sqs";
+    // ramp: on-demand grows by 1,000 per 10 s (SQS mapping: 300 per minute = 50 per 10 s) from max(baseline, provisioned)
+    const step = sqs ? 50 : 1000;
+    const target = Math.min(need, cap);
+    const start = Math.max(Math.min(need * 0.1, cap), prov);
+    let k = 0, rampLost = 0, avail = Math.min(cap, start + step);   // the first increment is available at once
+    while (avail < target && k < 360) { rampLost += (target - avail) / d * 10; k++; avail = Math.min(cap, start + step * (k + 1)); }
+    const rampS = k * 10;
+    const steady = Math.max(0, need - cap) / d;      // requests per second that do not fit
+    const provCost = prov * 0.5 * M * 0.0000041667;
+    const peakHour = rate * 3600 * (0.20 / 1e6 + d * 0.5 * 0.0000166667);
+
+    let result, colour, story, fix, seen;
+    const fitDur = cap / rate;
+    if (steady > 0) {
+      result = sqs ? "Backlog grows" : "Throttled"; colour = sqs ? "orange" : "bad";
+      const cause = reserved && reserved < freePool ? "its own reservation is the ceiling" : reserved ? "the reservation is as high as the account allows" : other > 0 ? `the account pool, ${pct(other)} of which other functions already hold` : "the account limit";
+      story = `The peak needs ${n(need)} concurrent environments (${n(rate)} a second × ${secs(d)}); the function can get ${n(cap)}, because ${cause}. ${n(steady)} requests a second do not fit: ${pct(steady / rate)} of the peak.${slow > 1 ? ` At the normal ${secs(d0)} it would have needed only ${n(need0)}: this is a latency incident that looks like a traffic one.` : ""}`;
+      fix = `<b>1.</b> Need less: at ${n(rate)} a second the duration must be under ${secs(fitDur)} to fit${slow > 1 ? `; fix the slow dependency and set client timeouts so a hung call fails in milliseconds` : ""}. <b>2.</b> Have more: ${reserved && reserved < freePool ? `raise the reservation to about ${n(need * 1.2)}` : `raise the account quota to about ${n((need * 1.2 + acct * other))} and reserve ${n(need * 1.2)} for this function`}${other > 0 && !reserved ? `, and cap the other functions with reservations` : ""}. <b>3.</b> Stop needing it at once: ${sqs ? "the queue already absorbs it; raise the mapping's maximum concurrency once the downstream can take it" : `accept into SQS and drain at ${n(cap)} concurrent, or throttle the stage at ${n(cap / d * 0.9)} requests a second so the overflow is a fast 429 at the door`}.`;
+    } else if (rampLost >= 1) {
+      result = "Throttled during the ramp"; colour = "orange";
+      story = `At steady state it fits: ${n(need)} needed, ${n(cap)} available. But the step from ${n(need * 0.1)} to ${n(need)} takes ${secs(rampS)} at ${sqs ? "300 new concurrent a minute (the SQS mapping's scaling rate)" : "1,000 new environments every 10 seconds"}${prov ? `, starting from the ${n(prov)} provisioned` : ""}, and about ${n(rampLost)} requests ${sqs ? "wait in the queue" : "are throttled"} on the way up.`;
+      fix = sqs ? "Messages wait; nothing is lost. If the wait matters, raise the starting point with provisioned concurrency on the alias the mapping invokes." : `Provisioned concurrency of about ${n(Math.min(need, cap))} scheduled before the peak removes the ramp (≈ ${money(Math.min(need, cap) * 0.5 * 3600 * 0.0000041667)} an hour); or warm it with a gradual traffic ramp; or a queue for the part that can wait.`;
+    } else {
+      result = "Fits"; colour = "pub";
+      story = `The peak needs ${n(need)} environments and the function can get ${n(cap)}, ${pct(need / cap)} of its ceiling.${prov ? ` ${n(prov)} provisioned environments cover ${pct(Math.min(1, prov / need))} of it without a cold start.` : ""} ${rampS ? `The ramp takes ${secs(rampS)}` : "The step is absorbed by the first scaling increment"}, with nothing throttled.`;
+      fix = need / cap > 0.7 ? `Little headroom: a ${pct(cap / need - 1)} rise in rate or duration tips it over. Alarm on ClaimedAccountConcurrency at 80% and on Throttles > 0.` : prov > need * 1.5 ? `Provisioned concurrency is ${n(prov)} for a peak of ${n(need)}: ${money(provCost)} a month for environments that wait. Schedule it or track utilisation at 0.7.` : "Alarm on Throttles > 0 and on p99 Duration: duration is what will break this, not traffic.";
+    }
+    seen = steady <= 0 && rampLost < 1 ? "nothing" : sqs ? `messages wait (${n(steady * 3600)} more an hour in the queue)` : th.mode === "async" ? `delay: events wait in Lambda's queue${steady > 0 ? `, ${n(steady * 3600)} more each hour, dropped after 6 h without a destination` : ""}` : `${n(steady || rampLost / Math.max(rampS, 1))} errors a second (429 / 5xx)`;
+    big("thNeed", n(need), need > cap ? "bad" : "text");
+    big("thCap", n(cap), "text");
+    big("thThr", steady > 0 ? n(steady) + " / s" : rampLost >= 1 ? n(rampLost) + " in ramp" : "0", steady > 0 ? colour : rampLost >= 1 ? "orange" : "pub");
+    big("thResult", result, colour);
+    $("thTable").innerHTML = "<tr><th>Line</th><th>Value</th></tr>" + [
+      ["Duration at peak", `${secs(d0)} × ${slow} = <b>${secs(d)}</b>`],
+      ["Concurrency needed (rate × duration)", `<b>${n(need)}</b>`],
+      ["Ceiling", `${n(cap)}: ${capWhy}`],
+      ["Provisioned (where the ramp starts)", prov ? n(prov) : "none: starts from today's traffic, a tenth of the peak"],
+      ["Time to scale to the peak", rampS ? secs(rampS) : "none"],
+      [sqs ? "Messages delayed during the ramp" : "Requests throttled during the ramp", n(rampLost)],
+      ["Throttled at steady state", `<b>${n(steady)} / s</b>`],
+      ["What the caller sees", seen],
+      ["Provisioned concurrency, per month (512 MB)", money2(provCost)],
+      ["The peak hour, on-demand (512 MB)", money2(peakHour)]
+    ].map(row).join("");
+    $("thMsg").innerHTML = `<b>${result}.</b> ${story} <b>What to change:</b> ${fix}`;
+  }
+  paintTh();
+
+  // ---------- Simulator 2: cold starts ----------
+  const RT = { node: ["Node.js", 0.12, 0.10], python: ["Python", 0.15, 0.10], java: ["Java", 0.60, 0.10], dotnet: [".NET", 0.40, 0.10], image: ["Python, container image", 0.15, 0.25] };
+  const cs = { rt: "python", init: "light", pkg: "small", mem: "512", shape: "steady", fix: "none" };
+  buttons("csRuntime", "Runtime", Object.entries(RT).map(([k, v]) => [k, v[0]]), k => { cs.rt = k; paintCs(); });
+  buttons("csInit", "Init code", [["light", "SDK clients only"], ["medium", "ORM, config fetch"], ["heavy", "a framework (Spring, Django)"]], k => { cs.init = k; paintCs(); });
+  buttons("csPkg", "Package", [["small", "small (< 5 MB)"], ["medium", "50 MB"], ["large", "250 MB unzipped"]], k => { cs.pkg = k; paintCs(); });
+  buttons("csMem", "Memory", [["128", "128 MB"], ["512", "512 MB"], ["1024", "1 GB"], ["1769", "1,769 MB (1 vCPU)"], ["3008", "3 GB"]], k => { cs.mem = k; paintCs(); });
+  buttons("csShape", "Traffic shape", [["steady", "steady all day"], ["spiky", "spiky (10× for a minute, hourly)"], ["sparse", "sparse (clusters after idle gaps)"]], k => { cs.shape = k; paintCs(); });
+  buttons("csFix", "Remove it with", [["none", "nothing"], ["snap", "SnapStart"], ["prov", "provisioned concurrency"]], k => { cs.fix = k; paintCs(); });
+  $("csRate").oninput = paintCs;
+
+  function paintCs() {
+    Object.entries({ csRuntime: cs.rt, csInit: cs.init, csPkg: cs.pkg, csMem: cs.mem, csShape: cs.shape, csFix: cs.fix }).forEach(([id, k]) => mark(id, k));
+    const rate = +$("csRate").value, mem = +cs.mem, gb = mem / 1024;
+    $("csRateLbl").textContent = (rate < 1 ? rate.toFixed(2) : n(rate)) + " requests / s" + (rate < 1 ? ` (one every ${secs(1 / rate)})` : "");
+    const [rtName, rtStart, plat] = RT[cs.rt];
+    const initCode = { light: 0.1, medium: 0.6, heavy: 2.5 }[cs.init];
+    const pkg = { small: 0, medium: 0.15, large: 0.5 }[cs.pkg];
+    const f = Math.sqrt(1769 / Math.min(mem, 1769));
+    const warm = 0.05 * f;
+    const snapOk = ["java", "python", "dotnet"].includes(cs.rt);
+    const snap = cs.fix === "snap" && snapOk, prov = cs.fix === "prov";
+    const fullCold = plat + (rtStart + initCode) * f + pkg;
+    const cold = snap ? plat + 0.2 + pkg * 0.3 : fullCold;
+    const C = rate * warm, envs = Math.max(1, Math.ceil(C));
+    const perHour = rate * 3600;
+    let coldH;
+    if (1 / rate > 600) coldH = perHour;                                   // every request after an idle gap
+    else if (cs.shape === "steady") coldH = envs / 2;
+    else if (cs.shape === "spiky") coldH = envs / 2 + Math.max(1, Math.ceil(10 * C) - envs);
+    else coldH = Math.min(perHour, 6 * envs + 6);
+    coldH = Math.min(coldH, perHour);
+    const provN = prov ? (cs.shape === "spiky" ? Math.max(1, Math.ceil(10 * C)) : envs) : 0;
+    const share = prov ? 0 : coldH / perHour;
+    const p99 = share >= 0.01 ? warm + cold : warm * 1.6;
+    const p999 = share >= 0.001 ? warm + cold : warm * 2;
+    const reqs = rate * M, coldM = coldH * 720;
+    const reqCost = reqs / 1e6 * 0.20;
+    let durCost, extra = 0, extraLbl = "";
+    if (prov) { durCost = reqs * warm * gb * 0.0000097222; extra = provN * gb * M * 0.0000041667; extraLbl = `Provisioned: ${provN} × ${mem} MB all month`; }
+    else { durCost = (reqs * warm + coldM * cold) * gb * 0.0000166667; }
+    if (snap && cs.rt !== "java") { extra = gb * M * 0.0000015046 + coldM * gb * 0.0001397998; extraLbl = "SnapStart cache and restores (Python / .NET)"; }
+    const total = reqCost + durCost + extra;
+    const base = reqCost + (reqs * warm + coldM * fullCold) * gb * 0.0000166667;
+
+    let result, colour, story, fix;
+    if (cs.fix === "snap" && !snapOk) {
+      result = "SnapStart not available"; colour = "orange";
+      story = `SnapStart works on zip-packaged Java, Python and .NET functions; ${rtName} is not one of them. The cold start stays ${secs(cold)}.`;
+      fix = cs.rt === "image" ? "Repackage as a zip if it fits in 250 MB, or use provisioned concurrency." : "Trim init, raise memory, or use provisioned concurrency.";
+    } else if (prov) {
+      result = "No cold starts on the request path"; colour = "pub";
+      story = `${provN} provisioned environment${provN > 1 ? "s" : ""} hold INIT off the request path${cs.shape === "spiky" ? ", sized for the hourly burst" : ""}. The ${secs(fullCold)} INIT still happens, minutes before anyone needs it. It costs ${money2(extra)} a month for the environments, against ${money2(base)} for the whole function on-demand.`;
+      fix = extra > base * 2 ? "Provisioned concurrency costs more than the function: SnapStart, a lighter init, or a schedule that keeps it only during business hours." : "Track ProvisionedConcurrencyUtilization; scale it on a schedule if the traffic has a daily shape.";
+    } else if (share >= 0.01) {
+      result = "In the p99"; colour = "bad";
+      story = `${pct(share)} of requests pay a ${secs(cold)} cold start (${n(coldH)} an hour), so the p99 is about ${secs(p99)} against a warm ${secs(warm)}.${1 / rate > 600 ? " With a request less often than every 10 minutes, almost every environment has been reclaimed before the next one." : ""}`;
+      fix = snapOk && !snap && cold > 0.8 ? `SnapStart cuts it to about ${secs(plat + 0.2 + pkg * 0.3)}; or trim init (${secs(initCode * f)} of it is your code) and raise memory.` : `Trim init and dependencies first (${secs(initCode * f)} is your code, ${secs(pkg)} the package); then provisioned concurrency of ${envs} for ≈ ${money2(envs * gb * M * 0.0000041667)} a month.`;
+    } else if (share >= 0.001) {
+      result = "In the p99.9, not the p99"; colour = "orange";
+      story = `${pct(share)} of requests are cold, ${n(coldH)} an hour: the p99 is ${secs(p99)}, but the p99.9 is about ${secs(p999)}.`;
+      fix = "Usually acceptable. If the SLO is at p99.9, SnapStart or a smaller init; provisioned concurrency is likely to cost more than the latency is worth.";
+    } else {
+      result = "Invisible"; colour = "pub";
+      story = `Only ${pct(share)} of requests are cold (${n(coldH)} an hour among ${n(perHour)}): neither p99 nor p99.9 sees the ${secs(cold)} cold start.`;
+      fix = snap || prov ? "This fix buys almost nothing here." : "Leave it. Spend the effort on the warm path.";
+    }
+    big("csCold", secs(cold), cold > 1 ? "bad" : cold > 0.4 ? "orange" : "text");
+    big("csShare", pct(share), share >= 0.01 ? "bad" : share >= 0.001 ? "orange" : "pub");
+    big("csP99", secs(p99), p99 > 1 ? "bad" : "text");
+    big("csCost", money2(total), "text");
+    $("csTable").innerHTML = "<tr><th>Line</th><th>Value</th></tr>" + [
+      ["Platform: place the micro-VM, fetch the code", secs(plat + pkg) + (pkg ? ` (package adds ${secs(pkg)})` : "")],
+      [`Runtime start (${rtName}) at ${mem} MB`, secs(rtStart * f)],
+      ["Your init code at this memory", secs(initCode * f)],
+      [snap ? "SnapStart restore instead of INIT" : "Cold start", `<b>${secs(cold)}</b>${snap ? ` (INIT would be ${secs(fullCold)})` : ""}`],
+      ["Warm handler time", secs(warm)],
+      ["Average concurrency · environments", `${C.toFixed(C < 10 ? 2 : 0)} · ${envs}`],
+      ["Cold starts per hour", prov ? "0 on the request path" : n(coldH)],
+      ["p99 · p99.9", `${secs(p99)} · ${secs(p999)}`],
+      ["Requests per month", money2(reqCost)],
+      ["Duration per month (INIT billed)", money2(durCost)],
+      extraLbl ? [extraLbl, money2(extra)] : ["Extra for removing cold starts", "$0"],
+      ["Total", `<b>${money2(total)}</b>`]
+    ].map(row).join("");
+    $("csMsg").innerHTML = `<b>${result}.</b> ${story} <b>What to change:</b> ${fix}`;
+  }
+  paintCs();
+
+  // ---------- Simulator 3: which front door ----------
+  const fd = { shape: "req", need: "none", auth: "jwt", time: "short", rate: "10" };
+  buttons("fdShape", "Traffic", [["req", "JSON request / response"], ["ws", "two-way real-time"], ["graphql", "GraphQL, live updates"], ["webhook", "a webhook or internal tool, one function"], ["mixed", "containers and functions on one host"]], k => { fd.shape = k; paintFd(); });
+  buttons("fdNeed", "Must have", [["none", "nothing special"], ["keys", "API keys, quotas per customer"], ["waf", "WAF and response caching"], ["private", "reachable only from our VPCs"]], k => { fd.need = k; paintFd(); });
+  buttons("fdAuth", "Callers", [["jwt", "users with JWTs (Cognito, OIDC)"], ["iam", "AWS callers (SigV4)"], ["custom", "custom tokens"], ["none", "public, no auth"]], k => { fd.auth = k; paintFd(); });
+  buttons("fdTime", "Longest request", [["short", "under 29 s"], ["long", "minutes, or a streamed response"]], k => { fd.time = k; paintFd(); });
+  buttons("fdRate", "Average rate", [["1", "1 / s"], ["10", "10 / s"], ["100", "100 / s"], ["1000", "1,000 / s"], ["10000", "10,000 / s"]], k => { fd.rate = k; paintFd(); });
+
+  function paintFd() {
+    Object.entries({ fdShape: fd.shape, fdNeed: fd.need, fdAuth: fd.auth, fdTime: fd.time, fdRate: fd.rate }).forEach(([id, k]) => mark(id, k));
+    const rate = +fd.rate, mm = rate * M / 1e6;
+    const cost = {
+      rest: mm * 3.5, http: mm * 1.0,
+      ws: mm * 1.0 + Math.max(1, rate * 60 / 50) * 43200 / 1e6 * 0.25,
+      alb: 16.43 + Math.max(1, rate / 100) * 5.84, url: 0, appsync: mm * 4.0
+    };
+    const S = fd.shape, N = fd.need, A = fd.auth, T = fd.time;
+    let pick, alt, lose, why, change;
+    if (S === "ws") { pick = "ws"; alt = "AppSync Events"; lose = "you store connection ids and post back to each"; why = "Clients keep a connection; routes are chosen per message; the backend replies through @connections. Connections last two hours and drop after ten idle minutes."; change = "If it is server-to-client fan-out on channels, AppSync Events does the connection bookkeeping for you."; }
+    else if (S === "graphql") { pick = "appsync"; alt = "HTTP API + a GraphQL server in Lambda"; lose = "REST-style caching at the edge"; why = "A schema, resolvers straight to DynamoDB, Lambda, HTTP or RDS, per-field auth, and subscriptions over WebSocket with server-side filters."; change = "Plain request/response with a handful of routes: an HTTP API is simpler and four times cheaper per request."; }
+    else if (N === "private") { pick = "rest"; alt = "internal ALB"; lose = "the HTTP API's lower price"; why = "A private REST API is reachable only through an execute-api interface endpoint in your VPCs, with a resource policy naming the endpoints or VPCs allowed."; change = "If every caller is in one VPC and the targets include containers: an internal ALB, no per-request fee."; }
+    else if (T === "long") {
+      if (S === "webhook" || A === "iam" || A === "none") { pick = "url"; alt = "ALB → Lambda"; lose = "throttling, WAF, custom domain (without CloudFront)"; why = "A function URL waits up to the function's 15 minutes and supports response streaming; auth is IAM or none. The function's concurrency is the only limit, so reserve it."; change = "Public and abusable: CloudFront with WAF in front of the URL (origin access control), or the asynchronous pattern."; }
+      else { pick = "alb"; alt = "HTTP API + 202 and a job id"; lose = "JWT validation per route at the door"; why = "An ALB waits as long as the function runs (up to 15 minutes, within the idle timeout) and can authenticate users with OIDC on the listener."; change = "Usually the better design is not a longer timeout but an asynchronous one: accept, return 202 with a job id, finish behind a queue."; }
+    }
+    else if (N === "keys") { pick = "rest"; alt = "HTTP API + your own metering"; lose = "$2.50 per million against HTTP"; why = "Usage plans attach API keys to a rate, a burst and a monthly quota per customer; that is the REST API's alone. Keys meter; authentication is still Cognito, IAM or an authoriser."; change = "If quotas are enforced in your own billing system, an HTTP API with a Lambda authoriser is cheaper."; }
+    else if (N === "waf") { pick = rate >= 1000 ? "alb" : "rest"; alt = rate >= 1000 ? "REST API with cache" : "HTTP API behind CloudFront + WAF"; lose = rate >= 1000 ? "the per-stage response cache (put CloudFront in front)" : "the HTTP API's price"; why = rate >= 1000 ? "At this rate per-request fees dominate: an ALB takes WAF directly and costs per hour and LCU. Caching moves to CloudFront." : "WAF attaches directly to a REST stage, and the stage can cache responses by path and parameters for up to an hour."; change = "CloudFront in front of an HTTP API gives WAF and caching at the edge for any of them."; }
+    else if (S === "mixed") { pick = "alb"; alt = "HTTP API with VPC link"; lose = "per-route JWT authorisers and usage plans"; why = "One listener, path and host rules to containers, instances and functions alike; WAF; an hourly price that does not grow per request."; change = "If the routes need per-route auth and throttles: an HTTP API with a VPC link to the containers."; }
+    else if (S === "webhook" && (A === "iam" || A === "none" || A === "custom")) { pick = "url"; alt = "HTTP API"; lose = "throttles, WAF and a custom domain at the door"; why = "One function, one URL, no fee: a webhook can verify the sender's signature in code; an internal tool can use IAM auth."; change = "Abuse or a need for a domain: CloudFront in front, or an HTTP API with a route throttle."; }
+    else if (rate >= 1000 && A !== "jwt") { pick = "alb"; alt = "HTTP API"; lose = "per-route throttles and authorisers"; why = `At ${n(rate)} a second, per-request pricing is ${money(cost.http)} a month for an HTTP API; an ALB is about ${money(cost.alb)}.`; change = "Spiky traffic that idles most of the day: per-request pricing wins again."; }
+    else { pick = "http"; alt = "REST API"; lose = "keys, usage plans, WAF, caching, validation"; why = `${A === "jwt" ? "A JWT authoriser checks Cognito or OIDC tokens at the door with no function to run" : A === "custom" ? "A Lambda authoriser with a cached simple response handles the custom token" : A === "iam" ? "IAM auth signs every call with SigV4; no authoriser code" : "Public routes with a stage throttle"}; $1 per million and lower latency than REST.`; change = rate >= 1000 ? `At this rate it is ${money(cost.http)} a month: an ALB would be about ${money(cost.alb)}, at the cost of per-route JWT auth at the door.` : "The day you sell tiers or need WAF on the API: REST, or CloudFront + WAF in front."; }
+    const names = { rest: "REST API", http: "HTTP API", ws: "WebSocket API", alb: "ALB → Lambda", url: "Function URL", appsync: "AppSync" };
+    big("fdPick", names[pick], "orange");
+    big("fdAlt", alt, "text");
+    big("fdLose", lose, "text");
+    big("fdCost", money2(cost[pick]), cost[pick] > 1000 ? "orange" : "text");
+    $("fdTable").innerHTML = "<tr><th>Door</th><th>Auth at the door</th><th>Throttles · WAF · cache</th><th>Longest request</th><th>At this rate</th></tr>" + [
+      ["rest", "IAM, Cognito, Lambda, API keys", "account, stage, method, per key · yes · yes", "29 s (raisable)"],
+      ["http", "IAM, JWT, Lambda", "account, stage, route · no · no", "30 s"],
+      ["ws", "IAM, Lambda on $connect", "account, stage, route · no · no", "2 h connection"],
+      ["alb", "OIDC / Cognito on the listener", "none · yes · no", "15 min (Lambda)"],
+      ["url", "IAM or none", "function concurrency only · no · no", "15 min, streaming"],
+      ["appsync", "API key, IAM, Cognito, OIDC, Lambda", "per API · yes · per resolver", "30 s"]
+    ].map(r => `<tr${r[0] === pick ? ' class="hit"' : ""}><td>${names[r[0]]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td class="num">${money2(cost[r[0]])}</td></tr>`).join("");
+    $("fdMsg").innerHTML = `<b>${names[pick]}.</b> ${why} <b>What would change the answer:</b> ${change}`;
+  }
+  paintFd();
+</script>
 </body>
 </html>
