@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 12 — Lambda and API Gateway in depth</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .sim .calc { margin: 14px 0 12px; }
+  .sim .calc .big { font-size: 21px; }
+  .sim h3 { margin: 16px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .sim .seg b { min-width: 170px; }
+  .sim input[type=range] { width: 260px; accent-color: var(--orange); vertical-align: middle; }
+  td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .sim td.num { white-space: nowrap; }
+  .table-wrap code, .card code { overflow-wrap: anywhere; }
+  .lab li { margin-bottom: 12px; }
+  svg .box { fill: var(--card); stroke: var(--border); stroke-width: 1.2; }
+  svg .lbl { font-size: 12.5px; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  svg .title { font-size: 13px; font-weight: 700; }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+  svg .arrow.both { marker-start: url(#arr); }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--pub); }
+  svg .env { fill: var(--az-fill); stroke: var(--az); stroke-width: 1; }
+  svg .env.cold { fill: var(--orange); stroke: var(--orange); }
+  svg .env.prov { fill: var(--pub-fill); stroke: var(--pub); }
+  svg .env.res { fill: var(--priv-fill); stroke: var(--priv); }
+  svg text.mono { font-size: 10.5px; }
+</style>
+</head>
+<body>
+<main>
+  <nav class="nav"><a href="../day-11/index.html">← Day 11</a><a href="../README.md">30-day plan</a><a href="../day-13/index.html">Day 13 →</a></nav>
+  <header>
+    <div class="tag">Day 12 of 30 · Week 2 — Databases, Messaging, Serverless, Containers</div>
+    <h1>Lambda and API Gateway in depth</h1>
+    <p class="lead">Lambda's promise is that you write a function and AWS runs as many copies of it as the traffic needs. The small print is in the word "copies". Every copy is an execution environment, a Firecracker micro-VM that is created on demand (the cold start), reused for one request at a time, frozen between requests and thrown away when AWS decides; the number of them running at once is your <b>concurrency</b>, and concurrency is the thing Lambda limits, counts and bills. Most production surprises come from forgetting that concurrency is requests per second times duration: a downstream database that slows from 100 ms to 2 seconds multiplies your concurrency by twenty without a single extra request, and the account's thousand-environment pool runs dry for every function at once. This page goes inside that model: the three ways a function is invoked and what a throttle means for each, the lifecycle of an environment and what a cold start costs, reserved and provisioned concurrency, how a function reaches into a VPC, layers, SnapStart, destinations and the limits. Then the front door: API Gateway's REST, HTTP and WebSocket APIs, authorisers, throttling and usage plans, and Cognito for the users behind the tokens. The centre of the page is the interview question: Lambda is throttled at peak. What do you check, and what are the three fixes?</p>
+  </header>
+
+  <h2>The diagram</h2>
+  <div class="card" id="diagramCard">
+    <div class="controls">
+      <button class="primary" id="btnBuild">Build step by step</button>
+      <button id="btnPrev" disabled>← Back</button>
+      <button id="btnNext" disabled>Next →</button>
+      <button id="btnAll">Show all</button>
+      <button id="btnPractice">Hide diagram (draw from memory)</button>
+    </div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 700" role="img" aria-label="Clients sign in with Cognito and call API Gateway, which authorises, throttles and invokes Lambda; the Lambda service invokes functions synchronously, asynchronously through an internal queue, or from an event source mapping; each invocation runs in an execution environment with an init phase and reuse; concurrency is drawn from an account pool with reserved and provisioned slices and a scaling rate; VPC access, layers, SnapStart and destinations surround the function; what a throttle looks like to each caller; the metrics to watch; and the answer to what to do when Lambda is throttled at peak">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke" style="fill: var(--muted)"/></marker>
+        </defs>
+
+        <!-- Step 1: Region and clients -->
+        <g data-step="1">
+          <rect x="12" y="12" width="976" height="446" rx="14" fill="var(--region-fill)" stroke="var(--region)" stroke-width="1.5"/>
+          <text x="28" y="34" class="title" style="fill: var(--region)">Region · Lambda, API Gateway and Cognito are Regional and multi-AZ; your function runs in AWS's VPC unless you attach it to yours</text>
+          <rect x="30" y="58" width="150" height="84" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="105" y="78" text-anchor="middle" class="title">Clients</text>
+          <text x="105" y="94" text-anchor="middle" class="small">browser · mobile · partner</text>
+          <text x="105" y="108" text-anchor="middle" class="small">HTTPS · Authorization: JWT</text>
+          <text x="105" y="122" text-anchor="middle" class="small">or SigV4 · or an API key</text>
+          <text x="105" y="136" text-anchor="middle" class="small">retry on 429 / 5xx with jitter</text>
+          <path d="M180 100 L205 100" class="arrow"/>
+        </g>
+
+        <!-- Step 2: API Gateway -->
+        <g data-step="2">
+          <rect x="205" y="58" width="310" height="84" rx="10" class="box" style="stroke: var(--priv)"/>
+          <text x="217" y="78" class="title" style="fill: var(--priv)">API Gateway · the front door</text>
+          <text x="217" y="94" class="small">REST ($3.50 / M): keys, usage plans, WAF, cache, VTL, private</text>
+          <text x="217" y="108" class="small">HTTP ($1 / M): JWT authoriser, simpler, ~faster · WebSocket</text>
+          <text x="217" y="122" class="small">account 10,000 rps · burst 5,000 · stage / route limits → 429</text>
+          <text x="217" y="136" class="small">integration timeout 29 s · payload 10 MB · authoriser cache</text>
+          <path d="M360 142 L360 160" class="arrow"/>
+          <text x="366" y="155" class="small">sync invoke</text>
+        </g>
+
+        <!-- Step 3: Cognito -->
+        <g data-step="3">
+          <rect x="30" y="160" width="150" height="150" rx="10" class="box" style="stroke: var(--pub)"/>
+          <text x="105" y="180" text-anchor="middle" class="title" style="fill: var(--pub)">Cognito</text>
+          <text x="105" y="198" text-anchor="middle" class="small" style="font-weight:700; fill: var(--text)">User pool</text>
+          <text x="105" y="212" text-anchor="middle" class="small">sign-up · sign-in · MFA</text>
+          <text x="105" y="226" text-anchor="middle" class="small">federation: Google, SAML, OIDC</text>
+          <text x="105" y="240" text-anchor="middle" class="small">→ ID · access · refresh JWTs</text>
+          <text x="105" y="260" text-anchor="middle" class="small" style="font-weight:700; fill: var(--text)">Identity pool</text>
+          <text x="105" y="274" text-anchor="middle" class="small">token → STS → temporary</text>
+          <text x="105" y="288" text-anchor="middle" class="small">AWS credentials (SigV4)</text>
+          <text x="105" y="302" text-anchor="middle" class="small">per MAU · Lite / Essentials / Plus</text>
+          <path d="M105 142 L105 160" class="arrow both"/>
+        </g>
+
+        <!-- Step 4: Lambda service: invoke paths -->
+        <g data-step="4">
+          <rect x="205" y="160" width="320" height="150" rx="12" fill="var(--card)" stroke="var(--orange)" stroke-width="1.5"/>
+          <text x="217" y="180" class="title" style="fill: var(--orange)">Lambda service · three ways in</text>
+          <text x="217" y="198" class="small" style="font-weight:700; fill: var(--text)">Synchronous · RequestResponse</text>
+          <text x="217" y="212" class="small">API Gateway, ALB, function URL, SDK · caller waits · 6 MB · errors to caller</text>
+          <text x="217" y="232" class="small" style="font-weight:700; fill: var(--text)">Asynchronous · Event</text>
+          <text x="217" y="246" class="small">S3, SNS, EventBridge · 202 then an internal queue · 2 retries</text>
+          <text x="217" y="260" class="small">event age ≤ 6 h · on-success / on-failure destinations</text>
+          <text x="217" y="280" class="small" style="font-weight:700; fill: var(--text)">Event source mapping · Lambda polls</text>
+          <text x="217" y="294" class="small">SQS, Kinesis, DynamoDB Streams, MSK, MQ · batches · bisect</text>
+          <path d="M525 236 L545 236" class="arrow"/>
+        </g>
+
+        <!-- Step 5: execution environment -->
+        <g data-step="5">
+          <rect x="545" y="160" width="210" height="150" rx="12" fill="var(--card)" stroke="var(--az)" stroke-width="1.5"/>
+          <text x="557" y="180" class="title" style="fill: var(--az)">Execution environment</text>
+          <rect x="557" y="190" width="58" height="18" rx="4" class="env cold"/><text x="586" y="202" text-anchor="middle" class="small" style="fill: var(--card); font-weight:700">INIT</text>
+          <rect x="619" y="190" width="40" height="18" rx="4" class="env"/><text x="639" y="202" text-anchor="middle" class="small">inv</text>
+          <rect x="663" y="190" width="40" height="18" rx="4" class="env"/><text x="683" y="202" text-anchor="middle" class="small">inv</text>
+          <rect x="707" y="190" width="40" height="18" rx="4" class="env"/><text x="727" y="202" text-anchor="middle" class="small">inv</text>
+          <text x="557" y="224" class="small">Firecracker micro-VM · one request at a time</text>
+          <text x="557" y="238" class="small">INIT: download, runtime, your imports (≤ 10 s)</text>
+          <text x="557" y="252" class="small">frozen between invokes · reused for minutes–hours</text>
+          <text x="557" y="266" class="small">128 MB–10 GB · vCPU ∝ memory (1,769 MB = 1)</text>
+          <text x="557" y="280" class="small">timeout ≤ 15 min · /tmp 512 MB–10 GB</text>
+          <text x="557" y="298" class="small" style="font-weight:700; fill: var(--text)">cold start = INIT on the request path</text>
+        </g>
+
+        <!-- Step 6: concurrency -->
+        <g data-step="6">
+          <rect x="770" y="160" width="210" height="150" rx="10" class="box" style="stroke: var(--priv)"/>
+          <text x="782" y="180" class="title" style="fill: var(--priv)">Concurrency · the limit</text>
+          <text x="782" y="196" class="small" style="font-weight:700; fill: var(--text)">in flight = rps × duration</text>
+          <rect x="782" y="204" width="186" height="16" rx="3" class="env"/>
+          <rect x="782" y="204" width="56" height="16" rx="3" class="env res"/>
+          <rect x="838" y="204" width="28" height="16" rx="3" class="env prov"/>
+          <text x="810" y="216" text-anchor="middle" class="mono" style="fill: var(--priv)">reserved</text>
+          <text x="852" y="216" text-anchor="middle" class="mono" style="fill: var(--pub)">prov</text>
+          <text x="918" y="216" text-anchor="middle" class="mono" style="fill: var(--az)">unreserved pool</text>
+          <text x="782" y="236" class="small">account: 1,000 per Region (raisable)</text>
+          <text x="782" y="250" class="small">reserved: a slice and a ceiling</text>
+          <text x="782" y="264" class="small">provisioned: pre-initialised, billed</text>
+          <text x="782" y="278" class="small">scale: +1,000 per 10 s per function</text>
+          <text x="782" y="292" class="small">≥ 100 always left unreserved</text>
+          <text x="782" y="304" class="small">over the limit → Throttles</text>
+        </g>
+
+        <!-- Step 7: packaging and plumbing; throttle strip -->
+        <g data-step="7">
+          <rect x="530" y="58" width="450" height="84" rx="10" class="box" style="stroke: var(--edge)"/>
+          <text x="542" y="78" class="title" style="fill: var(--edge)">Around the function</text>
+          <text x="542" y="94" class="small">VPC: shared Hyperplane ENIs per subnet + SG, made at deploy · NAT or endpoints for egress</text>
+          <text x="542" y="108" class="small">zip 50 MB / 250 MB unzipped · 5 layers · container image 10 GB · env vars 4 KB</text>
+          <text x="542" y="122" class="small">SnapStart: snapshot after INIT, restore instead (Java, Python, .NET) · versions + aliases</text>
+          <text x="542" y="136" class="small">destinations · extensions · function URL · response streaming · recursion stop</text>
+          <rect x="205" y="326" width="775" height="118" rx="10" class="box" style="stroke: var(--border)"/>
+          <text x="217" y="346" class="title">What a throttle looks like to each caller</text>
+          <text x="217" y="364" class="small"><tspan font-weight="700" style="fill: var(--text)">Synchronous</tspan> (API Gateway, ALB, SDK): <tspan style="fill: var(--bad)">TooManyRequestsException, HTTP 429</tspan>, straight to the caller; API Gateway returns an error to the client. Nothing retries unless the client does.</text>
+          <text x="217" y="380" class="small"><tspan font-weight="700" style="fill: var(--text)">Asynchronous</tspan> (S3, SNS, EventBridge): the event stays in Lambda's internal queue and is retried with backoff for up to 6 hours. A throttle is latency, then a drop to the on-failure destination.</text>
+          <text x="217" y="396" class="small"><tspan font-weight="700" style="fill: var(--text)">SQS mapping</tspan>: the message returns to the queue after the visibility timeout and counts a receive; too many and it reaches the DLQ unprocessed. Set maximum concurrency.</text>
+          <text x="217" y="412" class="small"><tspan font-weight="700" style="fill: var(--text)">Streams</tspan> (Kinesis, DynamoDB): the shard's batch is retried and the shard waits; IteratorAge grows until the records expire.</text>
+          <text x="217" y="432" class="small" style="font-weight:700; fill: var(--bad)">One pool per account and Region: a noisy function throttles every function without a reservation.</text>
+        </g>
+
+        <!-- Step 8: metrics -->
+        <g data-step="8">
+          <rect x="12" y="470" width="300" height="218" rx="12" class="box" style="stroke: var(--az)"/>
+          <text x="24" y="490" class="title" style="fill: var(--az)">Seeing inside</text>
+          <text x="24" y="508" class="small">Lambda: Throttles · ConcurrentExecutions (max)</text>
+          <text x="24" y="522" class="small">ClaimedAccountConcurrency vs the account limit</text>
+          <text x="24" y="536" class="small">Duration p99 · Errors · Init Duration (REPORT line)</text>
+          <text x="24" y="552" class="small">ProvisionedConcurrencyUtilization · SpilloverInvocations</text>
+          <text x="24" y="566" class="small">AsyncEventAge · AsyncEventsDropped · DeadLetterErrors</text>
+          <text x="24" y="580" class="small">IteratorAge (streams) · RecursiveInvocationsDropped</text>
+          <text x="24" y="596" class="small">API Gateway: Count · 4XXError · 5XXError</text>
+          <text x="24" y="610" class="small">Latency − IntegrationLatency = gateway overhead</text>
+          <text x="24" y="624" class="small">access logs: $context.error.message · status</text>
+          <text x="24" y="640" class="small">Cognito: SignInSuccesses · ThrottleCount per API</text>
+          <text x="24" y="660" class="small" style="font-weight:700; fill: var(--text)">Throttles is a count of refused invokes:</text>
+          <text x="24" y="674" class="small">any non-zero value on a sync function is a user who saw an error.</text>
+        </g>
+
+        <!-- Step 9: the answer -->
+        <g data-step="9">
+          <rect x="328" y="470" width="660" height="218" rx="12" fill="var(--card)" stroke="var(--bad)" stroke-width="1.5"/>
+          <text x="340" y="490" class="title" style="fill: var(--bad)">Lambda is throttled at peak. What do you check, and what are the three fixes?</text>
+          <text x="340" y="508" class="small"><tspan font-weight="700" style="fill: var(--text)">Check:</tspan> whose 429 is it (API Gateway's stage or account limit, or Lambda's Throttles)? Then concurrency against its ceiling: the function's reserved</text>
+          <text x="340" y="522" class="small">concurrency (a forgotten "set it to 50"), the account limit shared with every other function (ClaimedAccountConcurrency), the scaling rate for a</text>
+          <text x="340" y="536" class="small">sudden spike (+1,000 per 10 s), and Duration: concurrency = rps × duration, so a slow database is the most common cause of a "traffic" throttle.</text>
+          <text x="340" y="556" class="small"><tspan font-weight="700" style="fill: var(--text)">1. Need less concurrency.</tspan> Cut the duration: fix the slow dependency, set client timeouts below the function's, give CPU-bound code more memory,</text>
+          <text x="340" y="570" class="small">reuse connections (RDS Proxy), cache. Halving p99 duration halves the environments the peak needs.</text>
+          <text x="340" y="588" class="small"><tspan font-weight="700" style="fill: var(--text)">2. Have more, in the right place.</tspan> Raise the account quota; reserve concurrency for the critical function so a neighbour cannot starve it, and cap</text>
+          <text x="340" y="602" class="small">the neighbours; provisioned concurrency scheduled before a known peak so the ramp is not limited by cold starts; a separate account for the noisy part.</text>
+          <text x="340" y="620" class="small"><tspan font-weight="700" style="fill: var(--text)">3. Stop needing it all at once.</tspan> Put a queue in front of work that does not need an answer now: API → SQS → Lambda with maximum concurrency,</text>
+          <text x="340" y="634" class="small">or async invocation, so the peak becomes a backlog. Throttle at API Gateway (usage plans, stage limits) and make clients retry with backoff and jitter.</text>
+          <text x="340" y="658" class="small">A throttle is Lambda protecting the account from you. The question is never "how do I turn it off" but "which of these three is cheapest here".</text>
+          <text x="340" y="674" class="small">Alarm on Throttles &gt; 0 for synchronous functions and on ClaimedAccountConcurrency above 80% of the limit.</text>
+        </g>
+      </svg>
+    </div>
+    <p id="caption"><b>The whole picture.</b> Clients on the left sign in with Cognito, get a JWT and call API Gateway with it. API Gateway checks the token, applies its throttles (the account's 10,000 requests a second, the stage's, the route's, the API key's usage plan) and invokes Lambda synchronously, waiting up to 29 seconds for the answer. The Lambda service in the middle has three doors: synchronous calls where the caller waits, asynchronous events that go into an internal queue and are retried, and event source mappings where Lambda polls a queue or stream for you. Each invocation runs in an execution environment, a micro-VM that pays an INIT phase once (the cold start) and then serves one request at a time for as long as AWS keeps it. The number of environments busy at once is concurrency, drawn from one pool per account and Region, with reserved slices that guarantee and cap a function and provisioned slices that are kept warm and billed. Around the function sit VPC access, packaging, SnapStart and destinations. The strip underneath is what a throttle does to each kind of caller. Bottom left are the metrics, bottom right is the answer to the question of the day.</p>
+    <div class="legend">
+      <span style="--c:var(--orange)">Lambda service, cold start</span>
+      <span style="--c:var(--az)">Execution environments, metrics</span>
+      <span style="--c:var(--priv)">API Gateway, concurrency, reserved</span>
+      <span style="--c:var(--pub)">Cognito, provisioned</span>
+      <span style="--c:var(--edge)">Clients, around the function</span>
+      <span style="--c:var(--bad)">Throttles, the answer</span>
+    </div>
+  </div>
+
+  <h2>Throttled at peak: how much concurrency does the peak need?</h2>
+  <div class="card sim">
+    <p>Friday, 18:00. The campaign email has gone out, traffic jumps from its usual level to the peak in a minute, and the on-call channel fills with 429s. Pick the peak, how long the function takes (and whether the database is having a bad day), the account limit, what the other functions in the account are using, and what this function has reserved or provisioned. The simulator gives the concurrency the peak needs against what the function can get, the throttles per second at steady state and during the ramp, what the caller sees, and what the fix costs.</p>
+    <div class="seg"><b>Peak requests per second</b><input type="range" id="thRate" min="10" max="20000" step="10" value="2000"> <span id="thRateLbl"></span></div>
+    <div class="seg" id="thDur"></div>
+    <div class="seg" id="thSlow"></div>
+    <div class="seg" id="thAcct"></div>
+    <div class="seg" id="thOther"></div>
+    <div class="seg" id="thRes"></div>
+    <div class="seg" id="thProv"></div>
+    <div class="seg" id="thMode"></div>
+    <div class="calc">
+      <div><div class="lbl">Concurrency needed</div><div class="big" id="thNeed"></div></div>
+      <div><div class="lbl">Concurrency available</div><div class="big" id="thCap"></div></div>
+      <div><div class="lbl">Throttled at peak</div><div class="big" id="thThr"></div></div>
+      <div><div class="lbl">Verdict</div><div class="big" id="thResult"></div></div>
+    </div>
+    <div class="table-wrap"><table id="thTable"></table></div>
+    <p class="result" id="thMsg"></p>
+    <p class="note">Model: concurrency needed is the peak rate times the duration (Little's law). Traffic steps from a tenth of the peak to the peak; on-demand concurrency for the function grows by 1,000 environments every 10 seconds from what it already has (provisioned environments count from the start), up to the lesser of its reserved concurrency and what the account has left after the other functions. Throttled requests per second are the share of the rate that does not fit: (needed − available) ÷ duration. A synchronous caller gets the error; an asynchronous invocation is kept and retried for up to six hours, so it turns into delay; an SQS mapping leaves the message in the queue. Provisioned concurrency is priced at $0.0000041667 per GB-second kept warm, at 512 MB, all month; on-demand duration at $0.0000166667 per GB-second and $0.20 per million requests, for the peak hour only.</p>
+  </div>
+
+  <h2>Cold starts: who pays, how often, and what removes them</h2>
+  <div class="card sim">
+    <p>A cold start is the INIT phase on a user's request: the code is fetched, the runtime starts, your imports and clients are built. How long it takes depends on the runtime, the package and the memory; how often it happens depends on the traffic's shape. Pick them, and the simulator gives the cold start's length, the share of requests that pay it, whether it reaches your p99, and what provisioned concurrency or SnapStart would cost to remove it.</p>
+    <div class="seg" id="csRuntime"></div>
+    <div class="seg" id="csInit"></div>
+    <div class="seg" id="csPkg"></div>
+    <div class="seg" id="csMem"></div>
+    <div class="seg" id="csShape"></div>
+    <div class="seg"><b>Average requests per second</b><input type="range" id="csRate" min="0.01" max="500" step="0.01" value="20"> <span id="csRateLbl"></span></div>
+    <div class="seg" id="csFix"></div>
+    <div class="calc">
+      <div><div class="lbl">Cold start</div><div class="big" id="csCold"></div></div>
+      <div><div class="lbl">Requests that pay it</div><div class="big" id="csShare"></div></div>
+      <div><div class="lbl">p99 latency</div><div class="big" id="csP99"></div></div>
+      <div><div class="lbl">Per month</div><div class="big" id="csCost"></div></div>
+    </div>
+    <div class="table-wrap"><table id="csTable"></table></div>
+    <p class="result" id="csMsg"></p>
+    <p class="note">Model: the warm handler takes 50 ms of work. Cold start = platform (about 100 ms to fetch and start a zip; 250 ms for a container image whose layers are cached, more when they are not) + runtime start + your init code, where the CPU-bound part (runtime and init) scales with memory up to one full vCPU at 1,769 MB. Environments are recycled after hours of use, taken as one new environment per busy environment every two hours; a "spiky" shape adds a burst to ten times the average for a minute every hour, each burst needing new environments; "sparse" traffic means an idle gap longer than the environment survives (taken as 10 minutes) before most requests. Provisioned concurrency is sized to the average concurrency plus the bursts it covers; SnapStart restores in about 200–400 ms instead of initialising, and for Python and .NET it bills a cache and a per-restore fee (taken as $0.0000015046 per GB-second cached and $0.0001397998 per GB restored). INIT on on-demand functions is billed as duration.</p>
+  </div>
+
+  <h2>Which front door?</h2>
+  <div class="card sim">
+    <p>API Gateway REST, API Gateway HTTP, a WebSocket API, an Application Load Balancer, a Lambda function URL or AppSync: every one of them can put a function on the internet. Describe the traffic and what the front door must do, and the simulator names the pick, the runner-up, what you give up, and the monthly bill for the door alone at the rate you chose.</p>
+    <div class="seg" id="fdShape"></div>
+    <div class="seg" id="fdNeed"></div>
+    <div class="seg" id="fdAuth"></div>
+    <div class="seg" id="fdTime"></div>
+    <div class="seg" id="fdRate"></div>
+    <div class="calc">
+      <div><div class="lbl">Pick</div><div class="big" id="fdPick"></div></div>
+      <div><div class="lbl">Runner-up</div><div class="big" id="fdAlt"></div></div>
+      <div><div class="lbl">You give up</div><div class="big" id="fdLose"></div></div>
+      <div><div class="lbl">Door per month</div><div class="big" id="fdCost"></div></div>
+    </div>
+    <div class="table-wrap"><table id="fdTable"></table></div>
+    <p class="result" id="fdMsg"></p>
+    <p class="note">Monthly cost is us-east-1 list price for the front door only, at the chosen average rate all month, ignoring free tiers and data transfer: REST $3.50 per million (first 333 million), HTTP $1.00 per million (per 512 KB), WebSocket $1.00 per million messages plus $0.25 per million connection-minutes (one connection per 50 messages a minute assumed), ALB $16.43 a month plus about one LCU ($5.84 a month) per 100 requests a second of short requests on kept-alive connections, a function URL nothing, AppSync $4.00 per million operations. The Lambda bill behind the door is the same whichever you pick.</p>
+  </div>
+
+  <h2>How it works inside</h2>
+  <div class="grid">
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Three ways to invoke</h3>
+      <ul>
+        <li><b>Synchronous</b> (<code>RequestResponse</code>): the caller holds the connection until the function returns or fails. API Gateway, ALB, function URLs, Cognito triggers and your SDK calls. Payload 6 MB each way (more with response streaming). Errors and throttles go back to the caller; Lambda retries nothing, and the AWS SDK retries throttles a few times with backoff on its own.</li>
+        <li><b>Asynchronous</b> (<code>Event</code>): Lambda answers 202 at once and puts the event in an <b>internal queue</b>. S3, SNS, EventBridge, CloudWatch Logs and SES invoke this way. A function error is retried twice by default (0–2) with delays; a throttle or a system error is retried with backoff for up to the <b>maximum event age</b> (6 hours by default, from 60 s). Then the event is discarded, or sent to an <b>on-failure destination</b> if you set one.</li>
+        <li><b>Event source mapping</b>: a poller inside Lambda reads SQS, Kinesis, DynamoDB Streams, MSK, self-managed Kafka, Amazon MQ or DocumentDB change streams, batches records and invokes synchronously. The mapping owns retries: SQS by visibility timeout and the queue's DLQ; streams by <code>MaximumRetryAttempts</code>, <code>MaximumRecordAgeInSeconds</code>, <code>BisectBatchOnFunctionError</code> and an on-failure destination.</li>
+        <li>The model picks the failure behaviour, not you. The same function behind API Gateway shows a throttle to a user; behind SNS it shows a delay; behind Kinesis it stalls a shard.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--az)">
+      <h3>The execution environment</h3>
+      <ul>
+        <li>Each environment is a <b>Firecracker micro-VM</b> on a Lambda worker, with the memory you configured and CPU in proportion: 1,769 MB is one vCPU, 10,240 MB is six. It handles <b>one invocation at a time</b>; a second concurrent request gets a second environment.</li>
+        <li><b>INIT</b>: extensions start, the runtime starts, your code outside the handler runs (imports, SDK clients, config). Limit 10 seconds for on-demand functions. <b>INVOKE</b>: the handler runs, up to the timeout (max 15 minutes). <b>SHUTDOWN</b>: extensions get up to 2 seconds when AWS retires the environment.</li>
+        <li>Between invocations the environment is <b>frozen</b>: background threads stop, timers stop, and an open database connection may be cut by the server while you are frozen. On the next invoke it thaws with memory, globals and <code>/tmp</code> intact. Initialise clients outside the handler to reuse them; never keep request state in globals.</li>
+        <li>Environments are recycled after hours even under steady traffic, and immediately after a deploy (a new version means new environments). Since August 2025 the INIT phase is billed as duration on every on-demand function, so a heavy init is now a line on the bill as well as on the latency graph.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Cold starts: where the time goes</h3>
+      <ul>
+        <li>A cold start is <b>platform</b> (place the micro-VM, fetch the code; tens to a few hundred ms, more for an uncached container image) + <b>runtime</b> (Node.js and Python start in about 100–200 ms, the JVM and .NET in several hundred) + <b>your init</b>, which is usually the largest part: a Spring context, an ORM that reflects a schema, a 200 MB dependency tree.</li>
+        <li>The <code>REPORT</code> log line carries <code>Init Duration</code> on cold invocations; X-Ray shows the <code>Initialization</code> segment. That is how you measure, not by feel.</li>
+        <li>Levers, cheapest first: smaller package and fewer imports (tree-shake, lazy-import what one route uses); more memory, because init is CPU-bound and gets more vCPU; arm64; SDK clients built once; no network calls during init that can wait. Then <b>SnapStart</b> or <b>provisioned concurrency</b>.</li>
+        <li>How many requests pay it is a matter of shape: steady traffic reuses environments for hours and cold starts are a fraction of a percent; spiky traffic pays one per new environment at each spike; traffic that sleeps for ten minutes between requests pays it nearly every time.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Concurrency, reserved and unreserved</h3>
+      <ul>
+        <li>Concurrency is the number of environments busy at once: <b>requests per second × average duration</b>. 1,000 requests a second at 200 ms is 200; at 2 seconds it is 2,000. The default account limit is <b>1,000 per Region</b> (new accounts can start lower), shared by every function, and raisable by request to tens of thousands.</li>
+        <li><b>Scaling rate</b>: each function can add <b>1,000 concurrent environments every 10 seconds</b> until it reaches the account limit or its own cap. A spike from zero to 5,000 takes about 50 seconds to absorb, and requests above the curve are throttled.</li>
+        <li><b>Reserved concurrency</b> does two things: it carves a slice out of the account pool that no other function can take, and it is a hard <b>ceiling</b> for this function. Setting it to 0 disables the function, which is how you stop a runaway. The account keeps at least 100 unreserved for everyone else.</li>
+        <li>The trap: one function with no reservation goes wild (a retry storm, a recursive trigger, a backfill) and drains the pool; every other unreserved function in the account is throttled at the same moment. Reserve for the critical path; cap the batch jobs.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Provisioned concurrency</h3>
+      <ul>
+        <li>Lambda creates N environments on a <b>version or alias</b>, runs their INIT ahead of time and keeps them ready. Requests up to N never see a cold start; above N they <b>spill over</b> to on-demand environments (<code>ProvisionedConcurrencySpilloverInvocations</code>).</li>
+        <li>Billed whether used or not: about <b>$0.0000041667 per GB-second</b> kept, plus a lower duration rate ($0.0000097222) while it runs. At 1 GB, one provisioned environment is about $11 a month; a thousand is $11,000. It pays for itself only when it is well used: above roughly 60% utilisation it is cheaper than on-demand for the same work.</li>
+        <li>Allocation takes minutes, not seconds. Use <b>Application Auto Scaling</b>: scheduled actions before a known peak (08:55 on weekdays), target tracking on <code>ProvisionedConcurrencyUtilization</code> around 0.7 for the rest. It counts against the account and the function's reserved concurrency.</li>
+        <li>It solves two problems: latency (no cold starts for the first N) and the <b>ramp</b> (N environments exist before the spike, so the 1,000-per-10-seconds curve starts at N). It does not raise the account limit.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>SnapStart</h3>
+      <ul>
+        <li>On publishing a version, Lambda runs INIT once, takes a <b>Firecracker snapshot</b> of memory and disk, encrypts and caches it. A cold start then <b>restores</b> the snapshot instead of initialising: a 4-second Spring Boot start becomes a few hundred ms.</li>
+        <li>Supported for Java 11 and later, Python 3.12 and later, and .NET 8 and later, on published versions (use an alias). Free for Java; Python and .NET pay for the cached snapshot and each restore. Not combinable with provisioned concurrency, EFS, or ephemeral storage above 512 MB.</li>
+        <li>The catch is <b>uniqueness</b>: every environment restored from one snapshot starts with the same memory, so a random seed, a UUID generator state, a cached timestamp or a network connection opened during INIT is shared or stale. Use the runtime hooks (<code>beforeCheckpoint</code> / <code>afterRestore</code>, or the Python decorators) to reseed and reconnect.</li>
+        <li>Choose it over provisioned concurrency when the cold start is long, the traffic is spiky or unpredictable, and a few hundred ms on the first request is acceptable; choose provisioned when even that is too much, or the traffic is steady enough to keep the environments busy.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Lambda in a VPC</h3>
+      <ul>
+        <li>A function attached to subnets and security groups gets a <b>Hyperplane ENI</b>: one per subnet-and-security-group combination, created when the function is created or its VPC config changes (the function is <code>Pending</code> for a minute or two), shared by all its environments and by other functions with the same combination. The old per-environment ENI and its 10-second cold start are gone since 2019.</li>
+        <li>An attached function has <b>no internet access</b> and no public IP, ever, even in a public subnet. Egress to AWS APIs goes through VPC endpoints or a NAT gateway in a public subnet; forgetting this is the classic "times out calling Secrets Manager" bug.</li>
+        <li>Each Hyperplane ENI handles 65,000 connections; the per-VPC quota of Lambda ENIs is 500 (raisable). A function idle for weeks loses its ENI and becomes <code>Inactive</code>; the next invoke waits while it is recreated.</li>
+        <li>Attach only when the function needs something in the VPC (RDS, ElastiCache, an internal ALB). A function that only calls DynamoDB, S3 and public APIs is simpler, cheaper and has fewer failure modes outside the VPC; IAM, not the network, is its boundary.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--edge)">
+      <h3>Packaging, versions, layers, extensions</h3>
+      <ul>
+        <li><b>Zip</b>: 50 MB uploaded directly (larger via S3), <b>250 MB unzipped</b> including all layers. <b>Container image</b>: up to 10 GB from ECR, lazily loaded in chunks and cached, so a large image is not a 10 GB cold start, but the first cold start after a deploy is slower.</li>
+        <li><b>Versions</b> are immutable snapshots of code and configuration; <b>aliases</b> point at a version and can split traffic between two (weighted aliases), which is how CodeDeploy runs a canary for Lambda. Provisioned concurrency and SnapStart live on versions, never on <code>$LATEST</code>.</li>
+        <li><b>Layers</b>: up to five per function, shared code or binaries unpacked into <code>/opt</code>. Good for a common runtime dependency; bad as a substitute for packaging, since a layer version change does not redeploy the functions that use it, and the 250 MB limit includes them.</li>
+        <li><b>Extensions</b> run beside the function in the same environment (an observability agent, a secrets cache) and share its memory and CPU; they add to INIT and can delay the response. Environment variables total 4 KB; secrets belong in Secrets Manager or Parameter Store, read once and cached.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Destinations, retries and loops</h3>
+      <ul>
+        <li><b>Destinations</b> for asynchronous invocations send the result record (request, response or error, and metadata) to SQS, SNS, EventBridge or another function on success or on failure; S3 is available as an on-failure destination. They replace the older DLQ setting, which carried only the event, only on failure, and only to SQS or SNS.</li>
+        <li>Event source mappings for streams and Kafka have their own on-failure destination; for SQS the DLQ belongs to the queue, not the function.</li>
+        <li><b>Recursive loop detection</b>: a function that writes to the queue, topic or bucket that triggers it is stopped after about 16 hops of the same chain, and the event is dropped or sent to the failure destination (<code>RecursiveInvocationsDropped</code>). It catches SQS, SNS, S3 and Lambda loops; a loop through your own API is still yours to prevent.</li>
+        <li>Every retry is another invocation of code that already ran once. The idempotency rules of Day 11 apply to every asynchronous and polled function: a business key, a claim, an idempotent act.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>API Gateway: REST, HTTP, WebSocket</h3>
+      <ul>
+        <li><b>REST API</b> (v1): the full feature set. API keys and <b>usage plans</b>, request validation, mapping templates in VTL, response caching, <b>AWS WAF</b>, resource policies, <b>private APIs</b> reachable only through an <code>execute-api</code> VPC endpoint, edge-optimised endpoints, canary stages, X-Ray. $3.50 per million requests.</li>
+        <li><b>HTTP API</b> (v2): fewer features, lower latency, <b>$1.00 per million</b>. Native <b>JWT authorisers</b> (any OIDC issuer, Cognito included), Lambda authorisers with simple responses, IAM, CORS in one setting, automatic deploys, private integrations through VPC links. No WAF, no caching, no usage plans or API keys, no request validation.</li>
+        <li><b>WebSocket API</b>: clients keep a connection; routes are chosen by a field of each message (<code>$connect</code>, <code>$disconnect</code>, <code>$default</code>, your own); the backend replies to a client by POSTing to the <code>@connections</code> endpoint with its connection id, which you store (usually in DynamoDB). Connections last at most 2 hours and drop after 10 minutes idle.</li>
+        <li>All three share the <b>29-second integration timeout</b> for synchronous backends (raisable for Regional and private REST APIs, at the cost of account throttle quota), a 10 MB payload, and a Regional endpoint you can put behind CloudFront and a custom domain with mutual TLS.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Authorisers</h3>
+      <ul>
+        <li><b>IAM (SigV4)</b>: the caller signs with AWS credentials; the policy decides. For service-to-service calls and for apps that got credentials from a Cognito identity pool. No code, no extra latency.</li>
+        <li><b>JWT authoriser</b> (HTTP API) or <b>Cognito user pool authoriser</b> (REST): API Gateway fetches the issuer's public keys, checks signature, expiry, issuer, audience or client id, and optionally scopes per route. No function to run or pay for. Claims are passed to the integration.</li>
+        <li><b>Lambda authoriser</b>: your function receives the token (TOKEN type) or the request's headers and parameters (REQUEST type) and returns an IAM policy or, on HTTP APIs, a simple allow/deny. For custom tokens, API keys checked against a database, or tenant rules. Its result is <b>cached by identity source</b> for a TTL (300 s default, up to 3,600): fast and cheap, but a revoked token keeps working until the cache expires, and a policy cached for one path can wrongly allow or deny another if the policy is not written for the whole API.</li>
+        <li>The authoriser is also a function with concurrency. Behind a 10,000-request spike with caching off, it is the first thing to throttle, and the client sees a 500 that is not about your API at all.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--priv)">
+      <h3>Throttling and usage plans</h3>
+      <ul>
+        <li>API Gateway throttles with token buckets at four levels, narrowest first: per <b>API key in a usage plan</b> (REST), per <b>route or method</b>, per <b>stage</b>, and the <b>account</b>: 10,000 requests a second steady with a burst of 5,000 per Region (lower in some newer Regions), shared by every API in the account and raisable. Over any of them: <b>429 Too Many Requests</b>, and the backend never sees it.</li>
+        <li><b>Usage plans</b> attach API keys to a rate, a burst and a quota (requests per day, week or month). They are for metering and fair use between customers, <b>not for authentication</b>: an API key is an identifier, sent in a header, and AWS calls the enforcement best-effort.</li>
+        <li>Throttling at the gateway is the cheap defence of a Lambda backend: set the stage limit below what the function's concurrency can serve, and the overflow is a fast 429 at the door instead of a slow throttle, a retry and a 5xx behind it.</li>
+        <li>REST APIs can <b>cache</b> responses per stage (0.5 GB to 237 GB, per hour), keyed by path and chosen parameters, with a TTL up to an hour. A 90% hit rate removes 90% of the Lambda concurrency for read-heavy APIs; it is often the cheapest fix for a throttled GET.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--pub)">
+      <h3>Cognito</h3>
+      <ul>
+        <li>A <b>user pool</b> is a user directory and an OIDC identity provider: sign-up, sign-in, MFA, password policy, account recovery, a managed login page, and federation with Google, Apple, Facebook, SAML and OIDC providers. A successful sign-in returns three JWTs: an <b>ID token</b> (who the user is, for your app), an <b>access token</b> (scopes and groups, for your API; 5 minutes to 1 day, 1 hour by default) and a <b>refresh token</b> (up to 10 years, 30 days by default).</li>
+        <li><b>Lambda triggers</b> customise the flow: pre sign-up, post confirmation, pre token generation (add claims), custom auth challenges, user migration from an old directory. They are synchronous invocations with a 5-second limit; a slow trigger is a failed sign-in.</li>
+        <li>An <b>identity pool</b> exchanges a token (from a user pool, a social provider, SAML, or none for guests) for temporary <b>AWS credentials</b> via STS, with a role chosen per authenticated, unauthenticated or rule-matched user. That is how a mobile app uploads straight to S3 with SigV4 and no server in between.</li>
+        <li>Pricing is per monthly active user by feature tier (Lite, Essentials, Plus); machine-to-machine clients are billed per app client and token request. Quotas are per API category (sign-in, sign-up, token) and per second; a login storm after an outage meets them.</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:4px solid var(--orange)">
+      <h3>Which compute behind the door, in a sentence</h3>
+      <ul>
+        <li><b>Lambda</b>: spiky or low traffic, short requests, event handlers, glue; you pay per millisecond of work and nothing at zero. Wrong for steady high load (a container is cheaper above roughly 30–50% steady utilisation), for work over 15 minutes, for long-lived connections, and for code that needs a warm in-memory state.</li>
+        <li><b>Fargate / ECS</b>: steady traffic, long requests, WebSocket servers, large frameworks with slow starts, connection pools you want to keep. <b>App Runner</b> when you want that without the cluster.</li>
+        <li><b>The front door</b>: HTTP API by default; REST when you need keys, usage plans, WAF, caching, validation or a private API; ALB when the targets are mixed (containers and functions) or traffic is high and steady; a function URL for a webhook or an internal tool with IAM auth; AppSync for GraphQL and push.</li>
+        <li>What all of them share with Lambda: the backend must be stateless per request, idempotent where it is retried, and protected by a throttle in front that is lower than what it can serve.</li>
+      </ul>
+    </div>
+  </div>
+</main>
+</body>
+</html>
